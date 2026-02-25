@@ -3636,10 +3636,6 @@ export function App() {
           "DESKTOP_NOTIFY_ENABLED", "DESKTOP_NOTIFY_SOUND",
           "SCHEDULER_ENABLED", "SCHEDULER_TIMEZONE", "SCHEDULER_MAX_CONCURRENT", "SCHEDULER_TASK_TIMEOUT",
           "SESSION_TIMEOUT_MINUTES", "SESSION_MAX_HISTORY", "SESSION_STORAGE_PATH",
-          "ORCHESTRATION_ENABLED", "ORCHESTRATION_MODE",
-          "ORCHESTRATION_BUS_ADDRESS", "ORCHESTRATION_PUB_ADDRESS",
-          "ORCHESTRATION_MIN_WORKERS", "ORCHESTRATION_MAX_WORKERS",
-          "ORCHESTRATION_HEARTBEAT_INTERVAL", "ORCHESTRATION_HEALTH_CHECK_INTERVAL",
         ];
       default:
         return [];
@@ -5108,9 +5104,6 @@ export function App() {
     SESSION_TIMEOUT_MINUTES: "30",
     SESSION_MAX_HISTORY: "50",
     SESSION_STORAGE_PATH: "data/sessions",
-    // ── Multi-Agent ──
-    ORCHESTRATION_ENABLED: "false",
-    ORCHESTRATION_MODE: "single",
     // ── IM Channels ──
     TELEGRAM_ENABLED: "false",
     FEISHU_ENABLED: "false",
@@ -7485,9 +7478,6 @@ export function App() {
       "DESKTOP_NOTIFY_ENABLED", "DESKTOP_NOTIFY_SOUND",
       "SCHEDULER_ENABLED", "SCHEDULER_TIMEZONE", "SCHEDULER_MAX_CONCURRENT", "SCHEDULER_TASK_TIMEOUT",
       "SESSION_TIMEOUT_MINUTES", "SESSION_MAX_HISTORY", "SESSION_STORAGE_PATH",
-      "ORCHESTRATION_ENABLED", "ORCHESTRATION_MODE", "ORCHESTRATION_BUS_ADDRESS",
-      "ORCHESTRATION_PUB_ADDRESS", "ORCHESTRATION_MIN_WORKERS", "ORCHESTRATION_MAX_WORKERS",
-      "ORCHESTRATION_HEARTBEAT_INTERVAL", "ORCHESTRATION_HEALTH_CHECK_INTERVAL",
     ];
 
     const personas = [
@@ -7646,16 +7636,6 @@ export function App() {
                 <FieldText k="STICKER_DATA_DIR" label={t("config.agentStickerDir")} placeholder="data/sticker" />
               </div>
 
-              <div className="divider" />
-              {/* Orchestration */}
-              <div className="label" style={{ fontSize: 13, opacity: 0.7 }}>{t("config.agentOrchSection")}</div>
-              <FieldBool k="ORCHESTRATION_ENABLED" label={t("config.agentOrchEnable")} />
-              <div className="grid2">
-                <FieldText k="ORCHESTRATION_MODE" label={t("config.agentOrchMode")} placeholder="single" />
-                <FieldText k="ORCHESTRATION_BUS_ADDRESS" label={t("config.agentOrchBus")} placeholder="tcp://127.0.0.1:5555" />
-                <FieldText k="ORCHESTRATION_MIN_WORKERS" label={t("config.agentOrchMinW")} placeholder="1" />
-                <FieldText k="ORCHESTRATION_MAX_WORKERS" label={t("config.agentOrchMaxW")} placeholder="4" />
-              </div>
             </div>
           </details>
 
@@ -7725,15 +7705,6 @@ export function App() {
       "SESSION_TIMEOUT_MINUTES",
       "SESSION_MAX_HISTORY",
       "SESSION_STORAGE_PATH",
-      // orchestration
-      "ORCHESTRATION_ENABLED",
-      "ORCHESTRATION_MODE",
-      "ORCHESTRATION_BUS_ADDRESS",
-      "ORCHESTRATION_PUB_ADDRESS",
-      "ORCHESTRATION_MIN_WORKERS",
-      "ORCHESTRATION_MAX_WORKERS",
-      "ORCHESTRATION_HEARTBEAT_INTERVAL",
-      "ORCHESTRATION_HEALTH_CHECK_INTERVAL",
       // IM
       "TELEGRAM_ENABLED",
       "TELEGRAM_BOT_TOKEN",
@@ -8154,18 +8125,6 @@ export function App() {
               </div>
             </details>
 
-            <div className="divider" />
-            <details>
-              <summary style={{ cursor: "pointer", fontWeight: 800, padding: "8px 0" }}>多 Agent 协同（可选）</summary>
-              <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 10 }}>
-                <FieldBool k="ORCHESTRATION_ENABLED" label="启用多 Agent（Master/Worker）" help="多数用户不需要；开启前建议先完成单 Agent 跑通" />
-                <FieldText k="ORCHESTRATION_MODE" label="编排模式" placeholder="single" help="single=单 Agent / handoff=接力 / master-worker=主从" />
-                <FieldText k="ORCHESTRATION_BUS_ADDRESS" label="总线地址" placeholder="tcp://127.0.0.1:5555" />
-                <FieldText k="ORCHESTRATION_PUB_ADDRESS" label="广播地址" placeholder="tcp://127.0.0.1:5556" />
-                <FieldText k="ORCHESTRATION_MIN_WORKERS" label="最小 Worker 数" placeholder="1" />
-                <FieldText k="ORCHESTRATION_MAX_WORKERS" label="最大 Worker 数" placeholder="4" />
-              </div>
-            </details>
           </div>
 
           <div className="btnRow" style={{ gap: 8 }}>
@@ -9157,9 +9116,6 @@ export function App() {
                       <span className="obModuleSize">~{m.sizeMb} MB</span>
                     </div>
                     {(m.installed || m.bundled) && <span className="obModuleBadge">{t("onboarding.modules.installed")}</span>}
-                    {m.id === "orchestration" && !m.installed && !m.bundled && (
-                      <span className="obModuleBadge" style={{ background: "#fef3c7", color: "#92400e" }}>Beta</span>
-                    )}
                   </label>
                 ))}
                 {obModules.length === 0 && <p style={{ color: "#94a3b8" }}>{t("onboarding.modules.loading")}</p>}

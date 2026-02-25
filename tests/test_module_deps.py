@@ -162,7 +162,6 @@ class TestImportHelper:
             "vector-memory": ["sentence_transformers", "chromadb"],
             "browser": ["playwright", "browser_use", "langchain_openai"],
             "whisper": ["whisper", "static_ffmpeg"],
-            "orchestration": ["zmq"],
         }
 
         for module_id, import_names in required_mappings.items():
@@ -307,7 +306,7 @@ class TestBundleModulesConsistency:
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
 
-        expected_modules = {"vector-memory", "browser", "whisper", "orchestration"}
+        expected_modules = {"vector-memory", "browser", "whisper"}
         actual_modules = set(mod.MODULE_DEFS.keys())
 
         assert expected_modules == actual_modules, (
@@ -332,7 +331,6 @@ class TestBundleModulesConsistency:
             "vector-memory": ["sentence-transformers", "chromadb"],
             "browser": ["playwright", "browser-use", "langchain-openai"],
             "whisper": ["openai-whisper", "static-ffmpeg"],
-            "orchestration": ["pyzmq"],
         }
 
         for module_id, expected_pkgs in main_rs_packages.items():

@@ -97,7 +97,7 @@ ToolCategory = Literal[
 ]
 
 CATEGORY_PREFIXES = {
-    "Agent": ("delegate_to_agent", "create_agent"),
+    "Agent": ("delegate_to_agent", "delegate_parallel", "create_agent"),
     "Browser": "browser_",
     "Desktop": "desktop_",
     "Skills": (

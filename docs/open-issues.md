@@ -110,11 +110,8 @@
 
 ---
 
-### #13 — ORCHESTRATION_MODE 改下拉选择
-- **提交者**: @yy1588133 | **日期**: 2026-02-21
-- **需求**: 设置中 `ORCHESTRATION_MODE` 是自由文本输入，应改为下拉选择（single / handoff / master-worker），防止误输入。
-- **涉及代码**: `apps/setup-center/src/App.tsx`（设置页面 UI）
-- **备注**: #18 (by @ZhangLinnhao) 已提交实现方案（含 i18n、枚举校验），但以 issue 形式提交而非 PR，#16 为重复已关闭
+### #13 — ~~ORCHESTRATION_MODE 改下拉选择~~ (已废弃)
+- **状态**: 旧 ZMQ/Master-Worker 架构已移除，此 issue 不再适用。新多 Agent 模式通过侧边栏 Beta 开关控制。
 
 ---
 

@@ -46,8 +46,6 @@ _RESTART_REQUIRED_FIELDS = frozenset({
     "onebot_enabled", "onebot_ws_url", "onebot_access_token",
     "qqbot_enabled", "qqbot_app_id", "qqbot_app_secret", "qqbot_sandbox",
     "qqbot_mode", "qqbot_webhook_port", "qqbot_webhook_path",
-    "orchestration_enabled", "orchestration_mode",
-    "orchestration_bus_address", "orchestration_pub_address",
     "embedding_model", "embedding_device",
 })
 
@@ -81,7 +79,6 @@ _CATEGORY_RULES: list[tuple[tuple[str, ...], str]] = [
     (("qqbot_",), "IM/QQ"),
     (("session_",), "会话"),
     (("scheduler_",), "定时任务"),
-    (("orchestration_",), "多Agent协同"),
     (("persona_",), "人格"),
     (("proactive_",), "活人感"),
     (("sticker_",), "表情包"),

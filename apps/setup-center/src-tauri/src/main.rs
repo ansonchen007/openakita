@@ -444,7 +444,6 @@ fn module_definitions() -> Vec<(&'static str, &'static str, &'static str, &'stat
     vec![
         ("vector-memory", "向量记忆增强", "让 Akita 拥有长期记忆，能根据语义搜索历史对话。体积较大（约 2.5GB，含 PyTorch），安装耗时较长", &["sentence-transformers", "chromadb", "regex>=2023.6.3"], 2500, "core"),
         ("whisper", "语音识别", "支持语音消息自动转文字，无需联网即可识别。体积较大（约 2.5GB，含 PyTorch），安装耗时较长", &["openai-whisper", "static-ffmpeg"], 2500, "core"),
-        ("orchestration", "多Agent协同", "多个 Akita 实例之间协同工作、分工合作。体积很小（约 10MB），秒装", &["pyzmq"], 10, "core"),
     ]
 }
 

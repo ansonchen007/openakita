@@ -67,7 +67,7 @@ class TestInjectModulePaths:
     def test_inject_idempotent(self, tmp_path):
         """重复调用不应重复添加路径"""
         modules_dir = tmp_path / "modules"
-        (modules_dir / "orchestration" / "site-packages").mkdir(parents=True)
+        (modules_dir / "browser" / "site-packages").mkdir(parents=True)
 
         with patch("openakita.runtime_env._get_openakita_root", return_value=tmp_path):
             from openakita.runtime_env import inject_module_paths_runtime
@@ -78,7 +78,7 @@ class TestInjectModulePaths:
         assert count1 >= 1
         assert count2 == 0  # 第二次不应添加任何新路径
 
-        sp = str(modules_dir / "orchestration" / "site-packages")
+        sp = str(modules_dir / "browser" / "site-packages")
         assert sys.path.count(sp) == 1  # 只出现一次
 
         # 清理
@@ -162,7 +162,6 @@ class TestImportHelper:
             "vector-memory": ["sentence_transformers", "chromadb"],
             "browser": ["playwright", "browser_use", "langchain_openai"],
             "whisper": ["whisper", "static_ffmpeg"],
-            "orchestration": ["zmq"],
         }
 
         for module_id, import_names in required_mappings.items():
@@ -307,7 +306,7 @@ class TestBundleModulesConsistency:
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
 
-        expected_modules = {"vector-memory", "browser", "whisper", "orchestration"}
+        expected_modules = {"vector-memory", "browser", "whisper"}
         actual_modules = set(mod.MODULE_DEFS.keys())
 
         assert expected_modules == actual_modules, (
@@ -332,7 +331,6 @@ class TestBundleModulesConsistency:
             "vector-memory": ["sentence-transformers", "chromadb"],
             "browser": ["playwright", "browser-use", "langchain-openai"],
             "whisper": ["openai-whisper", "static-ffmpeg"],
-            "orchestration": ["pyzmq"],
         }
 
         for module_id, expected_pkgs in main_rs_packages.items():

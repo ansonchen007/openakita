@@ -51,9 +51,6 @@ sentence-transformers>=2.2.0  # 本地 embedding 模型
 chromadb>=0.4.0               # 向量数据库 (可选, search_backend=chromadb)
 jieba>=0.42                   # 中文分词 (FTS5 搜索后端)
 
-# === 多 Agent 协同 ===
-# pyzmq>=25.0.0  # Optional: only needed for legacy orchestration. Install via: pip install openakita[orchestration]
-
 # === 语音识别 ===
 openai-whisper>=20231117      # Whisper 语音转文字
 

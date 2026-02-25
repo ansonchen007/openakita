@@ -1,15 +1,18 @@
 """
 AgentOrchestrator — central multi-agent coordinator.
 
-Lightweight in-process design using asyncio. Replaces the old ZMQ-based system.
+Lightweight in-process design using asyncio.
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 from dataclasses import dataclass, field
+from datetime import datetime
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -18,7 +21,11 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 MAX_DELEGATION_DEPTH = 5
-DEFAULT_TIMEOUT = 120.0  # seconds
+CHECK_INTERVAL = 10.0   # how often to poll progress
+
+# Defaults — overridden at runtime by settings when available
+_DEFAULT_IDLE_TIMEOUT = 1200.0
+_DEFAULT_HARD_TIMEOUT = 0  # 0 = disabled
 
 
 @dataclass
@@ -64,7 +71,7 @@ class AgentMailbox:
     async def send(self, message: dict) -> None:
         await self._queue.put(message)
 
-    async def receive(self, timeout: float = DEFAULT_TIMEOUT) -> dict | None:
+    async def receive(self, timeout: float = 300.0) -> dict | None:
         try:
             return await asyncio.wait_for(self._queue.get(), timeout=timeout)
         except asyncio.TimeoutError:
@@ -96,6 +103,9 @@ class AgentOrchestrator:
         self._pool = None           # AgentInstancePool
         self._fallback = None       # FallbackResolver
         self._gateway: MessageGateway | None = None
+
+        # Delegation log directory (fixed path for easy debugging)
+        self._log_dir: Path | None = None
 
     # ------------------------------------------------------------------
     # External wiring
@@ -130,9 +140,35 @@ class AgentOrchestrator:
                 from openakita.agents.fallback import FallbackResolver
 
                 self._fallback = FallbackResolver(self._profile_store)
+
+            if self._log_dir is None:
+                from openakita.config import settings as _s
+                self._log_dir = _s.data_dir / "delegation_logs"
+                self._log_dir.mkdir(parents=True, exist_ok=True)
         except Exception as e:
             logger.error(f"[Orchestrator] Failed to initialise dependencies: {e}", exc_info=True)
             raise RuntimeError(f"Orchestrator dependency init failed: {e}") from e
+
+    # ------------------------------------------------------------------
+    # Delegation JSONL logging
+    # ------------------------------------------------------------------
+
+    def _log_delegation(self, record: dict[str, Any]) -> None:
+        """Append a delegation event to the daily JSONL log file.
+
+        File: ``data/delegation_logs/YYYYMMDD.jsonl``
+        Each line is a self-contained JSON object for easy grep/tail/analysis.
+        """
+        if self._log_dir is None:
+            return
+        try:
+            today = datetime.now().strftime("%Y%m%d")
+            path = self._log_dir / f"{today}.jsonl"
+            record.setdefault("ts", datetime.now().isoformat())
+            with open(path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
+        except Exception:
+            logger.debug("[Orchestrator] Failed to write delegation log", exc_info=True)
 
     # ------------------------------------------------------------------
     # Mailbox / health helpers
@@ -188,17 +224,14 @@ class AgentOrchestrator:
         message: str,
         agent_profile_id: str,
         depth: int,
-        timeout: float = DEFAULT_TIMEOUT,
         from_agent: str | None = None,
     ) -> str:
-        """Dispatch a message to a specific agent with timeout and error handling."""
+        """Dispatch a message to a specific agent with progress-aware timeout."""
         if depth >= MAX_DELEGATION_DEPTH:
             return f"⚠️ 委派深度超限 (max={MAX_DELEGATION_DEPTH})"
 
-        # Clear delegation chain at start of new request (depth 0)
         if depth == 0:
             session.context.delegation_chain = []
-        # Record delegation in chain when depth > 0
         elif depth > 0:
             chain = getattr(session.context, "delegation_chain", [])
             chain.append({
@@ -214,33 +247,64 @@ class AgentOrchestrator:
         health.last_active = time.time()
         start = time.monotonic()
 
-        try:
-            result = await asyncio.wait_for(
-                self._execute_agent(session, message, agent_profile_id),
-                timeout=timeout,
-            )
-            elapsed = (time.monotonic() - start) * 1000
-            health.successful += 1
-            health.total_latency_ms += elapsed
+        session_key = getattr(session, "session_key", session.id)
+        log_base = {
+            "session": str(session_key),
+            "agent": agent_profile_id,
+            "from": from_agent,
+            "depth": depth,
+            "message_preview": message[:200],
+        }
+        self._log_delegation({**log_base, "event": "dispatch_start"})
 
+        try:
+            result = await self._run_with_progress_timeout(
+                session, message, agent_profile_id,
+                pass_gateway=(depth == 0),
+            )
+            elapsed_ms = (time.monotonic() - start) * 1000
+            health.successful += 1
+            health.total_latency_ms += elapsed_ms
             self._fallback.record_success(agent_profile_id)
+            self._log_delegation({
+                **log_base,
+                "event": "dispatch_ok",
+                "elapsed_ms": round(elapsed_ms),
+                "result_preview": str(result)[:300],
+            })
             return result
 
         except asyncio.TimeoutError:
             health.failed += 1
-            health.last_error = "timeout"
+            health.last_error = "timeout_idle"
             self._fallback.record_failure(agent_profile_id)
+            elapsed_s = time.monotonic() - start
             logger.warning(
-                f"[Orchestrator] Agent {agent_profile_id} timed out after {timeout}s"
+                f"[Orchestrator] Agent {agent_profile_id} terminated after "
+                f"{elapsed_s:.0f}s — no progress detected"
             )
+            self._log_delegation({
+                **log_base,
+                "event": "dispatch_timeout",
+                "elapsed_ms": round(elapsed_s * 1000),
+                "reason": "idle_no_progress",
+            })
             return await self._try_fallback_or(
-                session, message, agent_profile_id, depth, timeout,
-                default=f"⏱️ Agent `{agent_profile_id}` 处理超时 ({timeout}s)",
+                session, message, agent_profile_id, depth,
+                default=(
+                    f"⏱️ Agent `{agent_profile_id}` 已终止 — "
+                    f"运行 {elapsed_s:.0f}s 后长时间无新进展"
+                ),
             )
 
         except asyncio.CancelledError:
             health.failed += 1
             health.last_error = "cancelled"
+            self._log_delegation({
+                **log_base,
+                "event": "dispatch_cancelled",
+                "elapsed_ms": round((time.monotonic() - start) * 1000),
+            })
             return "🚫 请求已取消"
 
         except Exception as e:
@@ -251,10 +315,159 @@ class AgentOrchestrator:
                 exc_info=True,
             )
             self._fallback.record_failure(agent_profile_id)
+            self._log_delegation({
+                **log_base,
+                "event": "dispatch_error",
+                "elapsed_ms": round((time.monotonic() - start) * 1000),
+                "error": str(e)[:500],
+            })
             return await self._try_fallback_or(
-                session, message, agent_profile_id, depth, timeout,
+                session, message, agent_profile_id, depth,
                 default=f"❌ Agent `{agent_profile_id}` 处理失败: {e}",
             )
+
+    # ------------------------------------------------------------------
+    # Progress-aware timeout
+    # ------------------------------------------------------------------
+
+    async def _run_with_progress_timeout(
+        self,
+        session: Any,
+        message: str,
+        agent_profile_id: str,
+        *,
+        pass_gateway: bool = False,
+    ) -> str:
+        """Run an agent with progress-aware timeout instead of a hard wall-clock limit.
+
+        The agent is allowed to keep running as long as its ReAct iteration counter
+        or task status keeps advancing.  It is killed only when:
+        - No iteration progress for ``idle_timeout`` seconds, OR
+        - Total elapsed time exceeds ``hard_timeout`` (only if configured > 0).
+        """
+        from openakita.config import settings
+
+        idle_timeout = float(
+            getattr(settings, "progress_timeout_seconds", 0) or _DEFAULT_IDLE_TIMEOUT
+        )
+        hard_timeout = float(
+            getattr(settings, "hard_timeout_seconds", 0) or _DEFAULT_HARD_TIMEOUT
+        )
+
+        if self._profile_store is None or self._pool is None:
+            return "⚠️ Orchestrator 未正确初始化，请检查日志"
+
+        profile = self._profile_store.get(agent_profile_id)
+        if profile is None:
+            profile = self._profile_store.get("default")
+        if profile is None:
+            return f"⚠️ 无法找到 Agent Profile: {agent_profile_id}"
+
+        agent = await self._pool.get_or_create(session.id, profile)
+        gw = self._gateway if pass_gateway else None
+
+        task = asyncio.create_task(
+            self._call_agent(agent, session, message, gateway=gw)
+        )
+
+        start = time.monotonic()
+        last_fingerprint: tuple[int, str, int] = (-1, "", 0)
+        last_progress_time = start
+
+        try:
+            while not task.done():
+                await asyncio.sleep(CHECK_INTERVAL)
+                elapsed = time.monotonic() - start
+
+                # Hard cap — only when explicitly configured (> 0)
+                if hard_timeout > 0 and elapsed >= hard_timeout:
+                    logger.warning(
+                        f"[Orchestrator] Agent {agent_profile_id} hit hard cap "
+                        f"({hard_timeout}s configured in settings.hard_timeout_seconds), "
+                        f"killing. Set hard_timeout_seconds=0 to disable."
+                    )
+                    task.cancel()
+                    try:
+                        await task
+                    except (asyncio.CancelledError, Exception):
+                        pass
+                    raise asyncio.TimeoutError()
+
+                fp = self._get_progress_fingerprint(agent, session.id)
+                if fp != last_fingerprint:
+                    last_fingerprint = fp
+                    last_progress_time = time.monotonic()
+                    logger.debug(
+                        f"[Orchestrator] Agent {agent_profile_id} progress: "
+                        f"iter={fp[0]}, status={fp[1]}, tools={fp[2]}, "
+                        f"elapsed={elapsed:.0f}s"
+                    )
+                    self._log_delegation({
+                        "event": "progress",
+                        "agent": agent_profile_id,
+                        "session": str(getattr(session, "session_key", session.id)),
+                        "iter": fp[0],
+                        "status": fp[1],
+                        "tools_count": fp[2],
+                        "elapsed_s": round(elapsed),
+                    })
+
+                idle = time.monotonic() - last_progress_time
+                if idle >= idle_timeout:
+                    logger.warning(
+                        f"[Orchestrator] Agent {agent_profile_id} idle for "
+                        f"{idle:.0f}s with no progress "
+                        f"(last fingerprint: iter={last_fingerprint[0]}, "
+                        f"status={last_fingerprint[1]}, tools={last_fingerprint[2]}). "
+                        f"Killing. Adjust settings.progress_timeout_seconds to change threshold."
+                    )
+                    task.cancel()
+                    try:
+                        await task
+                    except (asyncio.CancelledError, Exception):
+                        pass
+                    raise asyncio.TimeoutError()
+
+            return task.result()
+        except asyncio.CancelledError:
+            if not task.done():
+                task.cancel()
+                try:
+                    await task
+                except (asyncio.CancelledError, Exception):
+                    pass
+            raise
+
+    @staticmethod
+    def _get_progress_fingerprint(agent: Any, session_id: str) -> tuple[int, str, int]:
+        """Return (iteration, status, tools_count) as a composite progress signal.
+
+        Any change in this tuple means the agent is making progress.
+        """
+        state = getattr(agent, "agent_state", None)
+        if state is None:
+            return (-1, "", 0)
+        task = state.get_task_for_session(session_id)
+        if task is None:
+            task = state.current_task
+        if task is None:
+            return (-1, "", 0)
+        status_str = task.status.value if hasattr(task.status, "value") else str(task.status)
+        return (task.iteration, status_str, len(task.tools_executed))
+
+    @staticmethod
+    async def _call_agent(
+        agent: Any, session: Any, message: str, *, gateway: Any = None
+    ) -> str:
+        """Thin wrapper around agent.chat_with_session for use as a task target."""
+        session_messages = session.context.get_messages()
+        return await agent.chat_with_session(
+            message=message,
+            session_messages=session_messages,
+            session_id=session.id,
+            session=session,
+            gateway=gateway,
+        )
 
     async def _try_fallback_or(
         self,
@@ -262,7 +475,6 @@ class AgentOrchestrator:
         message: str,
         agent_profile_id: str,
         depth: int,
-        timeout: float,
         *,
         default: str,
     ) -> str:
@@ -278,39 +490,10 @@ class AgentOrchestrator:
                     f"{agent_profile_id} to {effective_id}"
                 )
                 return await self._dispatch(
-                    session, message, effective_id, depth + 1, timeout,
+                    session, message, effective_id, depth + 1,
                     from_agent=agent_profile_id,
                 )
         return default
-
-    # ------------------------------------------------------------------
-    # Agent execution
-    # ------------------------------------------------------------------
-
-    async def _execute_agent(
-        self, session: Any, message: str, agent_profile_id: str
-    ) -> str:
-        """Execute a message using the specified agent profile."""
-        if self._profile_store is None or self._pool is None:
-            return "⚠️ Orchestrator 未正确初始化，请检查日志"
-
-        profile = self._profile_store.get(agent_profile_id)
-        if profile is None:
-            profile = self._profile_store.get("default")
-        if profile is None:
-            return f"⚠️ 无法找到 Agent Profile: {agent_profile_id}"
-
-        agent = await self._pool.get_or_create(session.id, profile)
-
-        session_messages = session.context.get_messages()
-        response = await agent.chat_with_session(
-            message=message,
-            session_messages=session_messages,
-            session_id=session.id,
-            session=session,
-            gateway=self._gateway,
-        )
-        return response
 
     # ------------------------------------------------------------------
     # Delegation (called by agent tools)

@@ -130,16 +130,21 @@ class AgentToolHandler:
                     reason=reason,
                 )
                 return agent_id, str(result)
-            except Exception as e:
+            except BaseException as e:
                 logger.error(f"[AgentToolHandler] Parallel delegation to {agent_id} failed: {e}")
                 return agent_id, f"❌ Failed: {e}"
 
         coros = [_run_one(t) for t in tasks_param]
-        results = await asyncio.gather(*coros, return_exceptions=False)
+        raw_results = await asyncio.gather(*coros, return_exceptions=True)
 
         parts = []
-        for agent_id, result in results:
-            parts.append(f"## Agent: {agent_id}\n{result}")
+        for i, res in enumerate(raw_results):
+            if isinstance(res, BaseException):
+                aid = (tasks_param[i].get("agent_id") or "?").strip()
+                parts.append(f"## Agent: {aid}\n❌ Failed: {res}")
+            else:
+                agent_id, result = res
+                parts.append(f"## Agent: {agent_id}\n{result}")
         return "\n\n---\n\n".join(parts)
 
     # ------------------------------------------------------------------

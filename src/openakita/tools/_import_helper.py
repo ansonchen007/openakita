@@ -61,8 +61,6 @@ _PACKAGE_MODULE_MAP: dict[str, tuple[str | None, str | None, str]] = {
     # -- 语音识别 --
     "whisper": ("whisper", "语音识别", "openai-whisper"),
     "static_ffmpeg": ("whisper", "语音识别", "static-ffmpeg"),
-    # -- 多 Agent 协同 --
-    "zmq": ("orchestration", "多Agent协同", "pyzmq"),
     # -- IM 通道适配器 (已直接打包) --
     "lark_oapi": (None, None, "lark-oapi"),
     "dingtalk_stream": (None, None, "dingtalk-stream"),

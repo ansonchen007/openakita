@@ -1258,7 +1258,7 @@ ID: {result.test_id}
                 await agent.initialize(start_scheduler=False)
                 # === 自检自动修复护栏 ===
                 # 目标：只允许 LLM “直接修复”工具层 / skills / MCP / channels
-                # Akita 核心系统代码（core/llm/memory/scheduler/storage/orchestration 等）一律不允许自动修改。
+                # Akita 核心系统代码（core/llm/memory/scheduler/storage/agents 等）一律不允许自动修改。
                 #
                 # 具体执行在 FilesystemHandler 中做硬拦截；这里仅注入策略。
                 from pathlib import Path as _Path
@@ -1318,7 +1318,7 @@ ID: {result.test_id}
 
 ## 要求
 1. 你需要 **直接修复** 工具层问题（内置工具/skills/MCP/channels 等），可以使用工具（shell、file、skills、call_mcp_tool 等）
-2. **禁止** 修改 Akita 核心系统代码（`src/openakita/core/`、`src/openakita/llm/`、`src/openakita/memory/`、`src/openakita/scheduler/`、`src/openakita/storage/`、`src/openakita/orchestration/` 等）
+2. **禁止** 修改 Akita 核心系统代码（`src/openakita/core/`、`src/openakita/llm/`、`src/openakita/memory/`、`src/openakita/scheduler/`、`src/openakita/storage/`、`src/openakita/agents/` 等）
 3. **禁止** 进行 Windows/系统层面优化与命令操作（注册表、计划任务、权限修复、服务/进程管理等）；如果需要这些操作，请写入“需人工处理”的结论
 4. 修复后验证结果是否正确（能用轻量验证就做，如 list_skills、list_mcp_servers、读取文件等）
 5. 完成后简要报告修复结果（做了什么、改了哪些文件、验证结果）

@@ -19,12 +19,10 @@ router = APIRouter()
 
 
 def _get_llm_client(agent: object):
-    """Resolve LLMClient from Agent or MasterAgent."""
+    """Resolve LLMClient from Agent."""
     from openakita.core.agent import Agent
 
-    actual = agent
-    if not isinstance(agent, Agent):
-        actual = getattr(agent, "_local_agent", None)
+    actual = agent if isinstance(agent, Agent) else None
     if actual is None:
         return None
     brain = getattr(actual, "brain", None)

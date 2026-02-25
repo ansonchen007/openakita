@@ -330,42 +330,6 @@ def _():
 print("\n🚀 Phase 4: 高级功能")
 
 
-@test("Handoff 多 Agent 编排")
-def _():
-    from openakita.orchestration.handoff import (
-        HandoffAgent, HandoffTarget, HandoffOrchestrator,
-    )
-
-    coder = HandoffAgent(
-        name="coder",
-        description="代码编写专家",
-        system_prompt="你是一个代码编写专家",
-        tools=["run_shell", "write_file"],
-    )
-    reviewer = HandoffAgent(
-        name="reviewer",
-        description="代码审查专家",
-        system_prompt="你是一个代码审查专家",
-        tools=["read_file"],
-    )
-
-    coder.add_handoff(reviewer, description="代码写完后需要审查")
-    reviewer.add_handoff(coder, description="审查发现问题需要修改")
-
-    assert len(coder.handoffs) == 1
-    assert coder.handoffs[0].agent_name == "reviewer"
-    assert coder.handoffs[0].tool_name == "transfer_to_reviewer"
-
-    # 测试 handoff 工具生成
-    tools = coder.get_handoff_tools()
-    assert len(tools) == 1
-    assert tools[0]["name"] == "transfer_to_reviewer"
-    assert "input_schema" in tools[0]
-
-    # 测试编排器
-    orch = HandoffOrchestrator(agents=[coder, reviewer], entry_agent=coder)
-    assert orch.current_agent.name == "coder"
-
 
 @test("评估框架 - Metrics")
 def _():
@@ -488,10 +452,6 @@ def _():
     assert hasattr(settings, "tracing_console_export")
     assert hasattr(settings, "evaluation_enabled")
     assert hasattr(settings, "evaluation_output_dir")
-    assert hasattr(settings, "orchestration_mode")
-
-    # 验证默认值
-    assert settings.orchestration_mode == "single"
     assert settings.tracing_enabled is False
     assert settings.evaluation_enabled is False
 
@@ -553,7 +513,6 @@ def _():
     from openakita.memory.storage import MemoryStorage
 
     # Phase 4
-    from openakita.orchestration.handoff import HandoffAgent, HandoffTarget, HandoffOrchestrator
     from openakita.evaluation.metrics import EvalMetrics, EvalResult, TraceMetrics
     from openakita.evaluation.judge import Judge, JudgeResult
     from openakita.evaluation.runner import EvalRunner

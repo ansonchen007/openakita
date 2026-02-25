@@ -952,7 +952,7 @@ class Agent:
             self.handler_registry.register(
                 "agent",
                 create_agent_tool_handler(self),
-                ["delegate_to_agent", "create_agent"],
+                ["delegate_to_agent", "delegate_parallel", "create_agent"],
             )
 
         logger.info(
@@ -2067,7 +2067,7 @@ search_github → install_skill → 使用
 
 {identity_section}
 
-你拥有一支专业 Agent 团队，通过 `delegate_to_agent` 和 `create_agent` 工具来协调他们。
+你拥有一支专业 Agent 团队，通过 `delegate_to_agent`、`delegate_parallel` 和 `create_agent` 工具来协调他们。
 
 **核心原则：你是团队协调者，不是什么都自己做的人。当任务匹配其他 Agent 的专长时，你必须委派，不要自己做。**
 

@@ -78,7 +78,7 @@ class LogAnalyzer:
         "openakita.memory",
         "openakita.scheduler",
         "openakita.llm",
-        "openakita.orchestration",
+        "openakita.agents",
         "openakita.storage",
     ]
 

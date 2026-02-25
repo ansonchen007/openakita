@@ -400,33 +400,14 @@ class TaskExecutor:
             pass
 
     async def _create_agent(self) -> Any:
-        """
-        创建 Agent 实例（不启动 scheduler，避免重复执行任务）
-
-        如果启用了多 Agent 协同模式，将使用 MasterAgent 处理任务。
-        """
+        """创建 Agent 实例（不启动 scheduler，避免重复执行任务）"""
         if self.agent_factory:
             return self.agent_factory()
 
-        # 检查是否启用协同模式
-        from ..config import settings
+        from ..core.agent import Agent
 
-        if settings.orchestration_enabled:
-            # 使用 MasterAgent（需要确保 MasterAgent 已经在主进程启动）
-            # 定时任务执行时，我们创建一个轻量的 Agent 而不是 MasterAgent
-            # 因为 MasterAgent 应该在主进程中运行
-            logger.info("Orchestration enabled, but using local agent for scheduled task")
-            from ..core.agent import Agent
-
-            agent = Agent()
-            await agent.initialize(start_scheduler=False)
-            return agent
-        else:
-            # 单 Agent 模式
-            from ..core.agent import Agent
-
-            agent = Agent()
-            await agent.initialize(start_scheduler=False)
+        agent = Agent()
+        await agent.initialize(start_scheduler=False)
             return agent
 
     async def _run_agent(self, agent: Any, prompt: str) -> str:

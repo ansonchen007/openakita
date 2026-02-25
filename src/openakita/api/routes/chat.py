@@ -22,14 +22,11 @@ router = APIRouter()
 
 
 def _resolve_agent(agent: object):
-    """Resolve the actual Agent instance (supports both Agent and MasterAgent)."""
+    """Resolve the actual Agent instance."""
     from openakita.core.agent import Agent
 
     if isinstance(agent, Agent):
         return agent
-    local = getattr(agent, "_local_agent", None)
-    if isinstance(local, Agent):
-        return local
     return None
 
 

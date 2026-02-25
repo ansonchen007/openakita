@@ -45,8 +45,8 @@ class Settings(BaseSettings):
     # - progress_timeout_seconds: 若连续超过该时间没有任何进展（LLM返回/工具完成/迭代推进），视为卡死。
     # - hard_timeout_seconds: 可选硬上限（默认关闭=0）。仅作为最终兜底，避免无限任务。
     progress_timeout_seconds: int = Field(
-        default=600,
-        description="无进展超时阈值（秒）。超过该时间无进展则触发超时处理（默认 600）",
+        default=1200,
+        description="无进展超时阈值（秒）。超过该时间无进展则触发超时处理（默认 1200）",
     )
     hard_timeout_seconds: int = Field(
         default=0,
@@ -315,23 +315,6 @@ class Settings(BaseSettings):
 
     # IM 多 Bot 配置（多Agent模式下支持同一通道类型多个Bot实例）
     im_bots: list[dict] = Field(default_factory=list)
-
-    # === 多 Agent 协同配置 (旧 ZMQ, deprecated) ===
-    orchestration_enabled: bool = Field(default=False, description="是否启用多 Agent 协同")
-    orchestration_mode: str = Field(
-        default="single",
-        description="编排模式: single(单Agent) | handoff(进程内Handoff) | master-worker(ZMQ跨进程)",
-    )
-    orchestration_bus_address: str = Field(
-        default="tcp://127.0.0.1:5555", description="ZMQ 总线地址"
-    )
-    orchestration_pub_address: str = Field(
-        default="tcp://127.0.0.1:5556", description="ZMQ 广播地址"
-    )
-    orchestration_min_workers: int = Field(default=1, description="最小 Worker 数量")
-    orchestration_max_workers: int = Field(default=5, description="最大 Worker 数量")
-    orchestration_heartbeat_interval: int = Field(default=5, description="Worker 心跳间隔（秒）")
-    orchestration_health_check_interval: int = Field(default=10, description="健康检查间隔（秒）")
 
     # === 人格系统配置 ===
     persona_name: str = Field(
