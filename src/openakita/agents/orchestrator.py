@@ -529,14 +529,18 @@ class AgentOrchestrator:
         return list(task.tools_executed) if task.tools_executed else []
 
     def get_sub_agent_states(self, session_id: str) -> list[dict]:
-        """Return live sub-agent states for the given conversation (session.id).
+        """Return live sub-agent states for the given conversation.
 
-        Used by the frontend polling endpoint to display progress cards.
+        Accepts either a full session.id or a chat_id (conversation_id).
+        The state keys are stored as '{session.id}:{agent_id}', where
+        session.id = '{channel}_{chat_id}_{timestamp}_{uuid}'.
+        Frontend passes the raw chat_id, so we match any key whose
+        session portion contains the given id.
         """
         result = []
-        prefix = f"{session_id}:"
         for key, state in list(self._sub_agent_states.items()):
-            if key.startswith(prefix):
+            sid_part = key.split(":")[0] if ":" in key else key
+            if sid_part == session_id or session_id in sid_part:
                 entry = dict(state)
                 # Attach profile display info
                 profile_id = entry.get("profile_id", "")
