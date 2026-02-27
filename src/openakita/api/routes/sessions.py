@@ -112,6 +112,9 @@ async def get_session_history(
         chain_summary = msg.get("chain_summary")
         if chain_summary:
             entry["chain_summary"] = chain_summary
+        artifacts = msg.get("artifacts")
+        if artifacts:
+            entry["artifacts"] = artifacts
         result.append(entry)
 
     return {"messages": result}

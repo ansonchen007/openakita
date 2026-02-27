@@ -147,6 +147,7 @@ async def _stream_chat(
     _ask_user_question = ""
     _ask_user_options: list[dict] = []
     _ask_user_questions: list[dict] = []
+    _collected_artifacts: list[dict] = []
 
     async def _check_disconnected() -> bool:
         nonlocal _client_disconnected
@@ -267,22 +268,22 @@ async def _stream_chat(
             if event_type == "tool_call_end" and event.get("tool") in _artifact_tools:
                 try:
                     result_str = event.get("result", "{}")
-                    # tool_executor may append "\n\n[执行日志]:\n..." to the result,
-                    # which breaks JSON parsing — strip it before decoding.
                     _log_marker = "\n\n[执行日志]"
                     if _log_marker in result_str:
                         result_str = result_str[: result_str.index(_log_marker)]
                     result_data = json.loads(result_str)
                     for receipt in result_data.get("receipts", []):
                         if receipt.get("status") == "delivered" and receipt.get("file_url"):
-                            yield _sse("artifact", {
+                            art_data = {
                                 "artifact_type": receipt.get("type", "file"),
                                 "file_url": receipt["file_url"],
                                 "path": receipt.get("path", ""),
                                 "name": receipt.get("name", ""),
                                 "caption": receipt.get("caption", ""),
                                 "size": receipt.get("size"),
-                            })
+                            }
+                            _collected_artifacts.append(art_data)
+                            yield _sse("artifact", art_data)
                 except (json.JSONDecodeError, TypeError, KeyError):
                     pass
 
@@ -345,10 +346,15 @@ async def _stream_chat(
 
         if session and assistant_text_to_save:
             try:
+                extra_meta: dict = {}
+                if _chain_summary:
+                    extra_meta["chain_summary"] = _chain_summary
+                if _collected_artifacts:
+                    extra_meta["artifacts"] = _collected_artifacts
                 session.add_message(
                     "assistant",
                     assistant_text_to_save,
-                    **({"chain_summary": _chain_summary} if _chain_summary else {}),
+                    **extra_meta,
                 )
                 if session_manager:
                     session_manager.mark_dirty()

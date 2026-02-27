@@ -2413,7 +2413,16 @@ export function ChatView({
               try {
                 const event: StreamEvent = JSON.parse(data);
                 if (event.type === "text_delta") currentContent += event.content;
-                else if (event.type === "plan_created") currentPlan = event.plan;
+                else if (event.type === "artifact") {
+                  currentArtifacts = [...currentArtifacts, {
+                    artifact_type: event.artifact_type,
+                    file_url: event.file_url,
+                    path: event.path,
+                    name: event.name,
+                    caption: event.caption,
+                    size: event.size,
+                  }];
+                } else if (event.type === "plan_created") currentPlan = event.plan;
                 else if (event.type === "plan_step_updated" && currentPlan) {
                   const newSteps = currentPlan.steps.map((s) => {
                     const matched = event.stepId ? s.id === event.stepId : false;
@@ -2590,6 +2599,15 @@ export function ChatView({
                         const c = streamContexts.current.get(thisConvId);
                         if (c) c.subAgentTasks = data;
                         if (activeConvIdRef.current === thisConvId) setDisplaySubAgentTasks(data);
+                        // Stop polling if all sub-agents reached terminal state
+                        const allDone = data.length > 0 && data.every(
+                          (t) => t.status === "completed" || t.status === "error" || t.status === "timeout" || t.status === "cancelled"
+                        );
+                        if (allDone && c?.pollingTimer) {
+                          clearInterval(c.pollingTimer);
+                          c.pollingTimer = null;
+                          c.isDelegating = false;
+                        }
                       })
                       .catch(() => {});
                   };
@@ -2627,6 +2645,20 @@ export function ChatView({
                       const c = streamContexts.current.get(thisConvId);
                       if (c) c.subAgentTasks = data;
                       if (activeConvIdRef.current === thisConvId) setDisplaySubAgentTasks(data);
+                      // Auto-clear cards after a delay when all sub-agents are done
+                      const allDone = data.length > 0 && data.every(
+                        (t) => t.status === "completed" || t.status === "error" || t.status === "timeout" || t.status === "cancelled"
+                      );
+                      if (allDone) {
+                        setTimeout(() => {
+                          const c2 = streamContexts.current.get(thisConvId);
+                          if (c2) { c2.subAgentTasks = []; c2.activeSubAgents = []; }
+                          if (activeConvIdRef.current === thisConvId) {
+                            setDisplaySubAgentTasks([]);
+                            setDisplayActiveSubAgents([]);
+                          }
+                        }, 5000);
+                      }
                     })
                     .catch(() => {});
                 }
@@ -2770,6 +2802,7 @@ export function ChatView({
                     toolCalls: currentToolCalls.length > 0 ? currentToolCalls : null,
                     plan: currentPlan,
                     askUser: currentAsk,
+                    artifacts: currentArtifacts.length > 0 ? [...currentArtifacts] : null,
                     thinkingChain: chainGroups.length > 0 ? chainGroups.map(g => ({ ...g })) : null,
                     streaming: true,
                   }];
@@ -2868,6 +2901,8 @@ export function ChatView({
         } catch {}
         if (activeConvIdRef.current === thisConvId) {
           setMessages(ctx.messages);
+          setDisplayActiveSubAgents([]);
+          setDisplaySubAgentTasks([]);
         }
         streamContexts.current.delete(thisConvId);
       }
