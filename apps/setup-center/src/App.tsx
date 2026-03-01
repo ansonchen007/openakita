@@ -8836,9 +8836,7 @@ export function App() {
           <div className={`navItem ${view === "memory" ? "navItemActive" : ""}`} onClick={() => setView("memory")} role="button" tabIndex={0} title={t("sidebar.memory")} style={disabledViews.includes("memory") ? { opacity: 0.4 } : undefined}>
             <IconBrain size={16} /> {!sidebarCollapsed && <span>{t("sidebar.memory")} <sup style={{ fontSize: 9, color: "var(--primary, #3b82f6)", fontWeight: 600 }}>Beta</sup></span>}
           </div>
-          <div className={`navItem ${view === "modules" ? "navItemActive" : ""}`} onClick={() => { setView("modules"); obLoadModules(); }} role="button" tabIndex={0} title={t("sidebar.modules")} style={disabledViews.includes("modules") ? { opacity: 0.4 } : undefined}>
-            <IconGear size={16} /> {!sidebarCollapsed && <span>{t("sidebar.modules")}</span>}
-          </div>
+          {/* 模块页面已隐藏，功能保留但不在侧边栏展示 */}
           <div className={`navItem ${view === "status" ? "navItemActive" : ""}`} onClick={async () => { setView("status"); try { await refreshStatus(undefined, undefined, true); } catch { /* ignore */ } }} role="button" tabIndex={0} title={t("sidebar.status")}>
             <IconStatus size={16} /> {!sidebarCollapsed && <span>{t("sidebar.status")}</span>}
           </div>
