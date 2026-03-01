@@ -386,8 +386,8 @@ async def _stream_chat(
                 )
                 if session_manager:
                     session_manager.mark_dirty()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.error(f"[Chat API] Failed to save assistant message to session: {e}", exc_info=True)
 
         # Ensure sub-agent records are flushed to disk
         if session and hasattr(session, "context") and session_manager:

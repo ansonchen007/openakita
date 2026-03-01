@@ -42,3 +42,20 @@ os.environ.setdefault("PYTHONIOENCODING", "utf-8")
 # UnicodeDecodeError。本项目不使用 pydantic 插件，直接禁用即可。
 if getattr(sys, "frozen", False):
     os.environ.setdefault("PYDANTIC_DISABLE_PLUGINS", "1")
+
+# Windows 环境下预填充 platform 缓存，避免后续 platform.system() 等调用
+# 通过 subprocess 执行 `cmd /c ver` 触发阻塞（在某些环境中 cmd 子进程会卡死）。
+if sys.platform == "win32":
+    import platform as _platform
+    try:
+        _wv = sys.getwindowsversion()
+        _platform._uname_cache = _platform.uname_result(
+            system="Windows",
+            node=os.environ.get("COMPUTERNAME", ""),
+            release=str(_wv.major),
+            version=f"{_wv.major}.{_wv.minor}.{_wv.build}",
+            machine=os.environ.get("PROCESSOR_ARCHITECTURE", "AMD64"),
+            processor=os.environ.get("PROCESSOR_IDENTIFIER", ""),
+        )
+    except Exception:
+        pass

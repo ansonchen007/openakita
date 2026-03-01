@@ -342,7 +342,8 @@ class SessionManager:
 
                 if self._dirty:
                     self._dirty = False
-                    self._save_sessions()
+                    if not self._save_sessions():
+                        self._dirty = True
 
             except asyncio.CancelledError:
                 # 退出前最后保存一次
@@ -486,11 +487,12 @@ class SessionManager:
             return (channel, entry["chat_id"])
         return None
 
-    def _save_sessions(self) -> None:
+    def _save_sessions(self) -> bool:
         """
         保存会话到文件（原子写入）
 
-        使用临时文件 + 重命名的方式，确保写入过程中断不会损坏原文件
+        使用临时文件 + 重命名的方式，确保写入过程中断不会损坏原文件。
+        返回 True 表示保存成功，False 表示失败（调用方应重试）。
         """
         sessions_file = self.storage_path / "sessions.json"
         temp_file = self.storage_path / "sessions.json.tmp"
@@ -520,13 +522,15 @@ class SessionManager:
             temp_file.rename(sessions_file)
 
             logger.debug(f"Saved {len(data)} sessions to storage (atomic)")
+            return True
 
         except Exception as e:
-            logger.error(f"Failed to save sessions: {e}")
+            logger.error(f"Failed to save sessions: {e}", exc_info=True)
             # 清理临时文件
             if temp_file.exists():
                 with contextlib.suppress(Exception):
                     temp_file.unlink()
+            return False
 
     async def _save_sessions_async(self) -> None:
         """异步保存会话（在线程池中执行同步 I/O）"""

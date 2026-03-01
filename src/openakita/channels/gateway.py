@@ -1760,7 +1760,7 @@ class MessageGateway:
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                logger.error(f"Error processing message: {e}")
+                logger.error(f"Error processing message: {e}", exc_info=True)
 
     async def _handle_message(self, message: UnifiedMessage) -> None:
         """
@@ -1970,7 +1970,11 @@ class MessageGateway:
             await self._process_pending_interrupts(session_key, session)
 
         except Exception as e:
-            logger.error(f"Error handling message {message.id}: {e}")
+            logger.error(
+                f"Error handling message {message.id} "
+                f"(channel={message.channel}, user={message.user_id}): {e}",
+                exc_info=True,
+            )
             # 发送错误提示
             await self._send_error(message, str(e))
         finally:
