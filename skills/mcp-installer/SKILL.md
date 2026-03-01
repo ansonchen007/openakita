@@ -237,6 +237,42 @@ add_mcp_server(
 )
 ```
 
+### 本地创建的 MCP 服务器
+
+如果使用 `mcp-builder` 技能创建了自定义 MCP 服务器，**必须**在创建后调用 `add_mcp_server` 注册：
+
+**Python 脚本（使用绝对路径）：**
+```
+add_mcp_server(
+    name="my-custom-tool",
+    command="python",
+    args=["C:/path/to/my_project/server.py"],
+    description="自定义 MCP 工具"
+)
+```
+
+**Python 模块：**
+```
+add_mcp_server(
+    name="my-custom-tool",
+    command="python",
+    args=["-m", "my_mcp_project.server"],
+    description="自定义 MCP 工具"
+)
+```
+
+**TypeScript（编译后）：**
+```
+add_mcp_server(
+    name="my-custom-tool",
+    command="node",
+    args=["C:/path/to/my_project/dist/index.js"],
+    description="自定义 MCP 工具"
+)
+```
+
+> **重要**：本地脚本务必使用**绝对路径**，相对路径可能导致工作目录不对而失败。
+
 ---
 
 ## 安装前检查清单

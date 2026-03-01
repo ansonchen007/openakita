@@ -16,7 +16,7 @@ Create MCP (Model Context Protocol) servers that enable LLMs to interact with ex
 
 ## 🚀 High-Level Workflow
 
-Creating a high-quality MCP server involves four main phases:
+Creating a high-quality MCP server involves five main phases:
 
 ### Phase 1: Deep Research and Planning
 
@@ -190,6 +190,102 @@ Create an XML file with this structure:
 <!-- More qa_pairs... -->
 </evaluation>
 ```
+
+---
+
+### Phase 5: Register in OpenAkita (CRITICAL)
+
+**This step is mandatory.** After building and testing the MCP server, you MUST register it into the OpenAkita system so the user can actually use it. Do NOT just show config snippets — call `add_mcp_server` to complete the registration.
+
+#### 5.1 Install Dependencies
+
+Before registering, ensure all dependencies are installed:
+
+**Python:**
+```bash
+pip install -r requirements.txt
+```
+
+**TypeScript:**
+```bash
+cd <project_dir> && npm install && npm run build
+```
+
+#### 5.2 Register with add_mcp_server
+
+**ALWAYS call `add_mcp_server` after building.** This registers the server into the system and automatically attempts connection.
+
+**Python server (using python -m):**
+```
+add_mcp_server(
+    name="<server-name>",
+    transport="stdio",
+    command="python",
+    args=["-m", "<module_name>"],
+    description="服务器描述",
+    env={"API_KEY": "xxx"}
+)
+```
+
+**Python server (using script path):**
+```
+add_mcp_server(
+    name="<server-name>",
+    transport="stdio",
+    command="python",
+    args=["<absolute_path_to>/server.py"],
+    description="服务器描述"
+)
+```
+
+**TypeScript server (using npx):**
+```
+add_mcp_server(
+    name="<server-name>",
+    transport="stdio",
+    command="npx",
+    args=["-y", "<package-name>"],
+    description="服务器描述"
+)
+```
+
+**TypeScript server (using node):**
+```
+add_mcp_server(
+    name="<server-name>",
+    transport="stdio",
+    command="node",
+    args=["<absolute_path_to>/dist/index.js"],
+    description="服务器描述"
+)
+```
+
+**Remote HTTP server:**
+```
+add_mcp_server(
+    name="<server-name>",
+    transport="streamable_http",
+    url="http://localhost:8080/mcp",
+    description="服务器描述"
+)
+```
+
+#### 5.3 Verify Registration
+
+After `add_mcp_server` returns:
+
+1. Check the response — it should show "已自动连接" and discovered tools
+2. If auto-connect failed, troubleshoot:
+   - Verify the command path is correct (use absolute paths for local scripts)
+   - Check dependencies are installed
+   - Try `connect_mcp_server("<server-name>")` manually
+3. Call `list_mcp_servers` to confirm the server appears in the list
+4. Test a tool call with `call_mcp_tool("<server-name>", "<tool_name>", {...})` to verify it works
+
+**Important notes:**
+- Use **absolute paths** for locally created script files (e.g., `C:/Users/.../server.py` not `./server.py`)
+- The server config is persisted to `data/mcp/servers/<server-name>/SERVER_METADATA.json`
+- If registration fails, fix the issue and call `add_mcp_server` again — it will overwrite the previous config
 
 ---
 
