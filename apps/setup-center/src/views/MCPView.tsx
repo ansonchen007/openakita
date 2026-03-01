@@ -49,6 +49,39 @@ const emptyForm: AddServerForm = {
   auto_connect: false,
 };
 
+/**
+ * Parse args string into an array, respecting quoted strings for paths with spaces.
+ * Examples:
+ *   '-m my_module'           -> ['-m', 'my_module']
+ *   '"C:\\Program Files\\s.py"' -> ['C:\\Program Files\\s.py']
+ *   '-y @scope/pkg'         -> ['-y', '@scope/pkg']
+ *   (one arg per line)      -> each line is one arg
+ */
+function parseArgs(raw: string): string[] {
+  const trimmed = raw.trim();
+  if (!trimmed) return [];
+  if (trimmed.includes("\n")) {
+    return trimmed.split("\n").map(l => l.trim()).filter(Boolean);
+  }
+  const args: string[] = [];
+  let current = "";
+  let inQuote: string | null = null;
+  for (const ch of trimmed) {
+    if (inQuote) {
+      if (ch === inQuote) { inQuote = null; }
+      else { current += ch; }
+    } else if (ch === '"' || ch === "'") {
+      inQuote = ch;
+    } else if (ch === " " || ch === "\t") {
+      if (current) { args.push(current); current = ""; }
+    } else {
+      current += ch;
+    }
+  }
+  if (current) args.push(current);
+  return args;
+}
+
 export function MCPView({ serviceRunning }: { serviceRunning: boolean }) {
   const [servers, setServers] = useState<MCPServer[]>([]);
   const [mcpEnabled, setMcpEnabled] = useState(true);
@@ -78,7 +111,7 @@ export function MCPView({ serviceRunning }: { serviceRunning: boolean }) {
 
   const showMsg = (text: string, ok: boolean) => {
     setMessage({ text, ok });
-    setTimeout(() => setMessage(null), 4000);
+    setTimeout(() => setMessage(null), ok ? 4000 : 8000);
   };
 
   const connectServer = async (name: string) => {
@@ -137,7 +170,9 @@ export function MCPView({ serviceRunning }: { serviceRunning: boolean }) {
   };
 
   const addServer = async () => {
-    if (!form.name.trim()) { showMsg("请输入服务器名称", false); return; }
+    const name = form.name.trim();
+    if (!name) { showMsg("请输入服务器名称", false); return; }
+    if (!/^[a-zA-Z0-9_-]+$/.test(name)) { showMsg("名称只能含字母、数字、连字符、下划线", false); return; }
     if (form.transport === "stdio" && !form.command.trim()) { showMsg("stdio 模式需要填写启动命令", false); return; }
     if ((form.transport === "streamable_http" || form.transport === "sse") && !form.url.trim()) { showMsg(`${form.transport === "sse" ? "SSE" : "HTTP"} 模式需要填写 URL`, false); return; }
     setBusy("add");
@@ -149,14 +184,15 @@ export function MCPView({ serviceRunning }: { serviceRunning: boolean }) {
           if (idx > 0) envObj[line.slice(0, idx).trim()] = line.slice(idx + 1).trim();
         }
       }
+      const parsedArgs = parseArgs(form.args);
       const res = await fetch(`${API_BASE}/api/mcp/servers/add`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          name: form.name.trim(),
+          name,
           transport: form.transport,
           command: form.command.trim(),
-          args: form.args.trim() ? form.args.trim().split(/\s+/) : [],
+          args: parsedArgs,
           env: envObj,
           url: form.url.trim(),
           description: form.description.trim(),
@@ -166,12 +202,15 @@ export function MCPView({ serviceRunning }: { serviceRunning: boolean }) {
       const data = await res.json();
       if (res.ok && data.status === "ok") {
         const cr = data.connect_result;
-        const connMsg = cr
-          ? cr.connected
-            ? `，已连接（${cr.tool_count} 个工具）`
-            : `，连接失败: ${cr.error || "未知"}`
-          : "";
-        showMsg(`已添加 ${form.name}${connMsg}`, cr?.connected !== false);
+        let connMsg = "";
+        if (cr) {
+          if (cr.connected) {
+            connMsg = `，已连接（发现 ${cr.tool_count ?? 0} 个工具）`;
+          } else {
+            connMsg = `\n⚠️ 自动连接失败: ${cr.error || "未知原因"}，可稍后在列表中手动连接`;
+          }
+        }
+        showMsg(`✅ 已添加 ${name}${connMsg}`, !cr || cr.connected !== false);
         setForm({ ...emptyForm });
         setShowAdd(false);
         await fetchServers();
@@ -254,10 +293,10 @@ export function MCPView({ serviceRunning }: { serviceRunning: boolean }) {
           padding: "8px 14px", borderRadius: 6, marginBottom: 12, fontSize: 13,
           background: message.ok ? "var(--ok-bg, #dcfce7)" : "var(--err-bg, #fee2e2)",
           color: message.ok ? "var(--ok, #16a34a)" : "var(--err, #dc2626)",
-          display: "flex", alignItems: "center", gap: 6,
+          display: "flex", alignItems: "flex-start", gap: 6, whiteSpace: "pre-line",
         }}>
-          {message.ok ? <IconCheck size={14} /> : <IconX size={14} />}
-          {message.text}
+          <span style={{ marginTop: 1, flexShrink: 0 }}>{message.ok ? <IconCheck size={14} /> : <IconX size={14} />}</span>
+          <span>{message.text}</span>
         </div>
       )}
 
@@ -289,8 +328,15 @@ export function MCPView({ serviceRunning }: { serviceRunning: boolean }) {
                   <input className="input" value={form.command} onChange={e => setForm({ ...form, command: e.target.value })} placeholder="如: python, npx, node" />
                 </div>
                 <div style={{ gridColumn: "1 / -1" }}>
-                  <label className="label">参数 (空格分隔)</label>
-                  <input className="input" value={form.args} onChange={e => setForm({ ...form, args: e.target.value })} placeholder="如: -m openakita.mcp_servers.web_search" />
+                  <label className="label">参数 (空格分隔，或每行一个；路径含空格请用引号包裹)</label>
+                  <textarea
+                    className="input"
+                    value={form.args}
+                    onChange={e => setForm({ ...form, args: e.target.value })}
+                    placeholder={'如: -m openakita.mcp_servers.web_search\n或每行一个参数:\n-y\n@anthropic/mcp-server-filesystem\n"C:\\My Path\\dir"'}
+                    rows={2}
+                    style={{ resize: "vertical", fontFamily: "monospace", fontSize: 12 }}
+                  />
                 </div>
               </>
             ) : (

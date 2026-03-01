@@ -92,6 +92,7 @@ class MCPServerConfig:
     description: str = ""
     transport: str = "stdio"  # "stdio" | "streamable_http" | "sse"
     url: str = ""  # streamable_http / sse 模式使用
+    cwd: str = ""  # stdio 模式的工作目录（为空则继承父进程）
 
 
 @dataclass
@@ -246,10 +247,21 @@ class MCPClient:
 
     async def _connect_stdio(self, server_name: str, config: MCPServerConfig) -> MCPConnectResult:
         """通过 stdio 连接到 MCP 服务器"""
+        # 连接前二次解析：如果 args 中有相对路径且 cwd 已知，尝试解析
+        args = list(config.args)
+        if config.cwd:
+            cwd_path = Path(config.cwd)
+            for i, arg in enumerate(args):
+                if not arg.startswith("-") and not Path(arg).is_absolute():
+                    candidate = cwd_path / arg
+                    if candidate.is_file():
+                        args[i] = str(candidate.resolve())
+
         server_params = StdioServerParameters(
             command=config.command,
-            args=config.args,
+            args=args,
             env=config.env or None,
+            cwd=config.cwd or None,
         )
 
         stdio_cm = None

@@ -41,6 +41,7 @@ class MCPServerInfo:
     transport: str = "stdio"  # "stdio" | "streamable_http" | "sse"
     url: str = ""  # streamable_http / sse 模式使用
     auto_connect: bool = False
+    config_dir: str = ""  # 配置文件所在目录（用作 stdio 的 cwd 回退）
 
 
 class MCPCatalog:
@@ -215,6 +216,7 @@ Use `connect_mcp_server(server)` to connect a server and discover its tools.
                 transport=transport,
                 url=url,
                 auto_connect=auto_connect,
+                config_dir=str(server_dir),
             )
 
         except Exception as e:

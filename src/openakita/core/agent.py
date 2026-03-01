@@ -1546,6 +1546,7 @@ class Agent:
                         description=server.name or "",
                         transport=transport,
                         url=server.url or "",
+                        cwd=server.config_dir or "",
                     )
                 )
         except Exception as e:

@@ -225,8 +225,11 @@ async def add_mcp_server(request: Request, body: MCPServerAddRequest):
     """Add a new MCP server config (persisted to workspace data/mcp/servers/)."""
     from openakita.tools.mcp import VALID_TRANSPORTS
 
+    import re
     if not body.name.strip():
         return {"status": "error", "message": "服务器名称不能为空"}
+    if not re.match(r'^[a-zA-Z0-9_-]+$', body.name.strip()):
+        return {"status": "error", "message": "服务器名称只能包含字母、数字、连字符和下划线"}
     if body.transport not in VALID_TRANSPORTS:
         return {"status": "error", "message": f"不支持的传输协议: {body.transport}（支持: {', '.join(sorted(VALID_TRANSPORTS))}）"}
     if body.transport == "stdio" and not body.command.strip():
@@ -240,11 +243,25 @@ async def add_mcp_server(request: Request, body: MCPServerAddRequest):
     server_dir = settings.mcp_config_path / name
     server_dir.mkdir(parents=True, exist_ok=True)
 
+    # stdio 模式下自动解析相对路径为绝对路径
+    resolved_args = list(body.args)
+    if body.transport == "stdio":
+        from pathlib import Path as _P
+        search_bases = [server_dir, settings.project_root, _P.cwd()]
+        for i, arg in enumerate(resolved_args):
+            if arg.startswith("-") or _P(arg).is_absolute():
+                continue
+            for base in search_bases:
+                candidate = base / arg
+                if candidate.is_file():
+                    resolved_args[i] = str(candidate.resolve())
+                    break
+
     metadata = {
         "serverIdentifier": name,
         "serverName": body.description or name,
         "command": body.command,
-        "args": body.args,
+        "args": resolved_args,
         "env": body.env,
         "transport": body.transport,
         "url": body.url,
@@ -269,11 +286,12 @@ async def add_mcp_server(request: Request, body: MCPServerAddRequest):
         client.add_server(MCPServerConfig(
             name=name,
             command=body.command,
-            args=body.args,
+            args=resolved_args,
             env=body.env,
             description=body.description,
             transport=body.transport,
             url=body.url,
+            cwd=str(server_dir),
         ))
 
     _refresh_catalog_text(request)

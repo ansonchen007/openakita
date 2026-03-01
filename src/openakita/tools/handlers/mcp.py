@@ -211,11 +211,32 @@ class MCPHandler:
         server_dir = settings.mcp_config_path / name
         server_dir.mkdir(parents=True, exist_ok=True)
 
+        # stdio 模式下：将 args 中的相对路径解析为绝对路径
+        # AI 创建 MCP 时经常使用相对路径（如 "server.py"），需要转换为绝对路径
+        # 搜索顺序：server_dir → project_root → cwd
+        resolved_args = list(args)
+        if transport == "stdio":
+            from pathlib import Path as _P
+            search_bases = [
+                server_dir,
+                settings.project_root,
+                _P.cwd(),
+            ]
+            for i, arg in enumerate(resolved_args):
+                if arg.startswith("-") or _P(arg).is_absolute():
+                    continue
+                for base in search_bases:
+                    candidate = base / arg
+                    if candidate.is_file():
+                        resolved_args[i] = str(candidate.resolve())
+                        logger.info(f"Resolved relative arg '{arg}' -> '{resolved_args[i]}'")
+                        break
+
         metadata = {
             "serverIdentifier": name,
             "serverName": description,
             "command": command,
-            "args": args,
+            "args": resolved_args,
             "env": env,
             "transport": transport,
             "url": url,
@@ -240,11 +261,12 @@ class MCPHandler:
         self.agent.mcp_client.add_server(MCPServerConfig(
             name=name,
             command=command,
-            args=args,
+            args=resolved_args,
             env=env,
             description=description,
             transport=transport,
             url=url,
+            cwd=str(server_dir),
         ))
 
         # 添加后尝试连接并发现工具
@@ -370,6 +392,7 @@ class MCPHandler:
                 description=server.name or "",
                 transport=transport,
                 url=server.url or "",
+                cwd=server.config_dir or "",
             ))
 
         # 5) 刷新 catalog 文本
