@@ -408,7 +408,7 @@ class TaskExecutor:
 
         agent = Agent()
         await agent.initialize(start_scheduler=False)
-            return agent
+        return agent
 
     async def _run_agent(self, agent: Any, prompt: str) -> str:
         """
