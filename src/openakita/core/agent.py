@@ -3724,6 +3724,8 @@ search_github → install_skill → 使用
                 # 收集回复文本（用于 session 保存 & memory）
                 if event.get("type") == "text_delta":
                     _reply_text += event.get("content", "")
+                elif event.get("type") == "ask_user" and not _reply_text:
+                    _reply_text = event.get("question", "")
                 yield event
 
             # === 共享收尾（始终执行，即使回复文本为空也要记录 memory/trace） ===
