@@ -3407,7 +3407,10 @@ create_agent(name="名称", description="描述", skills=["技能"], custom_prom
         # 6. Trait mining
         if hasattr(self, "trait_miner") and self.trait_miner and self.trait_miner.brain:
             try:
-                mined_traits = await self.trait_miner.mine_from_message(message, role="user")
+                mined_traits = await asyncio.wait_for(
+                    self.trait_miner.mine_from_message(message, role="user"),
+                    timeout=10,
+                )
                 for trait in mined_traits:
                     store = getattr(self.memory_manager, "store", None)
                     if store:
@@ -3444,7 +3447,12 @@ create_agent(name="名称", description="描述", skills=["技能"], custom_prom
         compiler_summary = ""
 
         if self._should_compile_prompt(message):
-            compiled_message, compiler_output = await self._compile_prompt(message)
+            try:
+                compiled_message, compiler_output = await asyncio.wait_for(
+                    self._compile_prompt(message), timeout=15,
+                )
+            except (asyncio.TimeoutError, Exception) as e:
+                logger.warning(f"[Session:{session_id}] Prompt compilation failed/timed out: {e}")
             if compiler_output:
                 logger.info(f"[Session:{session_id}] Prompt compiled")
                 compiler_summary = self._summarize_compiler_output(compiler_output)
@@ -3472,9 +3480,13 @@ create_agent(name="名称", description="描述", skills=["技能"], custom_prom
         # 9.5 话题切换检测 — 检测当前消息是否是新话题
         topic_changed = False
         if session and len(session_messages) >= 4:
-            topic_changed = await self._detect_topic_change(
-                session_messages, message, session
-            )
+            try:
+                topic_changed = await asyncio.wait_for(
+                    self._detect_topic_change(session_messages, message, session),
+                    timeout=10,
+                )
+            except (asyncio.TimeoutError, Exception) as e:
+                logger.warning(f"[Session:{session_id}] Topic change detection failed/timed out: {e}")
             if topic_changed:
                 _boundary_msg = {
                     "role": "user",
@@ -4071,6 +4083,9 @@ create_agent(name="名称", description="描述", skills=["技能"], custom_prom
         im_tokens = None
         _reply_text = ""
         try:
+            # 立即发送心跳，让前端知道请求已被接收（准备阶段可能包含多个 LLM 调用）
+            yield {"type": "heartbeat"}
+
             # === 共享准备 ===
             messages, session_type, task_monitor, conversation_id, im_tokens = (
                 await self._prepare_session_context(
@@ -4083,6 +4098,8 @@ create_agent(name="名称", description="描述", skills=["技能"], custom_prom
                     attachments=attachments,
                 )
             )
+
+            yield {"type": "heartbeat"}
 
             # === 构建 System Prompt（与 _chat_with_tools_and_context 一致） ===
             task_description = (getattr(self, "_current_task_query", "") or "").strip()
