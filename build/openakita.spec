@@ -558,12 +558,13 @@ if _base_prefix:
             break
 if _sys_python_exe.exists():
     datas.append((str(_sys_python_exe), "."))  # python* -> _internal/
-    # macOS python launcher depends on framework app binary. Without this,
-    # relocated launcher may fail with posix_spawn on bundled path.
+    # macOS python launcher (`bin/python3`) resolves to ../Resources/Python.app.
+    # Bundle Python.app at _internal/Resources/Python.app to preserve this
+    # relative lookup after relocation.
     if sys.platform == "darwin" and _base_prefix:
         _py_app_dir = _base_prefix / "Resources" / "Python.app"
         if _py_app_dir.exists():
-            _rel_py_app_dst = f"Python.framework/Versions/{_base_prefix.name}/Resources/Python.app"
+            _rel_py_app_dst = "Resources/Python.app"
             datas.append((str(_py_app_dir), _rel_py_app_dst))
             print(f"[spec] Bundling macOS Python.app: {_py_app_dir} -> {_rel_py_app_dst}")
         else:
