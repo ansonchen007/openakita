@@ -25,6 +25,7 @@ wheels/
 
 # Virtual environments
 .venv/
+.venv-ci/
 venv/
 ENV/
 env/
@@ -207,3 +208,8 @@ scripts/update_version.py
 
 # Tauri signing keys (NEVER commit private keys)
 .tauri/
+
+# Setup Center local/runtime artifacts
+apps/setup-center/identity/personas/user_custom.md
+apps/setup-center/src-tauri/identity/personas/user_custom.md
+temp-feedback/
