@@ -1149,7 +1149,7 @@ fn is_pid_file_valid(data: &PidFileData) -> bool {
 /// 从 workspace .env 文件读取 API_PORT
 fn read_workspace_api_port(workspace_id: &str) -> Option<u16> {
     let env_path = workspace_dir(workspace_id).join(".env");
-    let content = fs::read_to_string(&env_path).ok()?;
+    let content = read_text_lossy(&env_path);
     for line in content.lines() {
         let t = line.trim();
         if let Some(val) = t.strip_prefix("API_PORT=") {
@@ -1608,17 +1608,15 @@ fn ensure_workspace_scaffold(dir: &Path) -> Result<(), String> {
     fs::create_dir_all(dir.join("data")).map_err(|e| format!("create data dir failed: {e}"))?;
     fs::create_dir_all(dir.join("identity")).map_err(|e| format!("create identity dir failed: {e}"))?;
 
-    // 默认 .env：Setup Center 会按“你实际填写的字段”生成/维护。
-    // 不再把完整模板复制进工作区，避免产生大量空值键（会导致 pydantic 解析失败/污染配置）。
+    // Only ASCII comments in .env to avoid encoding issues on non-UTF-8 Windows systems.
     let env_path = dir.join(".env");
     if !env_path.exists() {
         let content = [
-            "# OpenAkita 工作区环境变量（由 Setup Center 生成）",
+            "# OpenAkita workspace environment (managed by Setup Center)",
             "#",
-            "# 规则：",
-            "# - 只会写入你在 Setup Center 里“填写/修改过”的键",
-            "# - 你把某个值清空后保存，会从此文件删除该键",
-            "# - 手动部署/完整模板请参考仓库 examples/.env.example",
+            "# - Only keys you explicitly set in Setup Center are written here.",
+            "# - Clearing a value removes the key from this file.",
+            "# - For the full template, see examples/.env.example",
             "",
         ]
         .join("\n");
@@ -3018,9 +3016,24 @@ fn workspace_update_env(workspace_id: String, entries: Vec<EnvEntry>) -> Result<
     let dir = workspace_dir(&workspace_id);
     ensure_workspace_scaffold(&dir)?;
     let env_path = dir.join(".env");
-    let existing = fs::read_to_string(&env_path).unwrap_or_default();
+    let existing = read_text_lossy(&env_path);
     let updated = update_env_content(&existing, &entries);
     fs::write(&env_path, updated).map_err(|e| format!("write .env failed: {e}"))
+}
+
+/// Read a text file as UTF-8; fall back to lossy conversion for non-UTF-8 files
+/// (e.g. .env with GBK-encoded Chinese comments on Windows).
+fn read_text_lossy(path: &Path) -> String {
+    match fs::read_to_string(path) {
+        Ok(s) => s,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(_) => {
+            // Non-UTF-8 bytes — decode lossily so existing content is preserved.
+            fs::read(path)
+                .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+                .unwrap_or_default()
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

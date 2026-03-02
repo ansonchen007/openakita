@@ -16,33 +16,49 @@ from .types import ConfigurationError, EndpointConfig
 logger = logging.getLogger(__name__)
 
 
-# 确保 .env 文件被加载
-def _load_env():
-    """加载 .env 文件
+def _safe_load_dotenv(env_path: Path) -> None:
+    """Load a .env file with encoding fallback.
 
-    搜索顺序：CWD → CWD 的父级（最多 3 层）→ 包文件所在目录向上（最多 5 层）。
-    pip install 后用户从项目目录运行 openakita，.env 在 CWD 下，
-    必须优先从 CWD 搜索，否则只会在 site-packages 里找。
+    Tries UTF-8 first (python-dotenv default). On ``UnicodeDecodeError``
+    (e.g. GBK-encoded Chinese comments on Windows) retries with the
+    platform default encoding so the backend can still start.
     """
-    # 1) 从 CWD 向上搜索（pip install 场景）
+    try:
+        load_dotenv(env_path)
+    except UnicodeDecodeError:
+        logger.warning(
+            "Failed to read %s as UTF-8; retrying with system encoding. "
+            "Consider converting the file to UTF-8.",
+            env_path,
+        )
+        try:
+            load_dotenv(env_path, encoding=None)
+        except Exception:
+            logger.error("Could not load %s with any encoding, skipping.", env_path)
+
+
+def _load_env():
+    """Discover and load the nearest .env file.
+
+    Search order: CWD (up to 3 levels) → package directory (up to 5 levels).
+    """
     cwd = Path.cwd()
     current = cwd
     for _ in range(3):
         env_path = current / ".env"
         if env_path.exists():
-            load_dotenv(env_path)
+            _safe_load_dotenv(env_path)
             return
         parent = current.parent
         if parent == current:
             break
         current = parent
 
-    # 2) 从包文件向上搜索（开发 / editable install 场景）
     current = Path(__file__).parent
     for _ in range(5):
         env_path = current / ".env"
         if env_path.exists():
-            load_dotenv(env_path)
+            _safe_load_dotenv(env_path)
             return
         current = current.parent
 

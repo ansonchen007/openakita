@@ -185,7 +185,14 @@ class LLMClient:
 
             env_path = self._config_path.parent.parent / ".env"
             if env_path.exists():
-                _reload_dotenv(env_path, override=True)
+                try:
+                    _reload_dotenv(env_path, override=True)
+                except UnicodeDecodeError:
+                    logger.warning("Failed to reload %s as UTF-8, retrying with system encoding", env_path)
+                    try:
+                        _reload_dotenv(env_path, override=True, encoding=None)
+                    except Exception:
+                        logger.error("Could not reload %s, skipping", env_path)
 
             new_endpoints, _, _, new_settings = load_endpoints_config(self._config_path)
             self._endpoints = new_endpoints

@@ -412,7 +412,7 @@ class ConfigHandler:
         if env_entries:
             existing = ""
             if env_path.exists():
-                existing = env_path.read_text(encoding="utf-8")
+                existing = env_path.read_text(encoding="utf-8", errors="replace")
             new_content = _update_env_content(existing, env_entries)
             env_path.write_text(new_content, encoding="utf-8")
 
@@ -531,7 +531,7 @@ class ConfigHandler:
             from ...config import settings
             project_root = Path(settings.project_root)
             env_path = project_root / ".env"
-            existing = env_path.read_text(encoding="utf-8") if env_path.exists() else ""
+            existing = env_path.read_text(encoding="utf-8", errors="replace") if env_path.exists() else ""
             new_content = _update_env_content(existing, {env_var_name: api_key})
             env_path.write_text(new_content, encoding="utf-8")
             os.environ[env_var_name] = api_key

@@ -364,10 +364,9 @@ async def health_check_endpoint(workspace_dir: str, endpoint_name: str | None) -
     if not config_path.exists():
         raise ValueError(f"端点配置文件不存在: {config_path}")
 
-    # 加载 .env 以获取 API key
     env_path = wd / ".env"
     if env_path.exists():
-        for line in env_path.read_text(encoding="utf-8").splitlines():
+        for line in env_path.read_text(encoding="utf-8", errors="replace").splitlines():
             line = line.strip()
             if not line or line.startswith("#"):
                 continue
@@ -423,11 +422,10 @@ async def health_check_im(workspace_dir: str, channel: str | None) -> None:
 
     wd = Path(workspace_dir).expanduser().resolve()
 
-    # 加载 .env
     env: dict[str, str] = {}
     env_path = wd / ".env"
     if env_path.exists():
-        for line in env_path.read_text(encoding="utf-8").splitlines():
+        for line in env_path.read_text(encoding="utf-8", errors="replace").splitlines():
             line = line.strip()
             if not line or line.startswith("#"):
                 continue
@@ -659,11 +657,10 @@ def ensure_channel_deps(workspace_dir: str) -> None:
 
     wd = Path(workspace_dir).expanduser().resolve()
 
-    # 读取 .env
     env: dict[str, str] = {}
     env_path = wd / ".env"
     if env_path.exists():
-        for line in env_path.read_text(encoding="utf-8").splitlines():
+        for line in env_path.read_text(encoding="utf-8", errors="replace").splitlines():
             line = line.strip()
             if not line or line.startswith("#"):
                 continue
