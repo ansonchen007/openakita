@@ -223,8 +223,7 @@ fn bundled_internal_python_path() -> Option<PathBuf> {
         }
         let mut c = Command::new(&internal_py);
         c.args(["-m", "pip", "--version"]);
-        strip_harmful_python_env(&mut c);
-        c.env("PYTHONHOME", &internal_dir);
+        apply_bundled_python_env(&mut c, &internal_dir);
         apply_no_window(&mut c);
         if let Ok(output) = c.output() {
             if output.status.success() {
@@ -2221,6 +2220,38 @@ fn strip_harmful_python_env(cmd: &mut Command) {
     cmd.env_remove("PIP_REQUIRE_VIRTUALENV");
 }
 
+/// 为直接调用 PyInstaller 打包的 `_internal/python.exe` 配置环境。
+///
+/// PyInstaller 将 `encodings`、`codecs` 等 Python 启动必需的核心模块
+/// 打包在 `base_library.zip` 中，该文件不会被裸调用的 `python.exe` 自动加入
+/// `sys.path`，导致 `init_fs_encoding: No module named 'encodings'` 崩溃。
+///
+/// 此函数：
+/// 1. 清除外部有害环境变量（Anaconda、用户 PYTHONPATH 等）
+/// 2. 设置 `PYTHONHOME` 使 `sys.prefix` 指向 `_internal`
+/// 3. 设置 `PYTHONPATH` 包含 `base_library.zip`、`Lib`、`DLLs` 等
+fn apply_bundled_python_env(cmd: &mut Command, internal_dir: &std::path::Path) {
+    strip_harmful_python_env(cmd);
+    cmd.env("PYTHONHOME", internal_dir);
+    let mut parts: Vec<PathBuf> = vec![];
+    let base_lib = internal_dir.join("base_library.zip");
+    if base_lib.exists() {
+        parts.push(base_lib);
+    }
+    parts.push(internal_dir.to_path_buf());
+    let lib = internal_dir.join("Lib");
+    if lib.is_dir() {
+        parts.push(lib);
+    }
+    let dlls = internal_dir.join("DLLs");
+    if dlls.is_dir() {
+        parts.push(dlls);
+    }
+    if let Ok(joined) = std::env::join_paths(&parts) {
+        cmd.env("PYTHONPATH", joined);
+    }
+}
+
 /// 判断 .env 中的键是否会污染 Python 运行时（应在启动后端时忽略）。
 fn is_harmful_python_env_key(key: &str) -> bool {
     key.eq_ignore_ascii_case("PYTHONPATH")
@@ -3137,8 +3168,7 @@ fn diagnose_python_env(venv_dir: String) -> PythonDiagnostic {
         for py in &existing_bundled {
             let mut c = Command::new(py);
             c.args(["-m", "pip", "--version"]);
-            strip_harmful_python_env(&mut c);
-            c.env("PYTHONHOME", &internal_dir);
+            apply_bundled_python_env(&mut c, &internal_dir);
             apply_no_window(&mut c);
             match c.output() {
                 Ok(out) if out.status.success() => {
@@ -3486,8 +3516,7 @@ async fn repair_python_env(
             emit("修复 venv", 50, "创建新的 venv...");
             let mut c = Command::new(&python_path);
             apply_no_window(&mut c);
-            strip_harmful_python_env(&mut c);
-            c.env("PYTHONHOME", bundled_backend_dir().join("_internal"));
+            apply_bundled_python_env(&mut c, &bundled_backend_dir().join("_internal"));
             c.args(["-m", "venv"]).arg(&venv);
             let status = c.status().map_err(|e| format!("创建 venv 失败: {e}"))?;
             if !status.success() {
@@ -3603,8 +3632,7 @@ async fn create_venv(python_command: Vec<String>, venv_dir: String) -> Result<St
             .ok_or_else(|| "安装包内置 Python 不可用，请重新安装 OpenAkita".to_string())?;
         let mut c = Command::new(&bundled_py);
         apply_no_window(&mut c);
-        strip_harmful_python_env(&mut c);
-        c.env("PYTHONHOME", bundled_backend_dir().join("_internal"));
+        apply_bundled_python_env(&mut c, &bundled_backend_dir().join("_internal"));
         c.args(["-m", "venv"])
             .arg(&venv)
             .status()
@@ -3639,7 +3667,12 @@ fn resolve_python(venv_dir: &str) -> Result<(PathBuf, Option<String>), String> {
     let bundled = bundled_backend_dir();
     let internal_dir = bundled.join("_internal");
     let pythonpath = if py.starts_with(&internal_dir) {
-        let mut parts = vec![internal_dir.clone()];
+        let mut parts: Vec<PathBuf> = vec![];
+        let base_lib = internal_dir.join("base_library.zip");
+        if base_lib.exists() {
+            parts.push(base_lib);
+        }
+        parts.push(internal_dir.clone());
         let lib = internal_dir.join("Lib");
         if lib.is_dir() {
             parts.push(lib);
