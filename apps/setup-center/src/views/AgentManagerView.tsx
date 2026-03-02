@@ -37,16 +37,12 @@ const EMPTY_PROFILE: AgentProfile = {
   hidden: false,
 };
 
-const CATEGORIES = ["", "general", "content", "enterprise", "education", "productivity", "devops"] as const;
-type Category = typeof CATEGORIES[number];
-
-const CATEGORY_COLORS: Record<string, string> = {
-  general: "#4A90D9",
-  content: "#FF6B6B",
-  enterprise: "#27AE60",
-  education: "#8E44AD",
-  productivity: "#E74C3C",
-  devops: "#95A5A6",
+type CategoryInfo = {
+  id: string;
+  label: string;
+  color: string;
+  builtin: boolean;
+  agent_count: number;
 };
 
 // SVG icon paths (viewBox 0 0 24 24, stroke-based for consistency)
@@ -160,8 +156,12 @@ export function AgentManagerView({
   const [emojiPickerOpen, setEmojiPickerOpen] = useState(false);
   const [iconCat, setIconCat] = useState("common");
   const [toastMsg, setToastMsg] = useState<{ text: string; type: "ok" | "err" } | null>(null);
-  const [activeCategory, setActiveCategory] = useState<Category>("");
+  const [activeCategory, setActiveCategory] = useState("");
   const [showHidden, setShowHidden] = useState(false);
+  const [categories, setCategories] = useState<CategoryInfo[]>([]);
+  const [addingCategory, setAddingCategory] = useState(false);
+  const [newCatLabel, setNewCatLabel] = useState("");
+  const [newCatColor, setNewCatColor] = useState("#6b7280");
 
   const showToast = useCallback((text: string, type: "ok" | "err" = "ok") => {
     setToastMsg({ text, type });
@@ -183,6 +183,18 @@ export function AgentManagerView({
     }
     return fallback;
   };
+
+  const fetchCategories = useCallback(async () => {
+    try {
+      const res = await fetch(`${apiBaseUrl}/api/agents/categories`);
+      if (res.ok) {
+        const data = await res.json();
+        setCategories(data.categories || []);
+      }
+    } catch (e) {
+      console.warn("Failed to fetch categories:", e);
+    }
+  }, [apiBaseUrl]);
 
   const fetchProfiles = useCallback(async () => {
     if (!multiAgentEnabled) return;
@@ -215,8 +227,9 @@ export function AgentManagerView({
     if (visible && multiAgentEnabled) {
       fetchProfiles();
       fetchSkills();
+      fetchCategories();
     }
-  }, [visible, multiAgentEnabled, fetchProfiles, fetchSkills]);
+  }, [visible, multiAgentEnabled, fetchProfiles, fetchSkills, fetchCategories]);
 
   const openCreateEditor = () => {
     setEditingProfile({ ...EMPTY_PROFILE });
@@ -345,17 +358,45 @@ export function AgentManagerView({
     }
   };
 
-  const getCategoryLabel = (cat: string): string => {
-    const map: Record<string, string> = {
-      "": "categoryAll",
-      general: "categoryGeneral",
-      content: "categoryContent",
-      enterprise: "categoryEnterprise",
-      education: "categoryEducation",
-      productivity: "categoryProductivity",
-      devops: "categoryDevops",
+  const getCategoryLabel = (catId: string): string => {
+    if (!catId) return t("agentManager.categoryAll");
+    const found = categories.find((c) => c.id === catId);
+    if (found) return found.label;
+    const i18nMap: Record<string, string> = {
+      general: "categoryGeneral", content: "categoryContent",
+      enterprise: "categoryEnterprise", education: "categoryEducation",
+      productivity: "categoryProductivity", devops: "categoryDevops",
     };
-    return t(`agentManager.${map[cat] || "categoryAll"}`);
+    return i18nMap[catId] ? t(`agentManager.${i18nMap[catId]}`) : catId;
+  };
+
+  const getCategoryColor = (catId: string): string => {
+    const found = categories.find((c) => c.id === catId);
+    return found?.color || "var(--primary, #3b82f6)";
+  };
+
+  const handleAddCategory = async () => {
+    const label = newCatLabel.trim();
+    if (!label) return;
+    const ascii = label.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+    const id = ascii && /^[a-z]/.test(ascii) ? ascii : `cat-${Date.now()}`;
+    try {
+      const res = await fetch(`${apiBaseUrl}/api/agents/categories`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id, label, color: newCatColor }),
+      });
+      if (res.ok) {
+        showToast(`已添加分类「${label}」`);
+        setAddingCategory(false);
+        setNewCatLabel("");
+        setNewCatColor("#6b7280");
+        fetchCategories();
+      } else {
+        const data = await res.json().catch(() => ({}));
+        showToast(extractErrorMsg(data.detail, "添加失败"), "err");
+      }
+    } catch (err) { showToast(String(err), "err"); }
   };
 
   const visibleProfiles = profiles.filter((p) => !p.hidden);
@@ -407,22 +448,118 @@ export function AgentManagerView({
       </div>
 
       {/* Category Tabs */}
-      <div style={{ display: "flex", gap: 4, marginBottom: 20, flexWrap: "wrap" }}>
-        {CATEGORIES.map((cat) => (
+      <div style={{ display: "flex", gap: 4, marginBottom: 20, flexWrap: "wrap", alignItems: "center" }}>
+        {/* "全部" tab */}
+        <button
+          onClick={() => setActiveCategory("")}
+          style={{
+            padding: "5px 14px", borderRadius: 20, border: "1px solid var(--line)",
+            background: activeCategory === "" ? "var(--primary, #3b82f6)" : "var(--panel)",
+            color: activeCategory === "" ? "#fff" : "inherit",
+            cursor: "pointer", fontSize: 12, fontWeight: activeCategory === "" ? 600 : 400,
+            transition: "all 0.15s",
+          }}
+        >
+          {t("agentManager.categoryAll")}
+        </button>
+        {categories.map((cat) => (
           <button
-            key={cat || "__all"}
-            onClick={() => setActiveCategory(cat)}
+            key={cat.id}
+            onClick={() => setActiveCategory(cat.id)}
             style={{
               padding: "5px 14px", borderRadius: 20, border: "1px solid var(--line)",
-              background: activeCategory === cat ? (CATEGORY_COLORS[cat] || "var(--primary, #3b82f6)") : "var(--panel)",
-              color: activeCategory === cat ? "#fff" : "inherit",
-              cursor: "pointer", fontSize: 12, fontWeight: activeCategory === cat ? 600 : 400,
-              transition: "all 0.15s",
+              background: activeCategory === cat.id ? cat.color : "var(--panel)",
+              color: activeCategory === cat.id ? "#fff" : "inherit",
+              cursor: "pointer", fontSize: 12, fontWeight: activeCategory === cat.id ? 600 : 400,
+              transition: "all 0.15s", position: "relative",
+              display: "inline-flex", alignItems: "center", gap: 4,
             }}
           >
-            {getCategoryLabel(cat)}
+            {cat.label}
+            {!cat.builtin && (
+              <span
+                onClick={async (e) => {
+                  e.stopPropagation();
+                  try {
+                    const res = await fetch(`${apiBaseUrl}/api/agents/categories/${cat.id}`, { method: "DELETE" });
+                    if (res.ok) {
+                      showToast(`已删除分类「${cat.label}」`);
+                      if (activeCategory === cat.id) setActiveCategory("");
+                      fetchCategories();
+                    } else {
+                      const data = await res.json().catch(() => ({}));
+                      showToast(data.detail || "删除失败", "err");
+                    }
+                  } catch (err) { showToast(String(err), "err"); }
+                }}
+                title="删除此分类"
+                style={{
+                  marginLeft: 2, cursor: "pointer", opacity: 0.6, fontSize: 11,
+                  lineHeight: 1, fontWeight: 700,
+                }}
+              >
+                x
+              </span>
+            )}
           </button>
         ))}
+        {/* Add category button / inline form */}
+        {addingCategory ? (
+          <div style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+            <input
+              autoFocus
+              placeholder="分类名称"
+              value={newCatLabel}
+              onChange={(e) => setNewCatLabel(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Escape") { setAddingCategory(false); setNewCatLabel(""); }
+                if (e.key === "Enter" && newCatLabel.trim()) handleAddCategory();
+              }}
+              style={{
+                padding: "4px 10px", borderRadius: 16, border: "1px solid var(--line)",
+                background: "var(--panel)", fontSize: 12, width: 90, outline: "none",
+              }}
+            />
+            <input
+              type="color"
+              value={newCatColor}
+              onChange={(e) => setNewCatColor(e.target.value)}
+              style={{ width: 26, height: 26, border: "none", cursor: "pointer", padding: 0, borderRadius: 4 }}
+            />
+            <button
+              onClick={handleAddCategory}
+              disabled={!newCatLabel.trim()}
+              style={{
+                padding: "4px 10px", borderRadius: 16, border: "none",
+                background: "var(--primary, #3b82f6)", color: "#fff",
+                cursor: newCatLabel.trim() ? "pointer" : "not-allowed",
+                fontSize: 12, fontWeight: 600, opacity: newCatLabel.trim() ? 1 : 0.5,
+              }}
+            >
+              {t("common.confirm") || "确定"}
+            </button>
+            <button
+              onClick={() => { setAddingCategory(false); setNewCatLabel(""); }}
+              style={{
+                padding: "4px 8px", borderRadius: 16, border: "1px solid var(--line)",
+                background: "var(--panel)", cursor: "pointer", fontSize: 12,
+              }}
+            >
+              {t("common.cancel") || "取消"}
+            </button>
+          </div>
+        ) : (
+          <button
+            onClick={() => setAddingCategory(true)}
+            style={{
+              padding: "5px 10px", borderRadius: 20, border: "1px dashed var(--line)",
+              background: "transparent", cursor: "pointer", fontSize: 12,
+              opacity: 0.6, display: "inline-flex", alignItems: "center", gap: 2,
+            }}
+          >
+            <IconPlus size={12} /> {t("agentManager.addCategory") || "添加分类"}
+          </button>
+        )}
       </div>
 
       {/* Agent Grid */}
@@ -450,8 +587,8 @@ export function AgentManagerView({
                   <span
                     style={{
                       fontSize: 10, fontWeight: 600, padding: "2px 6px", borderRadius: 4,
-                      background: `${CATEGORY_COLORS[agent.category] || "#6b7280"}20`,
-                      color: CATEGORY_COLORS[agent.category] || "#6b7280",
+                      background: `${getCategoryColor(agent.category || "")}20`,
+                      color: getCategoryColor(agent.category || ""),
                     }}
                   >
                     {getCategoryLabel(agent.category)}
@@ -737,8 +874,8 @@ export function AgentManagerView({
               style={{ ...inputStyle, cursor: "pointer" }}
             >
               <option value="">—</option>
-              {CATEGORIES.filter(Boolean).map((cat) => (
-                <option key={cat} value={cat}>{getCategoryLabel(cat)}</option>
+              {categories.map((cat) => (
+                <option key={cat.id} value={cat.id}>{cat.label}</option>
               ))}
             </select>
 

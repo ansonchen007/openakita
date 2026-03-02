@@ -917,6 +917,7 @@
     "categoryEducation": "教育辅助",
     "categoryProductivity": "生活效率",
     "categoryDevops": "开发运维",
+    "addCategory": "添加分类",
     "hide": "隐藏",
     "restore": "恢复",
     "hiddenSection": "已隐藏的 Agent",

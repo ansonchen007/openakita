@@ -21,6 +21,18 @@ from openakita.utils.atomic_io import atomic_json_write
 logger = logging.getLogger(__name__)
 
 
+# ─── 内置分类 ──────────────────────────────────────────────────────────
+BUILTIN_CATEGORIES: list[dict[str, Any]] = [
+    {"id": "general",      "label": "通用基础", "color": "#4A90D9", "builtin": True},
+    {"id": "content",      "label": "内容创作", "color": "#FF6B6B", "builtin": True},
+    {"id": "enterprise",   "label": "企业办公", "color": "#27AE60", "builtin": True},
+    {"id": "education",    "label": "教育辅助", "color": "#8E44AD", "builtin": True},
+    {"id": "productivity", "label": "生活效率", "color": "#E74C3C", "builtin": True},
+    {"id": "devops",       "label": "开发运维", "color": "#95A5A6", "builtin": True},
+]
+_BUILTIN_IDS = frozenset(c["id"] for c in BUILTIN_CATEGORIES)
+
+
 class AgentType(str, Enum):
     SYSTEM = "system"
     CUSTOM = "custom"
@@ -127,10 +139,13 @@ class ProfileStore:
         self._base_dir = Path(base_dir)
         self._profiles_dir = self._base_dir / "profiles"
         self._profiles_dir.mkdir(parents=True, exist_ok=True)
+        self._categories_file = self._base_dir / "categories.json"
         self._cache: dict[str, AgentProfile] = {}
         self._ephemeral: dict[str, AgentProfile] = {}
+        self._custom_categories: list[dict[str, Any]] = []
         self._lock = threading.RLock()
         self._load_all()
+        self._load_categories()
 
     def _load_all(self) -> None:
         """从磁盘加载所有 Profile 到缓存"""
@@ -298,3 +313,76 @@ class ProfileStore:
                     f"Cannot modify immutable field '{f}' on SYSTEM profile "
                     f"'{existing.id}': {old_val!r} -> {new_val!r}"
                 )
+
+    # ── 分类管理 ────────────────────────────────────────────────────────
+
+    def _load_categories(self) -> None:
+        if not self._categories_file.exists():
+            return
+        try:
+            data = json.loads(self._categories_file.read_text(encoding="utf-8"))
+            if isinstance(data, list):
+                self._custom_categories = data
+                logger.info(f"Loaded {len(data)} custom category(ies)")
+        except Exception as e:
+            logger.warning(f"Failed to load categories: {e}")
+
+    def _persist_categories(self) -> None:
+        atomic_json_write(self._categories_file, self._custom_categories)
+
+    def list_categories(self) -> list[dict[str, Any]]:
+        """返回所有分类（内置 + 自定义），每项含 agent_count。"""
+        with self._lock:
+            all_profiles = list(self._cache.values())
+
+        cat_counts: dict[str, int] = {}
+        for p in all_profiles:
+            if p.category and not p.hidden:
+                cat_counts[p.category] = cat_counts.get(p.category, 0) + 1
+
+        result: list[dict[str, Any]] = []
+        for bc in BUILTIN_CATEGORIES:
+            result.append({**bc, "agent_count": cat_counts.get(bc["id"], 0)})
+        with self._lock:
+            for cc in self._custom_categories:
+                result.append({
+                    **cc,
+                    "builtin": False,
+                    "agent_count": cat_counts.get(cc["id"], 0),
+                })
+        return result
+
+    def add_category(self, cat_id: str, label: str, color: str) -> dict[str, Any]:
+        """新增自定义分类。id 不能与已有分类重复。"""
+        with self._lock:
+            existing_ids = _BUILTIN_IDS | {c["id"] for c in self._custom_categories}
+            if cat_id in existing_ids:
+                raise ValueError(f"分类 ID 已存在: {cat_id}")
+            entry: dict[str, Any] = {"id": cat_id, "label": label, "color": color}
+            self._custom_categories.append(entry)
+            self._persist_categories()
+        logger.info(f"Added custom category: {cat_id} ({label})")
+        return {**entry, "builtin": False, "agent_count": 0}
+
+    def remove_category(self, cat_id: str) -> bool:
+        """删除自定义分类。内置分类或有 Agent 的分类拒绝删除。"""
+        if cat_id in _BUILTIN_IDS:
+            raise PermissionError(f"不能删除内置分类: {cat_id}")
+        with self._lock:
+            agent_count = sum(
+                1 for p in self._cache.values()
+                if p.category == cat_id and not p.hidden
+            )
+            if agent_count > 0:
+                raise ValueError(
+                    f"分类 '{cat_id}' 下还有 {agent_count} 个 Agent，请先移除或更换分类"
+                )
+            before = len(self._custom_categories)
+            self._custom_categories = [
+                c for c in self._custom_categories if c["id"] != cat_id
+            ]
+            if len(self._custom_categories) == before:
+                return False
+            self._persist_categories()
+        logger.info(f"Removed custom category: {cat_id}")
+        return True

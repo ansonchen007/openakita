@@ -168,6 +168,62 @@ async def toggle_bot(bot_id: str, body: BotToggleRequest):
     return {"status": "ok", "bot": bot}
 
 
+# ─── Agent category routes ───────────────────────────────────────────────
+
+
+class CategoryCreateRequest(BaseModel):
+    id: str = Field(..., min_length=1, max_length=30, pattern=r"^[a-z0-9_-]+$")
+    label: str = Field(..., min_length=1, max_length=30)
+    color: str = Field("#6b7280", max_length=20)
+
+
+@router.get("/api/agents/categories")
+async def list_categories():
+    """Return all agent categories (builtin + custom) with agent counts."""
+    from openakita.agents.profile import ProfileStore
+    from openakita.config import settings
+
+    store = ProfileStore(settings.data_dir / "agents")
+    return {"categories": store.list_categories()}
+
+
+@router.post("/api/agents/categories")
+async def create_category(body: CategoryCreateRequest):
+    """Create a custom agent category."""
+    from openakita.agents.profile import ProfileStore
+    from openakita.config import settings
+
+    store = ProfileStore(settings.data_dir / "agents")
+    try:
+        cat = store.add_category(body.id, body.label, body.color)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    logger.info(f"[Agents API] Created category: {body.id}")
+    return {"status": "ok", "category": cat}
+
+
+@router.delete("/api/agents/categories/{category_id}")
+async def delete_category(category_id: str):
+    """Delete a custom agent category. Rejects if builtin or has agents."""
+    from openakita.agents.profile import ProfileStore
+    from openakita.config import settings
+
+    store = ProfileStore(settings.data_dir / "agents")
+    try:
+        removed = store.remove_category(category_id)
+    except PermissionError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+
+    if not removed:
+        raise HTTPException(status_code=404, detail=f"分类 '{category_id}' 不存在")
+
+    logger.info(f"[Agents API] Deleted category: {category_id}")
+    return {"status": "ok"}
+
+
 # ─── Agent profile routes ───────────────────────────────────────────────
 
 
