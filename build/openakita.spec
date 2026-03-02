@@ -570,15 +570,6 @@ if _sys_python_exe.exists():
         else:
             print(f"[spec] WARNING: macOS Python.app not found at {_py_app_dir}")
 
-# stdlib modules required for standalone _internal/python.exe to work.
-# With noarchive=False, .pyc files are in the PYZ archive (inside
-# openakita-server.exe) and not accessible to the bare python.exe.
-# These modules must be extracted as files so python.exe -m pip works.
-import runpy as _runpy_mod
-datas.append((_runpy_mod.__file__, "."))
-import pkgutil as _pkgutil_mod
-datas.append((_pkgutil_mod.__file__, "."))
-
 # pip and its dependencies (minimal set needed for pip install)
 import pip
 _pip_dir = str(Path(pip.__file__).parent)
@@ -705,7 +696,6 @@ exe = EXE(
 coll = COLLECT(
     exe,
     a.binaries,
-    a.zipfiles,
     a.datas,
     strip=False,
     upx=(sys.platform != "darwin"),

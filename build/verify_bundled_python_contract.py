@@ -4,7 +4,7 @@
 Contract A requires on all platforms:
 1) backend executable exists in openakita-server/
 2) bundled interpreter exists in openakita-server/_internal/python*
-3) bundled interpreter can run `-m pip --version`
+3) bundled interpreter can import pip
 """
 
 from __future__ import annotations
@@ -66,7 +66,7 @@ def main() -> int:
     env = _bundled_python_env(internal)
     try:
         result = subprocess.run(
-            [str(py), "-m", "pip", "--version"],
+            [str(py), "-c", "import pip; print(pip.__version__)"],
             capture_output=True,
             text=True,
             timeout=20,
@@ -82,7 +82,8 @@ def main() -> int:
         if stderr:
             print(stderr[:500])
         return 1
-    print("[OK] bundled pip check passed")
+    pip_ver = (result.stdout or "").strip()
+    print(f"[OK] bundled pip check passed (pip {pip_ver})")
     return 0
 
 

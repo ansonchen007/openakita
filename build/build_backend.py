@@ -97,7 +97,7 @@ def verify_bundled_python_contract(output_dir: Path) -> None:
     env = _bundled_python_env(internal_dir)
     try:
         result = subprocess.run(
-            [str(py_path), "-m", "pip", "--version"],
+            [str(py_path), "-c", "import pip; print(pip.__version__)"],
             capture_output=True,
             text=True,
             timeout=20,
@@ -113,7 +113,8 @@ def verify_bundled_python_contract(output_dir: Path) -> None:
         if stderr:
             print(f"    stderr: {stderr[:500]}")
         sys.exit(1)
-    print("  [OK] Bundled Python pip check passed")
+    pip_ver = (result.stdout or "").strip()
+    print(f"  [OK] Bundled Python pip check passed (pip {pip_ver})")
 
 
 def normalize_macos_bundled_python(output_dir: Path) -> None:

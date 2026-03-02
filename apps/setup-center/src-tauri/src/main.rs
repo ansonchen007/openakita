@@ -222,7 +222,7 @@ fn bundled_internal_python_path() -> Option<PathBuf> {
             continue;
         }
         let mut c = Command::new(&internal_py);
-        c.args(["-m", "pip", "--version"]);
+        c.args(["-c", "import pip; print(pip.__version__)"]);
         apply_bundled_python_env(&mut c, &internal_dir);
         apply_no_window(&mut c);
         if let Ok(output) = c.output() {
@@ -3237,7 +3237,7 @@ fn diagnose_python_env(venv_dir: String) -> PythonDiagnostic {
         let internal_dir = bundled_dir.join("_internal");
         for py in &existing_bundled {
             let mut c = Command::new(py);
-            c.args(["-m", "pip", "--version"]);
+            c.args(["-c", "import pip; print(pip.__version__)"]);
             apply_bundled_python_env(&mut c, &internal_dir);
             apply_no_window(&mut c);
             match c.output() {
