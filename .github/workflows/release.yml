@@ -514,8 +514,11 @@ jobs:
             codesign --verify --deep --strict --verbose=2 "${app}"
           done
 
+          # Install create-dmg for polished DMG installer layout
+          brew install create-dmg 2>/dev/null || true
+
           # Recreate DMG from the signed .app.
-          # Tauri creates the DMG during build (step 20) BEFORE our re-signing,
+          # Tauri creates the DMG during build BEFORE our re-signing,
           # so the DMG contains the original Tauri-signed app without runtime
           # hardening or timestamps.  We must rebuild it.
           #
@@ -539,25 +542,77 @@ jobs:
 
                 rm -f "${dmg_file}"
 
-                # Build a staging directory with the .app and an Applications symlink
-                # so the DMG shows the standard "drag to install" layout.
                 DMG_STAGE="$(mktemp -d)"
                 cp -a "${app}" "${DMG_STAGE}/"
-                ln -s /Applications "${DMG_STAGE}/Applications"
 
-                # Retry up to 3 times (diskimages-helper may take a moment to release)
-                for attempt in 1 2 3; do
-                  if hdiutil create \
-                    -volname "${app_name}" \
-                    -srcfolder "${DMG_STAGE}" \
-                    -ov -format UDZO \
-                    "${dmg_file}"; then
-                    echo "DMG recreated: ${dmg_file}"
-                    break
+                # Use create-dmg for polished layout: App (left) → arrow → Applications (right)
+                if command -v create-dmg &>/dev/null; then
+                  # Generate background image with a directional arrow (ImageMagick is pre-installed)
+                  DMG_BG="/tmp/dmg_bg_$$.png"
+                  if command -v magick &>/dev/null; then
+                    magick -size 660x400 xc:'#EDEDED' \
+                      -fill '#A8A8AD' \
+                      -draw "rectangle 290,195 340,205" \
+                      -draw "polygon 335,178 368,200 335,222" \
+                      "${DMG_BG}" 2>/dev/null || true
+                  elif command -v convert &>/dev/null; then
+                    convert -size 660x400 xc:'#EDEDED' \
+                      -fill '#A8A8AD' \
+                      -draw "rectangle 290,195 340,205" \
+                      -draw "polygon 335,178 368,200 335,222" \
+                      "${DMG_BG}" 2>/dev/null || true
                   fi
-                  echo "hdiutil create attempt ${attempt} failed, retrying in 3s..."
-                  sleep 3
-                done
+
+                  CREATE_DMG_ARGS=(
+                    --volname "${app_name}"
+                    --window-pos 200 120
+                    --window-size 660 400
+                    --icon-size 100
+                    --icon "${app_name}.app" 180 200
+                    --hide-extension "${app_name}.app"
+                    --app-drop-link 480 200
+                    --no-internet-enable
+                  )
+                  [ -f "${DMG_BG:-}" ] && CREATE_DMG_ARGS+=(--background "${DMG_BG}")
+
+                  dmg_created=false
+                  for attempt in 1 2 3; do
+                    rm -f "${dmg_file}"
+                    create-dmg "${CREATE_DMG_ARGS[@]}" \
+                      "${dmg_file}" "${DMG_STAGE}/" || true
+                    if [ -f "${dmg_file}" ]; then
+                      echo "DMG created with custom layout: ${dmg_file}"
+                      dmg_created=true
+                      break
+                    fi
+                    echo "create-dmg attempt ${attempt} failed, retrying in 3s..."
+                    sleep 3
+                  done
+                  rm -f "${DMG_BG:-}" 2>/dev/null || true
+
+                  # Fallback to basic hdiutil if create-dmg failed
+                  if [ "${dmg_created}" != "true" ]; then
+                    echo "create-dmg failed; falling back to hdiutil"
+                    ln -s /Applications "${DMG_STAGE}/Applications"
+                    hdiutil create -volname "${app_name}" \
+                      -srcfolder "${DMG_STAGE}" -ov -format UDZO "${dmg_file}"
+                  fi
+                else
+                  # Fallback: create-dmg not available
+                  ln -s /Applications "${DMG_STAGE}/Applications"
+                  for attempt in 1 2 3; do
+                    if hdiutil create \
+                      -volname "${app_name}" \
+                      -srcfolder "${DMG_STAGE}" \
+                      -ov -format UDZO \
+                      "${dmg_file}"; then
+                      echo "DMG recreated: ${dmg_file}"
+                      break
+                    fi
+                    echo "hdiutil create attempt ${attempt} failed, retrying in 3s..."
+                    sleep 3
+                  done
+                fi
                 rm -rf "${DMG_STAGE}"
               fi
             done
