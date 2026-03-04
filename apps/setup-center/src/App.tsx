@@ -5348,7 +5348,6 @@ export function App() {
         <div className="card" style={IS_WEB ? { display: "none" } : undefined}>
           {sectionHeader("python", t("adv.pythonTitle"))}
             <div style={{ paddingLeft: 22 }}>
-              <div className="cardHint" style={{ marginBottom: 8 }}>{t("adv.pythonHint")}</div>
               {pyDiag ? (
                 <>
                   <div className="cardHint" style={{ marginBottom: 6 }}>
@@ -5389,25 +5388,7 @@ export function App() {
               )}
               <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap" }}>
                 <button className="btnSmall" onClick={runDiagnose} disabled={!!busy}>{t("adv.diagnose")}</button>
-                <button
-                  className="btnSmall btnSmallPrimary"
-                  onClick={() => {
-                    if (!pyDiag) return;
-                    if (pyDiag.summary === "healthy") {
-                      if (!confirm(t("adv.repairHealthyConfirm"))) return;
-                      runRepair(true);
-                      return;
-                    }
-                    runRepair(false);
-                  }}
-                  disabled={!!busy || !pyDiag}
-                >
-                  {pyDiag?.summary === "healthy" ? t("adv.repairCautious") : t("adv.repair")}
-                </button>
                 <button className="btnSmall" onClick={runExportDiagReport} disabled={!!busy}>{t("adv.exportDiagReport")}</button>
-                <button className="btnSmall btnSmallDanger" onClick={() => {
-                  if (confirm(t("adv.resetConfirm"))) runReset(true, true);
-                }} disabled={!!busy}>{t("adv.reset")}</button>
               </div>
             </div>
         </div>
