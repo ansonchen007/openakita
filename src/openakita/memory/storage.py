@@ -1070,6 +1070,25 @@ class MemoryStorage:
             logger.warning(f"Failed to get recent turns for {session_id}: {e}")
             return []
 
+    def delete_turns_for_session(self, session_id: str) -> int:
+        """删除指定 session 的所有 conversation_turns 记录（用于上下文重置）"""
+        if not self._conn:
+            return 0
+        with self._lock:
+            try:
+                cur = self._conn.execute(
+                    "DELETE FROM conversation_turns WHERE session_id = ?",
+                    (session_id,),
+                )
+                self._conn.commit()
+                deleted = cur.rowcount
+                if deleted:
+                    logger.info(f"Deleted {deleted} conversation turns for session {session_id}")
+                return deleted
+            except Exception as e:
+                logger.warning(f"Failed to delete turns for {session_id}: {e}")
+                return 0
+
     def search_turns(
         self,
         keyword: str,

@@ -427,11 +427,10 @@ class RuntimeSupervisor:
                 message=f"Single iteration consumed {last_tokens} tokens (threshold: {self._token_anomaly_threshold})",
                 should_inject_prompt=True,
                 prompt_injection=(
-                    f"[系统提示] 本轮操作消耗了 {last_tokens} tokens，超出正常范围。"
-                    "请注意控制上下文大小：\n"
-                    "1. 避免读取过大的文件，使用 offset/limit 分页\n"
-                    "2. 避免在一次工具调用中传入过多内容\n"
-                    "3. 精简策略，只做最必要的操作"
+                    f"提示：本轮操作消耗了 {last_tokens} tokens，后续可适当优化：\n"
+                    "- 读取大文件时使用 offset/limit 分页\n"
+                    "- 工具调用尽量精简输入内容\n"
+                    "注意：这不影响当前回复质量，请正常完成任务。"
                 ),
             )
 

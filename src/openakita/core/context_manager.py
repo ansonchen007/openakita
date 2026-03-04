@@ -81,19 +81,22 @@ class ContextManager:
         logger.info("[ContextManager] _cancellable_llm 被用户取消")
         raise _CancelledError("Context compression cancelled by user")
 
-    def get_max_context_tokens(self) -> int:
+    def get_max_context_tokens(self, conversation_id: str | None = None) -> int:
         """
         动态获取当前模型的上下文窗口大小。
 
         优先级：
         1. 端点配置的 context_window 字段
         2. 兜底值 200000
-        3. 减去 max_tokens（输出预留）和 10% buffer
+        3. 减去 max_tokens（输出预留）和 5% buffer
+
+        Args:
+            conversation_id: 对话 ID（用于识别 per-conversation 端点覆盖）
         """
         FALLBACK_CONTEXT_WINDOW = 200000
 
         try:
-            info = self._brain.get_current_model_info()
+            info = self._brain.get_current_model_info(conversation_id=conversation_id)
             ep_name = info.get("name", "")
             endpoints = self._brain._llm_client.endpoints
             for ep in endpoints:
@@ -102,8 +105,8 @@ class ContextManager:
                     if ctx < 8192:
                         ctx = FALLBACK_CONTEXT_WINDOW
                     output_reserve = ep.max_tokens or 4096
-                    output_reserve = min(output_reserve, ctx // 2)
-                    result = int((ctx - output_reserve) * 0.90)
+                    output_reserve = min(output_reserve, ctx // 3)
+                    result = int((ctx - output_reserve) * 0.95)
                     if result < 4096:
                         return DEFAULT_MAX_CONTEXT_TOKENS
                     return result
@@ -117,6 +120,11 @@ class ContextManager:
 
         使用中英文感知算法：中文约 1.5 字符/token，英文约 4 字符/token。
         """
+        return self.static_estimate_tokens(text)
+
+    @staticmethod
+    def static_estimate_tokens(text: str) -> int:
+        """静态版 estimate_tokens，供外部模块无需实例即可调用。"""
         if not text:
             return 0
         chinese_chars = sum(1 for c in text if "\u4e00" <= c <= "\u9fff")
@@ -221,6 +229,7 @@ class ContextManager:
         tools: list | None = None,
         max_tokens: int | None = None,
         memory_manager: object | None = None,
+        conversation_id: str | None = None,
     ) -> list[dict]:
         """
         如果上下文接近限制，执行压缩。
@@ -238,11 +247,12 @@ class ContextManager:
             tools: 工具定义列表（用于估算 token 占用）
             max_tokens: 最大 token 数
             memory_manager: MemoryManager 实例 (v2: 压缩前提取记忆)
+            conversation_id: 对话 ID（用于识别 per-conversation 端点覆盖）
 
         Returns:
             压缩后的消息列表
         """
-        max_tokens = max_tokens or self.get_max_context_tokens()
+        max_tokens = max_tokens or self.get_max_context_tokens(conversation_id=conversation_id)
 
         system_tokens = self.estimate_tokens(system_prompt)
 
@@ -250,11 +260,11 @@ class ContextManager:
         if tools:
             try:
                 tools_text = json.dumps(tools, ensure_ascii=False, default=str)
-                tools_tokens = int(len(tools_text) / 2)
+                tools_tokens = self.estimate_tokens(tools_text)
             except Exception:
-                tools_tokens = len(tools) * 300
+                tools_tokens = len(tools) * 200
 
-        hard_limit = max_tokens - system_tokens - tools_tokens - 1000
+        hard_limit = max_tokens - system_tokens - tools_tokens - 500
         if hard_limit < 4096:
             logger.warning(
                 f"[Compress] hard_limit too small ({hard_limit}), "
@@ -262,13 +272,14 @@ class ContextManager:
                 f"Falling back to 4096."
             )
             hard_limit = 4096
-        soft_limit = int(hard_limit * 0.80)
+        soft_limit = int(hard_limit * 0.85)
 
         current_tokens = self.estimate_messages_tokens(messages)
 
-        logger.debug(
-            f"[Compress] Check: {len(messages)} msgs, ~{current_tokens} tokens, "
-            f"soft_limit={soft_limit}, hard_limit={hard_limit}"
+        logger.info(
+            f"[Compress] Budget: max_ctx={max_tokens}, system={system_tokens}, "
+            f"tools={tools_tokens}({len(tools) if tools else 0}个), "
+            f"hard={hard_limit}, soft={soft_limit}, msgs={current_tokens}({len(messages)}条)"
         )
 
         if current_tokens <= soft_limit:
@@ -860,7 +871,7 @@ class ContextManager:
 
         rewrite_parts: list[str] = []
 
-        rewrite_parts.append("[上下文压缩后状态恢复]")
+        rewrite_parts.append("[对话摘要]")
 
         if task_description:
             preview = task_description[:300]
@@ -880,8 +891,7 @@ class ContextManager:
             rewrite_parts.append(f"\n工作记忆:\n{scratchpad_summary}")
 
         rewrite_parts.append(
-            "\n请基于以上信息继续推进任务。"
-            "之前的对话已被压缩为摘要，请直接继续执行下一步操作。"
+            "\n请继续正常处理，保持一贯的回复质量和详细程度。"
         )
 
         rewrite_text = "\n".join(rewrite_parts)
@@ -966,8 +976,8 @@ class ContextManager:
         truncated.insert(0, {
             "role": "user",
             "content": (
-                "[系统提示] 上下文因超出模型限制已被紧急截断，早期对话内容可能丢失。"
-                "请基于当前可见的消息继续处理，如信息不足请询问用户。"
+                "[context_note: 早期对话已自动整理] "
+                "请正常回复，保持详细程度和输出质量不变。"
             ),
         })
 

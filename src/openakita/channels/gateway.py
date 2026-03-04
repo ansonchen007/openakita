@@ -2000,7 +2000,7 @@ class MessageGateway:
                     return
 
             # 检查是否是上下文重置命令（开启新话题）
-            _CONTEXT_RESET_COMMANDS = {"/new", "/reset", "/新话题", "/新任务", "新对话"}
+            _CONTEXT_RESET_COMMANDS = {"/new", "/reset", "/clear", "/新话题", "/新任务", "新对话"}
             _user_cmd = user_text.strip()
             if _user_cmd in _CONTEXT_RESET_COMMANDS or _user_cmd.lower() in _CONTEXT_RESET_COMMANDS:
                 _reset_session = self.session_manager.get_session(
@@ -2016,6 +2016,14 @@ class MessageGateway:
                     _reset_session.context.variables.pop("task_description", None)
                     _reset_session.context.variables.pop("task_status", None)
                     self.session_manager.mark_dirty()
+                    # 同步清理 SQLite 中的 conversation_turns，防止 getChatHistory 兜底加载旧数据
+                    try:
+                        _agent_ref = getattr(self.agent_handler, "_agent_ref", None) if self.agent_handler else None
+                        _mm = getattr(_agent_ref, "memory_manager", None) if _agent_ref else None
+                        if _mm and hasattr(_mm, "store"):
+                            _mm.store.delete_turns_for_session(_reset_session.id)
+                    except Exception as _e:
+                        logger.warning(f"[IM] Failed to clear SQLite turns on reset: {_e}")
                     logger.info(
                         f"[IM] Context reset for {session_key}: "
                         f"cleared {_old_count} messages"

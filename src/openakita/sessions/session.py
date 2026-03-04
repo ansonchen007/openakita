@@ -129,6 +129,7 @@ class SessionContext:
             self.messages = []
             self.topic_boundaries = []
             self.current_topic_start = 0
+            self.variables["_context_reset_at"] = datetime.now().isoformat()
 
     def to_dict(self) -> dict:
         """序列化"""

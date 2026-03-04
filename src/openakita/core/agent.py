@@ -2522,11 +2522,10 @@ create_agent(name="名称", description="描述", skills=["技能"], custom_prom
                     if ctx < 8192:
                         ctx = FALLBACK_CONTEXT_WINDOW
 
-                    # context_window 是总上限，减去输出预留和 buffer
+                    # context_window 是总上限，减去输出预留和 5% buffer
                     output_reserve = ep.max_tokens or 4096
-                    # 保护：output_reserve 不能超过 context_window 的一半
-                    output_reserve = min(output_reserve, ctx // 2)
-                    result = int((ctx - output_reserve) * 0.90)
+                    output_reserve = min(output_reserve, ctx // 3)
+                    result = int((ctx - output_reserve) * 0.95)
 
                     # 最终安全检查：结果不能太小
                     if result < 4096:
@@ -2765,11 +2764,13 @@ create_agent(name="名称", description="描述", skills=["技能"], custom_prom
         return unique
 
     async def _compress_context(
-        self, messages: list[dict], max_tokens: int = None, system_prompt: str = None
+        self, messages: list[dict], max_tokens: int = None, system_prompt: str = None,
+        conversation_id: str | None = None,
     ) -> list[dict]:
         """委托给统一的 context_manager.compress_if_needed()。"""
         _sp = system_prompt or getattr(self._context, "system", "")
         _tools = getattr(self, "_tools", None)
+        _conv_id = conversation_id or getattr(self, "_current_session_id", None)
         _msg_count_before = len(messages)
         result = await self.context_manager.compress_if_needed(
             messages,
@@ -2777,6 +2778,7 @@ create_agent(name="名称", description="描述", skills=["技能"], custom_prom
             tools=_tools,
             max_tokens=max_tokens,
             memory_manager=self.memory_manager,
+            conversation_id=_conv_id,
         )
         if len(result) != _msg_count_before:
             logger.info(
@@ -3295,12 +3297,11 @@ create_agent(name="名称", description="描述", skills=["技能"], custom_prom
                         new_content.append(item)
                     truncated[i] = {**msg, "content": new_content}
 
-        # 在最前面插入截断提示
         truncated.insert(0, {
             "role": "user",
             "content": (
-                "[系统提示] 上下文因超出模型限制已被紧急截断，早期对话内容可能丢失。"
-                "请基于当前可见的消息继续处理，如信息不足请询问用户。"
+                "[context_note: 早期对话已自动整理] "
+                "请正常回复，保持详细程度和输出质量不变。"
             ),
         })
 

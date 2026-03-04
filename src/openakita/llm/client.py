@@ -742,23 +742,14 @@ class LLMClient:
             if override_name in self._providers:
                 provider = self._providers[override_name]
                 if provider.is_healthy:
-                    config = provider.config
-                    # 检查能力是否满足
-                    tools_ok = not require_tools or config.has_capability("tools")
-                    vision_ok = not require_vision or config.has_capability("vision")
-                    video_ok = not require_video or config.has_capability("video")
-                    thinking_ok = (not require_thinking) or config.has_capability("thinking")
-                    audio_ok = not require_audio or config.has_capability("audio")
-                    pdf_ok = not require_pdf or config.has_capability("pdf")
-
-                    if tools_ok and vision_ok and video_ok and thinking_ok and audio_ok and pdf_ok:
-                        override_provider = provider
-                        logger.debug(f"[LLM] Using override endpoint: {override_name}")
-                    else:
-                        logger.warning(
-                            f"[LLM] Override endpoint {override_name} doesn't support "
-                            f"required capabilities, falling back to default selection"
-                        )
+                    override_provider = provider
+                    logger.info(f"[LLM] Using user-selected endpoint: {override_name}")
+                else:
+                    cooldown = provider.cooldown_remaining
+                    logger.warning(
+                        f"[LLM] User-selected endpoint {override_name} is unhealthy "
+                        f"(cooldown: {cooldown}s), falling back to other endpoints"
+                    )
 
         for name, provider in self._providers.items():
             # 检查健康状态（包括冷静期）
@@ -1297,9 +1288,12 @@ class LLMClient:
         logger.info(f"[LLM] Restored to default model: {default_model}")
         return True, f"已恢复默认模型: {default_model}"
 
-    def get_current_model(self) -> ModelInfo | None:
+    def get_current_model(self, conversation_id: str | None = None) -> ModelInfo | None:
         """
         获取当前使用的模型信息
+
+        Args:
+            conversation_id: 对话 ID（传入时会检查 per-conversation override）
 
         Returns:
             当前模型信息，无可用模型时返回 None
@@ -1309,9 +1303,20 @@ class LLMClient:
             logger.info("[LLM] Override expired, restoring default")
             self._endpoint_override = None
 
-        # 如果有临时覆盖，返回覆盖的端点
-        if self._endpoint_override:
-            name = self._endpoint_override.endpoint_name
+        # 确定生效的 override（conversation > global）
+        effective_override = None
+        if conversation_id and conversation_id in self._conversation_overrides:
+            ov = self._conversation_overrides[conversation_id]
+            if ov and not ov.is_expired:
+                effective_override = ov
+            else:
+                self._conversation_overrides.pop(conversation_id, None)
+        if not effective_override and self._endpoint_override:
+            effective_override = self._endpoint_override
+
+        # 如果有生效的覆盖，返回覆盖的端点
+        if effective_override:
+            name = effective_override.endpoint_name
             if name in self._providers:
                 provider = self._providers[name]
                 config = provider.config

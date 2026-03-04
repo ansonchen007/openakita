@@ -688,6 +688,7 @@ class ReasoningEngine:
                         system_prompt=_build_effective_system_prompt(),
                         tools=tools,
                         memory_manager=self._memory_manager,
+                        conversation_id=conversation_id,
                     )
                 except _CtxCancelledError:
                     # 仅当任务状态明确为“用户取消”时，才把压缩取消升级为任务取消。
@@ -1590,6 +1591,7 @@ class ReasoningEngine:
                             system_prompt=effective_prompt,
                             tools=tools,
                             memory_manager=self._memory_manager,
+                            conversation_id=conversation_id,
                         )
                     except _CtxCancelledError:
                         # 与 run() 保持一致：只在明确用户取消时终止。

@@ -934,13 +934,15 @@ class Brain:
                 else:
                     full_tools.append({"raw": str(t)})
 
-            # ── 3. Token 估算 ──
+            # ── 3. Token 估算（中英混合感知：中文 ~1.5字符/token，英文/JSON ~4字符/token）──
+            from .context_manager import ContextManager as _CM
+            _est = _CM.static_estimate_tokens
             system_length = len(system) if system else 0
-            estimated_system_tokens = int(system_length / 2)
+            estimated_system_tokens = _est(system) if system else 0
             messages_text = json.dumps(serializable_messages, ensure_ascii=False)
-            estimated_messages_tokens = int(len(messages_text) / 2)
+            estimated_messages_tokens = _est(messages_text)
             tools_text = json.dumps(full_tools, ensure_ascii=False)
-            estimated_tools_tokens = int(len(tools_text) / 2)
+            estimated_tools_tokens = _est(tools_text)
             total_estimated_tokens = estimated_system_tokens + estimated_messages_tokens + estimated_tools_tokens
 
             # ── 4. 构建完整 debug 数据（和发给 LLM 的请求结构一致）──
@@ -1236,14 +1238,17 @@ class Brain:
         """
         return self._llm_client.restore_default(conversation_id=conversation_id)
 
-    def get_current_model_info(self) -> dict:
+    def get_current_model_info(self, conversation_id: str | None = None) -> dict:
         """
         获取当前使用的模型信息
+
+        Args:
+            conversation_id: 对话 ID（传入时会检查 per-conversation override）
 
         Returns:
             模型信息字典
         """
-        model = self._llm_client.get_current_model()
+        model = self._llm_client.get_current_model(conversation_id=conversation_id)
         if not model:
             return {"error": "无可用模型"}
 

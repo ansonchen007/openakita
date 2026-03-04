@@ -792,9 +792,11 @@ class IMChannelHandler:
 
         messages = session.context.get_messages(limit=limit)
         if not messages or len(messages) <= 1:
-            fallback = self._fallback_history_from_sqlite(session, limit)
-            if fallback:
-                return fallback
+            _reset_at = session.context.get_variable("_context_reset_at")
+            if not _reset_at:
+                fallback = self._fallback_history_from_sqlite(session, limit)
+                if fallback:
+                    return fallback
         if not messages:
             return "没有聊天历史"
 
@@ -821,9 +823,11 @@ class IMChannelHandler:
 
         messages = session.context.get_messages(limit=limit)
         if not messages or len(messages) <= 1:
-            fallback = self._fallback_history_from_sqlite(session, limit)
-            if fallback:
-                return fallback
+            _reset_at = session.context.get_variable("_context_reset_at")
+            if not _reset_at:
+                fallback = self._fallback_history_from_sqlite(session, limit)
+                if fallback:
+                    return fallback
         if not messages:
             return "没有聊天历史"
 
