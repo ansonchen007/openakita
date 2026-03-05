@@ -8,6 +8,7 @@
     "dev:web": "cross-env VITE_BUILD_TARGET=web vite",
     "build": "tsc -b && vite build",
     "build:web": "cross-env VITE_BUILD_TARGET=web vite build",
+    "build:cap": "cross-env VITE_BUILD_TARGET=capacitor vite build",
     "preview": "vite preview",
     "preview:web": "cross-env VITE_BUILD_TARGET=web vite preview --outDir dist-web",
     "tauri": "tauri",

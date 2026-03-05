@@ -40,8 +40,8 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Build web assets
-        run: npm run build:web
+      - name: Build web assets (Capacitor)
+        run: npm run build:cap
 
       - name: Sync Capacitor Android
         run: npx cap sync android
@@ -122,8 +122,8 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Build web assets
-        run: npm run build:web
+      - name: Build web assets (Capacitor)
+        run: npm run build:cap
 
       - name: Install iOS platform
         run: npm install @capacitor/ios --save && npx cap add ios

@@ -2,13 +2,16 @@ import path from "node:path";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
 
-const isWebBuild = process.env.VITE_BUILD_TARGET === "web";
+const buildTarget = process.env.VITE_BUILD_TARGET || "tauri";
+const isWebBuild = buildTarget === "web";
+const isCapBuild = buildTarget === "capacitor";
+const isRemoteBuild = isWebBuild || isCapBuild;
 
 // https://vitejs.dev/config/
 export default defineConfig({
   plugins: [react()],
   define: {
-    __BUILD_TARGET__: JSON.stringify(isWebBuild ? "web" : "tauri"),
+    __BUILD_TARGET__: JSON.stringify(buildTarget),
   },
   resolve: {
     alias: {
@@ -21,8 +24,8 @@ export default defineConfig({
       ),
     },
   },
-  base: isWebBuild ? "/web/" : undefined,
-  build: isWebBuild
+  base: isWebBuild ? "/web/" : isCapBuild ? "./" : undefined,
+  build: isRemoteBuild
     ? {
         outDir: "dist-web",
         rollupOptions: {
