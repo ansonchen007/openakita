@@ -5,7 +5,12 @@ const config: CapacitorConfig = {
   appName: "OpenAkita",
   webDir: "dist-web",
   server: {
-    androidScheme: "https",
+    androidScheme: "http",
+    iosScheme: "capacitor",
+    allowNavigation: ["*"],
+  },
+  android: {
+    allowMixedContent: true,
   },
 };
 
