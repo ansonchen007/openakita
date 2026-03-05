@@ -92,10 +92,10 @@ jobs:
           if [ -n "${HAS_OSS_KEY}" ]; then
             CDN_ARGS="--cdn-base-url https://${{ secrets.ALIYUN_OSS_CDN_DOMAIN }}"
             if [ -n "${HAS_R2_KEY}" ]; then
-              CDN_ARGS="${CDN_ARGS} --cdn-fallback-url https://dl.openakita.ai"
+              CDN_ARGS="${CDN_ARGS} --cdn-fallback-url https://dl-openakita.fzstack.com"
             fi
           elif [ -n "${HAS_R2_KEY}" ]; then
-            CDN_ARGS="--cdn-base-url https://dl.openakita.ai"
+            CDN_ARGS="--cdn-base-url https://dl-openakita.fzstack.com"
           fi
           python scripts/generate_latest_json.py \
             --tag "${TAG}" \
