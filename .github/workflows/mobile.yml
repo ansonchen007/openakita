@@ -65,6 +65,7 @@ jobs:
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         working-directory: apps/setup-center/android
         run: |
+          chmod +x ./gradlew
           ./gradlew assembleRelease \
             -Pandroid.injected.signing.store.file=${{ github.workspace }}/apps/setup-center/android/app/release.keystore \
             -Pandroid.injected.signing.store.password="$ANDROID_KEY_PASSWORD" \
@@ -74,7 +75,9 @@ jobs:
       - name: Build debug APK (fallback)
         if: steps.keystore.outputs.has_keystore == 'false'
         working-directory: apps/setup-center/android
-        run: ./gradlew assembleDebug
+        run: |
+          chmod +x ./gradlew
+          ./gradlew assembleDebug
 
       - name: Find APK
         id: find_apk
