@@ -316,7 +316,7 @@ class MediaHandler:
             elif extension == ".pptx":
                 text = await self._extract_pptx(path)
             elif extension in (".txt", ".md", ".json", ".py", ".js", ".html", ".css"):
-                text = path.read_text(encoding="utf-8", errors="ignore")
+                text = path.read_bytes().decode("utf-8", errors="ignore")
             else:
                 text = f"[文件: {media.filename}，不支持内容提取]"
         except Exception as e:

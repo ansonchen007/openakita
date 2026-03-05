@@ -145,7 +145,7 @@ async def read_env():
     env_path = _project_root() / ".env"
     if not env_path.exists():
         return {"env": {}, "raw": ""}
-    content = env_path.read_text(encoding="utf-8", errors="replace")
+    content = env_path.read_bytes().decode("utf-8", errors="replace")
     env = _parse_env(content)
     # Mask sensitive values for display (keys containing TOKEN, SECRET, PASSWORD, KEY)
     masked = {}
@@ -164,7 +164,7 @@ async def write_env(body: EnvUpdateRequest):
     env_path = _project_root() / ".env"
     existing = ""
     if env_path.exists():
-        existing = env_path.read_text(encoding="utf-8", errors="replace")
+        existing = env_path.read_bytes().decode("utf-8", errors="replace")
     new_content = _update_env_content(existing, body.entries)
     env_path.write_text(new_content, encoding="utf-8")
     # Sync into os.environ so the running process picks up new values immediately

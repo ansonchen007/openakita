@@ -366,7 +366,7 @@ async def health_check_endpoint(workspace_dir: str, endpoint_name: str | None) -
 
     env_path = wd / ".env"
     if env_path.exists():
-        for line in env_path.read_text(encoding="utf-8", errors="replace").splitlines():
+        for line in env_path.read_bytes().decode("utf-8", errors="replace").splitlines():
             line = line.strip()
             if not line or line.startswith("#"):
                 continue
@@ -425,7 +425,7 @@ async def health_check_im(workspace_dir: str, channel: str | None) -> None:
     env: dict[str, str] = {}
     env_path = wd / ".env"
     if env_path.exists():
-        for line in env_path.read_text(encoding="utf-8", errors="replace").splitlines():
+        for line in env_path.read_bytes().decode("utf-8", errors="replace").splitlines():
             line = line.strip()
             if not line or line.startswith("#"):
                 continue
@@ -660,7 +660,7 @@ def ensure_channel_deps(workspace_dir: str) -> None:
     env: dict[str, str] = {}
     env_path = wd / ".env"
     if env_path.exists():
-        for line in env_path.read_text(encoding="utf-8", errors="replace").splitlines():
+        for line in env_path.read_bytes().decode("utf-8", errors="replace").splitlines():
             line = line.strip()
             if not line or line.startswith("#"):
                 continue
@@ -1263,7 +1263,7 @@ def uninstall_skill(workspace_dir: str, skill_name: str) -> None:
     # 检查是否为系统技能（SKILL.md 中 system: true）
     skill_md = target / "SKILL.md"
     if skill_md.exists():
-        content = skill_md.read_text(encoding="utf-8", errors="replace")
+        content = skill_md.read_bytes().decode("utf-8", errors="replace")
         if "system: true" in content.lower()[:500]:
             raise ValueError(f"不允许删除系统技能: {skill_name}")
 
