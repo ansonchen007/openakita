@@ -357,7 +357,7 @@ export function MCPView({ serviceRunning, apiBaseUrl = "http://127.0.0.1:18900" 
           </div>
           <div style={{ display: "flex", gap: 8, marginTop: 14, justifyContent: "space-between", alignItems: "center" }}>
             <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, color: "var(--muted)", cursor: "pointer" }}>
-              <input type="checkbox" checked={form.auto_connect} onChange={e => setForm({ ...form, auto_connect: e.target.checked })} />
+              <input type="checkbox" checked={form.auto_connect} onChange={e => setForm({ ...form, auto_connect: e.target.checked })} style={{ width: 16, height: 16, flexShrink: 0 }} />
               {t("mcp.autoConnect")}
             </label>
             <div style={{ display: "flex", gap: 8 }}>

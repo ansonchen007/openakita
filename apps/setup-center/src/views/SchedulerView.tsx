@@ -857,6 +857,7 @@ export function SchedulerView({ serviceRunning, apiBaseUrl = "" }: { serviceRunn
                 type="checkbox"
                 checked={form.enabled}
                 onChange={e => setForm(f => ({ ...f, enabled: e.target.checked }))}
+                style={{ width: 16, height: 16, flexShrink: 0 }}
               />
               {t("scheduler.enabled")}
             </label>

@@ -425,7 +425,7 @@ export function MemoryView({ serviceRunning, apiBaseUrl = "" }: Props) {
             <>
               <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "0 4px" }}>
                 <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "var(--muted)", cursor: "pointer" }}>
-                  <input type="checkbox" checked={selected.size === memories.length && memories.length > 0} onChange={selectAll} />
+                  <input type="checkbox" checked={selected.size === memories.length && memories.length > 0} onChange={selectAll} style={{ width: 16, height: 16, flexShrink: 0 }} />
                   全选 ({memories.length})
                 </label>
               </div>
@@ -441,7 +441,7 @@ export function MemoryView({ serviceRunning, apiBaseUrl = "" }: Props) {
                 >
                   {/* Header row: checkbox + type badge + score + date */}
                   <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
-                    <input type="checkbox" checked={selected.has(m.id)} onChange={() => toggleSelect(m.id)} />
+                    <input type="checkbox" checked={selected.has(m.id)} onChange={() => toggleSelect(m.id)} style={{ width: 16, height: 16, flexShrink: 0 }} />
                     <span style={{
                       display: "inline-block", padding: "2px 8px", borderRadius: 10, fontSize: 11, fontWeight: 500,
                       whiteSpace: "nowrap",
@@ -567,6 +567,7 @@ export function MemoryView({ serviceRunning, apiBaseUrl = "" }: Props) {
                     type="checkbox"
                     checked={selected.size === memories.length && memories.length > 0}
                     onChange={selectAll}
+                    style={{ width: 16, height: 16 }}
                   />
                 </th>
                 <th style={{ padding: "8px 12px", textAlign: "left", width: 80 }}>类型</th>
@@ -601,7 +602,7 @@ export function MemoryView({ serviceRunning, apiBaseUrl = "" }: Props) {
                   onMouseLeave={e => { if (!selected.has(m.id)) (e.currentTarget as HTMLElement).style.background = ""; }}
                 >
                   <td style={{ padding: "8px 12px" }}>
-                    <input type="checkbox" checked={selected.has(m.id)} onChange={() => toggleSelect(m.id)} />
+                    <input type="checkbox" checked={selected.has(m.id)} onChange={() => toggleSelect(m.id)} style={{ width: 16, height: 16 }} />
                   </td>
                   <td style={{ padding: "8px 12px" }}>
                     <span style={{

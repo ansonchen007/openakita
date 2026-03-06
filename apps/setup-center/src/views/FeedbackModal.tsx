@@ -390,6 +390,7 @@ export function FeedbackModal({ open, onClose, apiBase, initialMode = "bug" }: F
                   type="checkbox"
                   checked={uploadLogs}
                   onChange={(e) => setUploadLogs(e.target.checked)}
+                  style={{ width: 16, height: 16 }}
                 />
               </label>
               <label className="feedbackOptionRow">
@@ -399,6 +400,7 @@ export function FeedbackModal({ open, onClose, apiBase, initialMode = "bug" }: F
                   type="checkbox"
                   checked={uploadDebug}
                   onChange={(e) => setUploadDebug(e.target.checked)}
+                  style={{ width: 16, height: 16 }}
                 />
               </label>
               <div className="feedbackOptionHint">

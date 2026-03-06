@@ -5635,8 +5635,8 @@ export function App() {
 
               {/* 定时备份开关 */}
               <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "10px 0" }}>
-                <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", fontSize: 13 }}>
-                  <input type="checkbox" checked={backupSettings.enabled} onChange={(e) => setBackupSettings((p) => ({ ...p, enabled: e.target.checked }))} />
+                <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", fontSize: 13, whiteSpace: "nowrap" }}>
+                  <input type="checkbox" checked={backupSettings.enabled} onChange={(e) => setBackupSettings((p) => ({ ...p, enabled: e.target.checked }))} style={{ width: 16, height: 16, flexShrink: 0 }} />
                   {t("adv.backupEnabled")}
                 </label>
               </div>
@@ -5698,12 +5698,12 @@ export function App() {
 
               {/* 数据选项 */}
               <div style={{ display: "flex", gap: 16, margin: "10px 0", flexWrap: "wrap" }}>
-                <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", fontSize: 13 }}>
-                  <input type="checkbox" checked={backupSettings.include_userdata} onChange={(e) => setBackupSettings((p) => ({ ...p, include_userdata: e.target.checked }))} />
+                <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", fontSize: 13, whiteSpace: "nowrap" }}>
+                  <input type="checkbox" checked={backupSettings.include_userdata} onChange={(e) => setBackupSettings((p) => ({ ...p, include_userdata: e.target.checked }))} style={{ width: 16, height: 16, flexShrink: 0 }} />
                   {t("adv.backupIncludeUserdata")}
                 </label>
-                <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", fontSize: 13 }}>
-                  <input type="checkbox" checked={backupSettings.include_media} onChange={(e) => setBackupSettings((p) => ({ ...p, include_media: e.target.checked }))} />
+                <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", fontSize: 13, whiteSpace: "nowrap" }}>
+                  <input type="checkbox" checked={backupSettings.include_media} onChange={(e) => setBackupSettings((p) => ({ ...p, include_media: e.target.checked }))} style={{ width: 16, height: 16, flexShrink: 0 }} />
                   {t("adv.backupIncludeMedia")}
                 </label>
               </div>
