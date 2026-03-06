@@ -1758,7 +1758,7 @@ export function App() {
   }
 
   function httpApiBase(): string {
-    if (IS_WEB || IS_CAPACITOR) return apiBaseUrl || "";
+    if (IS_WEB || IS_CAPACITOR) return apiBaseUrl || window.location.origin;
     return dataMode === "remote" ? apiBaseUrl : "http://127.0.0.1:18900";
   }
 
