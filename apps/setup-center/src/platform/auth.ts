@@ -70,6 +70,8 @@ export const AUTH_EXPIRED_EVENT = "openakita-auth-expired";
 export async function refreshAccessToken(apiBase = ""): Promise<string | null> {
   // Local auth mode: no refresh needed — backend grants access by IP
   if (_localAuthMode) return null;
+  // Capacitor: refresh via httpOnly cookie is unreliable cross-origin
+  if (IS_CAPACITOR) return null;
   if (_refreshPromise) return _refreshPromise;
 
   _refreshPromise = (async () => {
@@ -117,8 +119,10 @@ export async function authFetch(
 
   let token = getAccessToken();
 
-  // Attempt silent refresh if token is missing or expiring
-  if (!token || isTokenExpiringSoon(token)) {
+  if (IS_CAPACITOR) {
+    // Capacitor can't refresh via httpOnly cookie cross-origin.
+    // Use existing token as-is; 401 below will trigger re-login.
+  } else if (!token || isTokenExpiringSoon(token)) {
     token = await refreshAccessToken(apiBase);
   }
 
@@ -139,15 +143,21 @@ export async function authFetch(
     }
   }
 
-  const res = await fetch(url, { ...init, headers, credentials: "include" });
+  const credOpts: RequestInit = IS_CAPACITOR ? {} : { credentials: "include" };
+  const res = await fetch(url, { ...init, ...credOpts, headers });
 
   // If 401 and we had a token, try one refresh then retry
   if (res.status === 401 && token) {
+    if (IS_CAPACITOR) {
+      clearAccessToken();
+      window.dispatchEvent(new Event(AUTH_EXPIRED_EVENT));
+      return res;
+    }
     const newToken = await refreshAccessToken(apiBase);
     if (newToken) {
       const retryHeaders = new Headers(retryInit?.headers);
       retryHeaders.set("Authorization", `Bearer ${newToken}`);
-      return fetch(url, { ...retryInit, headers: retryHeaders, credentials: "include" });
+      return fetch(url, { ...retryInit, ...credOpts, headers: retryHeaders });
     }
   }
 
@@ -163,13 +173,19 @@ export async function login(
   apiBase = "",
 ): Promise<{ success: boolean; error?: string }> {
   try {
-    const res = await fetch(`${apiBase}/api/auth/login`, {
+    const fetchOpts: RequestInit = {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ password }),
-      credentials: "include",
       signal: AbortSignal.timeout(10_000),
-    });
+    };
+    // Capacitor cross-origin: credentials: "include" triggers strict CORS
+    // preflight that Android/iOS WebView may reject. We rely on the access
+    // token (response body → localStorage) instead of httpOnly cookies.
+    if (!IS_CAPACITOR) {
+      fetchOpts.credentials = "include";
+    }
+    const res = await fetch(`${apiBase}/api/auth/login`, fetchOpts);
     if (!res.ok) {
       const data = await res.json().catch(() => ({ detail: "Login failed" }));
       return { success: false, error: data.detail || `HTTP ${res.status}` };
@@ -186,11 +202,16 @@ export async function login(
 
 export async function logout(apiBase = ""): Promise<void> {
   try {
-    await fetch(`${apiBase}/api/auth/logout`, {
+    const opts: RequestInit = {
       method: "POST",
-      credentials: "include",
       signal: AbortSignal.timeout(5_000),
-    });
+    };
+    if (!IS_CAPACITOR) opts.credentials = "include";
+    const token = getAccessToken();
+    if (token) {
+      opts.headers = { Authorization: `Bearer ${token}` };
+    }
+    await fetch(`${apiBase}/api/auth/logout`, opts);
   } catch { /* ignore */ }
   clearAccessToken();
 }
@@ -240,11 +261,12 @@ export async function checkAuth(apiBase = ""): Promise<boolean> {
       const token = getAccessToken();
       const headers: Record<string, string> = {};
       if (token) headers["Authorization"] = `Bearer ${token}`;
-      const res = await fetch(`${apiBase}/api/auth/check`, {
+      const fetchOpts: RequestInit = {
         headers,
-        credentials: "include",
         signal: AbortSignal.timeout(5_000),
-      });
+      };
+      if (!IS_CAPACITOR) fetchOpts.credentials = "include";
+      const res = await fetch(`${apiBase}/api/auth/check`, fetchOpts);
       if (res.ok) {
         const data = await res.json();
         if (data.authenticated === true) {
