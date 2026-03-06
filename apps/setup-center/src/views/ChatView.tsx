@@ -3392,7 +3392,7 @@ export function ChatView({
       const cid = activeConvId;
       setTimeout(() => {
         if (cid && streamContexts.current.get(cid)?.reader) stopStreaming(cid);
-      }, 8000);
+      }, 2000);
     }).catch(() => {
       stopStreaming();
     });

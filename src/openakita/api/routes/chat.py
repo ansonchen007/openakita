@@ -237,6 +237,8 @@ async def _stream_chat(
                 _reply_preview += chunk
         return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
+    _disconnect_watcher_task: asyncio.Task | None = None
+
     try:
         actual_agent = _resolve_agent(agent)
         if actual_agent is None:
@@ -282,6 +284,32 @@ async def _stream_chat(
             except Exception as e:
                 logger.warning(f"[Chat API] Session management error: {e}")
 
+        # --- 后台断连检测：定期检查客户端是否断开，主动触发 cancel ---
+        async def _disconnect_watcher():
+            nonlocal _client_disconnected
+            while True:
+                await asyncio.sleep(2.0)
+                if _client_disconnected:
+                    break
+                if http_request is not None:
+                    try:
+                        if await http_request.is_disconnected():
+                            _client_disconnected = True
+                            logger.info(
+                                "[Chat API] 断连检测器发现客户端断开，触发 cancel_current_task"
+                            )
+                            try:
+                                actual_agent.cancel_current_task(
+                                    "客户端断开连接", session_id=conversation_id
+                                )
+                            except Exception as e:
+                                logger.warning(f"[Chat API] 断连触发 cancel 失败: {e}")
+                            break
+                    except Exception:
+                        break
+
+        _disconnect_watcher_task = asyncio.create_task(_disconnect_watcher())
+
         # --- 委托给 Agent 统一流水线 ---
         async for event in actual_agent.chat_with_session_stream(
             message=chat_request.message or "",
@@ -297,6 +325,9 @@ async def _stream_chat(
         ):
             # Check if client disconnected
             if await _check_disconnected():
+                actual_agent.cancel_current_task(
+                    "客户端断开连接", session_id=conversation_id
+                )
                 break
 
             event_type = event.get("type", "")
@@ -508,6 +539,14 @@ async def _stream_chat(
         yield _sse("error", {"message": str(e)[:500]})
         yield _sse("done")
     finally:
+        # ── 清理断连检测任务 ──
+        if _disconnect_watcher_task and not _disconnect_watcher_task.done():
+            _disconnect_watcher_task.cancel()
+            try:
+                await _disconnect_watcher_task
+            except (asyncio.CancelledError, Exception):
+                pass
+
         # ── Release busy lock & broadcast idle/message_update ──
         _conv_id = chat_request.conversation_id or ""
         _client_id = chat_request.client_id or ""

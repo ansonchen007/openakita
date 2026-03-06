@@ -489,7 +489,17 @@ class ReasoningEngine:
 
         _session_key = conversation_id or ""
         state = self._state.get_task_for_session(_session_key) if _session_key else self._state.current_task
-        if not state or not state.is_active or state.cancelled:
+
+        if state and state.cancelled:
+            logger.info(
+                f"[ReAct] Task already cancelled before run() entry "
+                f"(reason={state.cancel_reason!r}). Returning immediately."
+            )
+            return await self._cancel_farewell(
+                messages, system_prompt, self._brain.model, state
+            )
+
+        if not state or not state.is_active:
             state = self._state.begin_task(session_id=_session_key)
         elif state.status == TaskStatus.ACTING:
             logger.warning(
@@ -1396,7 +1406,17 @@ class ReasoningEngine:
 
         _session_key = conversation_id or ""
         state = self._state.get_task_for_session(_session_key) if _session_key else self._state.current_task
-        if not state or not state.is_active or state.cancelled:
+
+        if state and state.cancelled:
+            logger.info(
+                f"[ReAct-Stream] Task already cancelled before reason_stream() entry "
+                f"(reason={state.cancel_reason!r}). Returning immediately."
+            )
+            yield {"type": "text_delta", "content": "✅ 好的，已停止当前任务。"}
+            yield {"type": "done"}
+            return
+
+        if not state or not state.is_active:
             state = self._state.begin_task(session_id=_session_key)
         elif state.status == TaskStatus.ACTING:
             logger.warning(
@@ -2626,56 +2646,22 @@ class ReasoningEngine:
         current_model: str,
         state: TaskState | None = None,
     ) -> str:
-        """非流式场景下的取消收尾：注入中断上下文，发起轻量 LLM 调用，返回收尾文本。"""
+        """非流式场景下的取消收尾：立即返回默认文本，后台异步发起 LLM 收尾。"""
         cancel_reason = (state.cancel_reason if state else "") or "用户请求停止"
         logger.info(
             f"[ReAct][CancelFarewell] 进入收尾流程: cancel_reason={cancel_reason!r}, "
             f"model={current_model}, msg_count={len(working_messages)}"
         )
 
-        cancel_msg = (
-            f"[系统通知] 用户发送了停止指令「{cancel_reason}」，"
-            "请立即停止当前操作，简要告知用户已停止以及当前进度（1~2 句话即可）。"
-            "不要调用任何工具。"
-        )
-        farewell_messages = self._sanitize_messages_for_farewell(list(working_messages))
-        logger.info(
-            f"[ReAct][CancelFarewell] sanitized: before={len(working_messages)}, "
-            f"after={len(farewell_messages)}"
-        )
-        farewell_messages.append({"role": "user", "content": cancel_msg})
+        default_farewell = "✅ 好的，已停止当前任务。"
 
-        farewell_text = "✅ 好的，已停止当前任务。"
-        _tt = set_tracking_context(TokenTrackingContext(
-            operation_type="farewell", channel="api",
-        ))
-        try:
-            farewell_response = await asyncio.wait_for(
-                self._brain.messages_create_async(
-                    model=current_model,
-                    max_tokens=200,
-                    system=system_prompt,
-                    tools=[],
-                    messages=farewell_messages,
-                ),
-                timeout=5.0,
+        asyncio.create_task(
+            self._background_cancel_farewell(
+                list(working_messages), system_prompt, current_model, cancel_reason
             )
-            for block in farewell_response.content:
-                if block.type == "text" and block.text.strip():
-                    farewell_text = block.text.strip()
-                    break
-            logger.info(f"[ReAct][CancelFarewell] LLM farewell 成功: {farewell_text}")
-        except TimeoutError:
-            logger.warning("[ReAct][CancelFarewell] LLM farewell 超时 (5s)，使用默认文本")
-        except Exception as e:
-            logger.error(
-                f"[ReAct][CancelFarewell] LLM farewell 失败: {type(e).__name__}: {e}",
-                exc_info=True,
-            )
-            self._reset_structural_cooldown_after_farewell()
-        finally:
-            reset_tracking_context(_tt)
-        return farewell_text
+        )
+
+        return default_farewell
 
     # ==================== 取消收尾（流式） ====================
 
@@ -2686,7 +2672,7 @@ class ReasoningEngine:
         current_model: str,
         state: TaskState | None = None,
     ):
-        """流式场景下的取消收尾：注入中断上下文，发起轻量 LLM 调用，流式输出收尾文本。
+        """流式场景下的取消收尾：立即返回默认文本，后台异步发起 LLM 收尾。
 
         Yields:
             {"type": "user_insert", ...} 和 {"type": "text_delta", ...} 事件
@@ -2706,68 +2692,62 @@ class ReasoningEngine:
             logger.info(f"[ReAct-Stream][CancelFarewell] 回传用户指令文本: {user_text!r}")
             yield {"type": "user_insert", "content": user_text}
 
-        cancel_msg = (
-            f"[系统通知] 用户发送了停止指令「{cancel_reason}」，"
-            "请立即停止当前操作，简要告知用户已停止以及当前进度（1~2 句话即可）。"
-            "不要调用任何工具。"
-        )
-        farewell_messages = self._sanitize_messages_for_farewell(list(working_messages))
-        logger.info(
-            f"[ReAct-Stream][CancelFarewell] sanitized: before={len(working_messages)}, "
-            f"after={len(farewell_messages)}"
-        )
-        farewell_messages.append({"role": "user", "content": cancel_msg})
+        default_farewell = "✅ 好的，已停止当前任务。"
+        yield {"type": "text_delta", "content": default_farewell}
 
-        farewell_text = "✅ 好的，已停止当前任务。"
-        logger.info(
-            f"[ReAct-Stream][CancelFarewell] 发起 LLM 收尾调用 (timeout=5s), "
-            f"farewell_messages count={len(farewell_messages)}"
+        asyncio.create_task(
+            self._background_cancel_farewell(
+                list(working_messages), system_prompt, current_model, cancel_reason
+            )
         )
-        _tt = set_tracking_context(TokenTrackingContext(
-            operation_type="farewell", channel="api",
-        ))
+
+    async def _background_cancel_farewell(
+        self,
+        working_messages: list[dict],
+        system_prompt: str,
+        current_model: str,
+        cancel_reason: str,
+    ) -> None:
+        """后台执行 LLM 收尾调用，将结果持久化到上下文（不阻塞用户）。"""
         try:
-            farewell_response = await asyncio.wait_for(
-                self._brain.messages_create_async(
-                    model=current_model,
-                    max_tokens=200,
-                    system=system_prompt,
-                    tools=[],
-                    messages=farewell_messages,
-                ),
-                timeout=5.0,
+            cancel_msg = (
+                f"[系统通知] 用户发送了停止指令「{cancel_reason}」，"
+                "请立即停止当前操作，简要告知用户已停止以及当前进度（1~2 句话即可）。"
+                "不要调用任何工具。"
             )
-            logger.info(
-                f"[ReAct-Stream][CancelFarewell] LLM 调用返回, "
-                f"content_blocks={len(farewell_response.content)}, "
-                f"stop_reason={getattr(farewell_response, 'stop_reason', 'N/A')}"
-            )
-            for block in farewell_response.content:
-                logger.debug(
-                    f"[ReAct-Stream][CancelFarewell] block type={block.type}, "
-                    f"text={getattr(block, 'text', '')!r}"
-                )
-                if block.type == "text" and block.text.strip():
-                    farewell_text = block.text.strip()
-                    break
-            logger.info(f"[ReAct-Stream][CancelFarewell] LLM farewell 成功: {farewell_text}")
-        except TimeoutError:
-            logger.warning("[ReAct-Stream][CancelFarewell] LLM farewell 超时 (5s)，使用默认文本")
-        except Exception as e:
-            logger.error(
-                f"[ReAct-Stream][CancelFarewell] LLM farewell 失败: "
-                f"{type(e).__name__}: {e}",
-                exc_info=True,
-            )
-            self._reset_structural_cooldown_after_farewell()
-        finally:
-            reset_tracking_context(_tt)
+            farewell_messages = self._sanitize_messages_for_farewell(working_messages)
+            farewell_messages.append({"role": "user", "content": cancel_msg})
 
-        logger.info(f"[ReAct-Stream][CancelFarewell] 最终输出文本: {farewell_text}")
-        chunk_size = 20
-        for i in range(0, len(farewell_text), chunk_size):
-            yield {"type": "text_delta", "content": farewell_text[i:i + chunk_size]}
-            await asyncio.sleep(0.01)
+            _tt = set_tracking_context(TokenTrackingContext(
+                operation_type="farewell", channel="api",
+            ))
+            try:
+                farewell_response = await asyncio.wait_for(
+                    self._brain.messages_create_async(
+                        model=current_model,
+                        max_tokens=200,
+                        system=system_prompt,
+                        tools=[],
+                        messages=farewell_messages,
+                    ),
+                    timeout=5.0,
+                )
+                for block in farewell_response.content:
+                    if block.type == "text" and block.text.strip():
+                        logger.info(
+                            f"[ReAct-Stream][BgFarewell] LLM farewell 完成: "
+                            f"{block.text.strip()[:100]}"
+                        )
+                        break
+            except TimeoutError:
+                logger.warning("[ReAct-Stream][BgFarewell] LLM farewell 超时 (5s)")
+            except Exception as e:
+                logger.warning(f"[ReAct-Stream][BgFarewell] LLM farewell 失败: {e}")
+                self._reset_structural_cooldown_after_farewell()
+            finally:
+                reset_tracking_context(_tt)
+        except Exception as e:
+            logger.warning(f"[ReAct-Stream][BgFarewell] 后台收尾异常: {e}")
 
     # ==================== 心跳保活 ====================
 

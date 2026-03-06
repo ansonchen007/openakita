@@ -479,6 +479,7 @@ class Agent:
         # ==================== Phase 2: 新增子模块 ====================
         # 结构化状态管理
         self.agent_state = AgentState()
+        self._pending_cancels: dict[str, str] = {}  # session_id → reason
 
         # 工具执行引擎（委托自 _execute_tool / _execute_tool_calls_batch）
         self.tool_executor = ToolExecutor(
@@ -3943,6 +3944,10 @@ create_agent(name="名称", description="描述", skills=["技能"], custom_prom
             self.agent_state.reset_task(session_id=_sid)
 
         # Clean up task-local session references to prevent dict growth
+        if _sid:
+            self._pending_cancels.pop(_sid, None)
+        if self._current_conversation_id:
+            self._pending_cancels.pop(self._current_conversation_id, None)
         self._current_session_id = None
         self._current_conversation_id = None
 
@@ -4022,6 +4027,12 @@ create_agent(name="名称", description="描述", skills=["技能"], custom_prom
 
         im_tokens = None
         try:
+            # 准备阶段前检查
+            if self._is_session_cancelled(session_id):
+                self._consume_pending_cancel(session_id)
+                logger.info(f"[Session:{session_id}] Cancelled before prepare, returning immediately")
+                return "✅ 好的，已停止当前任务。"
+
             # === 共享准备 ===
             messages, session_type, task_monitor, conversation_id, im_tokens = (
                 await self._prepare_session_context(
@@ -4033,6 +4044,14 @@ create_agent(name="名称", description="描述", skills=["技能"], custom_prom
                     conversation_id=conversation_id,
                 )
             )
+
+            # 准备阶段后检查（含 pending cancel）
+            _conv_cancel_id = conversation_id or session_id
+            if self._is_session_cancelled(session_id) or self._is_session_cancelled(_conv_cancel_id):
+                self._consume_pending_cancel(session_id)
+                self._consume_pending_cancel(_conv_cancel_id)
+                logger.info(f"[Session:{session_id}] Cancelled during prepare, returning immediately")
+                return "✅ 好的，已停止当前任务。"
 
             # === 从 session metadata 读取 thinking 偏好（IM 通道使用） ===
             _thinking_mode = thinking_mode
@@ -4172,6 +4191,14 @@ create_agent(name="名称", description="描述", skills=["技能"], custom_prom
             # 立即发送心跳，让前端知道请求已被接收（准备阶段可能包含多个 LLM 调用）
             yield {"type": "heartbeat"}
 
+            # 准备阶段前检查：如果 session 有挂起的取消信号，立即退出
+            if self._is_session_cancelled(session_id):
+                self._consume_pending_cancel(session_id)
+                logger.info(f"[Session:{session_id}] Cancelled before prepare, returning immediately")
+                yield {"type": "text_delta", "content": "✅ 好的，已停止当前任务。"}
+                yield {"type": "done"}
+                return
+
             # === 共享准备 ===
             messages, session_type, task_monitor, conversation_id, im_tokens = (
                 await self._prepare_session_context(
@@ -4186,6 +4213,16 @@ create_agent(name="名称", description="描述", skills=["技能"], custom_prom
             )
 
             yield {"type": "heartbeat"}
+
+            # 准备阶段后检查：如果准备期间收到了取消信号（含 pending cancel）
+            _conv_cancel_id = conversation_id or session_id
+            if self._is_session_cancelled(session_id) or self._is_session_cancelled(_conv_cancel_id):
+                self._consume_pending_cancel(session_id)
+                self._consume_pending_cancel(_conv_cancel_id)
+                logger.info(f"[Session:{session_id}] Cancelled during prepare, returning immediately")
+                yield {"type": "text_delta", "content": "✅ 好的，已停止当前任务。"}
+                yield {"type": "done"}
+                return
 
             # === 构建 System Prompt（与 _chat_with_tools_and_context 一致） ===
             task_description = (getattr(self, "_current_task_query", "") or "").strip()
@@ -4934,80 +4971,78 @@ NEXT: 建议的下一步（如有）"""
         system_prompt: str,
         current_model: str,
     ) -> str:
-        """取消后注入中断上下文，发起轻量 LLM 调用让模型自然收尾。
-
-        将「用户中断」作为特殊消息注入上下文，让 LLM 知晓并做出合理收尾，
-        而不是粗暴返回固定文本。LLM 的收尾回复和中断事件都会被记录到持久上下文中。
+        """取消后立即返回默认文本，后台异步发起 LLM 收尾。
 
         Args:
-            working_messages: 当前的工作消息列表（会被修改）
+            working_messages: 当前的工作消息列表
             system_prompt: 当前的系统提示词
             current_model: 当前使用的模型
 
         Returns:
-            LLM 生成的收尾文本，或超时后的默认文本
+            固定的取消文本（不等待 LLM）
         """
         cancel_reason = self._cancel_reason or "用户请求停止"
         default_farewell = "✅ 好的，已停止当前任务。"
 
         logger.info(
-            f"[StopTask][CancelFarewell] 进入收尾流程: cancel_reason={cancel_reason!r}, "
-            f"model={current_model}, msg_count={len(working_messages)}"
+            f"[StopTask][CancelFarewell] 立即返回默认文本，后台发起 LLM 收尾: "
+            f"cancel_reason={cancel_reason!r}, model={current_model}"
         )
 
-        cancel_msg = (
-            f"[系统通知] 用户发送了停止指令「{cancel_reason}」，"
-            "请立即停止当前操作，简要告知用户已停止以及当前进度（1~2 句话即可）。"
-            "不要调用任何工具。"
+        asyncio.create_task(
+            self._background_cancel_farewell(
+                list(working_messages), system_prompt, current_model, cancel_reason
+            )
         )
-        working_messages.append({"role": "user", "content": cancel_msg})
 
-        farewell_text = default_farewell
-        logger.info(
-            f"[StopTask][CancelFarewell] 发起 LLM 收尾调用 (timeout=5s), "
-            f"working_messages count={len(working_messages)}"
-        )
-        _tt = set_tracking_context(TokenTrackingContext(
-            operation_type="farewell", channel="api",
-        ))
+        return default_farewell
+
+    async def _background_cancel_farewell(
+        self,
+        working_messages: list[dict],
+        system_prompt: str,
+        current_model: str,
+        cancel_reason: str,
+    ) -> None:
+        """后台执行 LLM 收尾调用，将结果持久化到上下文（不阻塞用户）。"""
+        farewell_text = "✅ 好的，已停止当前任务。"
         try:
-            response = await asyncio.wait_for(
-                self.brain.messages_create_async(
-                    model=current_model,
-                    max_tokens=200,
-                    system=system_prompt,
-                    tools=[],
-                    messages=working_messages,
-                ),
-                timeout=5.0,
+            cancel_msg = (
+                f"[系统通知] 用户发送了停止指令「{cancel_reason}」，"
+                "请立即停止当前操作，简要告知用户已停止以及当前进度（1~2 句话即可）。"
+                "不要调用任何工具。"
             )
-            logger.info(
-                f"[StopTask][CancelFarewell] LLM 调用返回, "
-                f"content_blocks={len(response.content)}, "
-                f"stop_reason={getattr(response, 'stop_reason', 'N/A')}"
-            )
-            for block in response.content:
-                logger.debug(
-                    f"[StopTask][CancelFarewell] block type={block.type}, "
-                    f"text={getattr(block, 'text', '')!r}"
+            working_messages.append({"role": "user", "content": cancel_msg})
+
+            _tt = set_tracking_context(TokenTrackingContext(
+                operation_type="farewell", channel="api",
+            ))
+            try:
+                response = await asyncio.wait_for(
+                    self.brain.messages_create_async(
+                        model=current_model,
+                        max_tokens=200,
+                        system=system_prompt,
+                        tools=[],
+                        messages=working_messages,
+                    ),
+                    timeout=5.0,
                 )
-                if block.type == "text" and block.text.strip():
-                    farewell_text = block.text.strip()
-                    break
-            logger.info(f"[StopTask][CancelFarewell] LLM farewell 成功: {farewell_text}")
-        except TimeoutError:
-            logger.warning("[StopTask][CancelFarewell] LLM farewell 超时 (5s)，使用默认文本")
+                for block in response.content:
+                    if block.type == "text" and block.text.strip():
+                        farewell_text = block.text.strip()
+                        break
+                logger.info(f"[StopTask][BgFarewell] LLM farewell 完成: {farewell_text[:100]}")
+            except TimeoutError:
+                logger.warning("[StopTask][BgFarewell] LLM farewell 超时 (5s)")
+            except Exception as e:
+                logger.warning(f"[StopTask][BgFarewell] LLM farewell 失败: {e}")
+            finally:
+                reset_tracking_context(_tt)
         except Exception as e:
-            logger.error(
-                f"[StopTask][CancelFarewell] LLM farewell 失败: "
-                f"{type(e).__name__}: {e}，使用默认文本",
-                exc_info=True,
-            )
-        finally:
-            reset_tracking_context(_tt)
+            logger.warning(f"[StopTask][BgFarewell] 后台收尾异常: {e}")
 
         self._persist_cancel_to_context(cancel_reason, farewell_text)
-        return farewell_text
 
     def _persist_cancel_to_context(self, cancel_reason: str, farewell_text: str) -> None:
         """将中断事件持久化到 _context.messages 对话历史。
@@ -6013,6 +6048,8 @@ NEXT: 建议的下一步（如有）"""
         取消正在执行的任务。
 
         如果指定 session_id，仅取消该会话的任务和计划；否则取消所有。
+        当 session 没有活跃 task 时（如处于准备阶段），将 cancel 存入 _pending_cancels，
+        等待后续检查点消费。
 
         Args:
             reason: 取消原因
@@ -6032,8 +6069,9 @@ NEXT: 建议的下一步（如有）"""
             else:
                 logger.warning(
                     f"[StopTask] No task found for session {session_id}, "
-                    f"falling back to cancel current_task"
+                    f"storing as pending cancel"
                 )
+                self._pending_cancels[session_id] = reason
                 self.agent_state.cancel_task(reason)
         elif has_state:
             has_task = self.agent_state.current_task is not None
@@ -6058,6 +6096,30 @@ NEXT: 建议的下一步（如有）"""
             logger.warning(f"[StopTask] Failed to cancel plan: {e}")
 
         logger.info(f"[StopTask] Task cancellation completed: {reason}")
+
+    def _is_session_cancelled(self, session_id: str | None = None) -> bool:
+        """检查指定 session 是否有待处理的取消信号。
+
+        检查两个来源：
+        1. 当前 task 的 cancelled 标志
+        2. _pending_cancels 中的挂起取消（task 不存在时由 cancel_current_task 写入）
+        """
+        if session_id and session_id in self._pending_cancels:
+            return True
+        if not self.agent_state:
+            return False
+        task = (
+            self.agent_state.get_task_for_session(session_id)
+            if session_id
+            else self.agent_state.current_task
+        )
+        return bool(task and task.cancelled)
+
+    def _consume_pending_cancel(self, session_id: str | None = None) -> str | None:
+        """消费并返回挂起的取消原因，如果没有则返回 None。"""
+        if session_id:
+            return self._pending_cancels.pop(session_id, None)
+        return None
 
     def is_stop_command(self, message: str) -> bool:
         """
