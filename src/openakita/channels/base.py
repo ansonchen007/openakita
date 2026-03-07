@@ -262,6 +262,11 @@ class ChannelAdapter(ABC):
         # 可选能力：默认实现为 no-op（部分平台不支持 typing 或无需实现）
         logger.debug(f"{self.channel_name}: typing (noop) chat_id={chat_id}")
 
+    @property
+    def supports_streaming(self) -> bool:
+        """是否支持流式卡片更新（CardKit 等）。支持的通道可在 Agent 处理期间逐步推送内容。"""
+        return False
+
     # ==================== 辅助方法 ====================
 
     def _log_message(self, message: UnifiedMessage) -> None:

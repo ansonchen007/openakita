@@ -723,14 +723,23 @@ async def start_im_channels(agent_or_master):
 
     # Multi-bot: create additional adapters from im_bots config
     if settings.im_bots:
-        for bot_cfg in settings.im_bots:
+        for idx, bot_cfg in enumerate(settings.im_bots):
             if not bot_cfg.get("enabled", True):
                 continue
             bot_type = bot_cfg.get("type", "")
             bot_id = bot_cfg.get("id", "")
             agent_id = bot_cfg.get("agent_profile_id", "default")
             creds = bot_cfg.get("credentials", {})
-            _channel_name = f"{bot_type}:{bot_id}" if bot_id else bot_type
+
+            # 生成唯一的 channel_name，避免与单通道适配器冲突
+            if bot_id:
+                _channel_name = f"{bot_type}:{bot_id}"
+            else:
+                _channel_name = f"{bot_type}:bot{idx}"
+                bot_id = f"bot{idx}"
+                logger.warning(
+                    f"[MultiBot] im_bots[{idx}] has no 'id', auto-assigned: {_channel_name}"
+                )
 
             try:
                 adapter = _create_bot_adapter(

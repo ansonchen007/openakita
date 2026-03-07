@@ -32,6 +32,10 @@ from ..types import (
     UnifiedMessage,
 )
 
+# 多实例 WS 启动锁：lark_oapi.ws.client 的模块级 loop 变量是全局共享的，
+# 多个 FeishuAdapter 实例并发启动时必须串行化 reload + Client 构造。
+_ws_startup_lock = threading.Lock()
+
 logger = logging.getLogger(__name__)
 
 # 延迟导入
@@ -131,6 +135,13 @@ class FeishuAdapter(ChannelAdapter):
         self._ws_loop: asyncio.AbstractEventLoop | None = None
         self._bot_open_id: str | None = None
 
+        # 消息去重：防止 WebSocket 重连时重复投递
+        self._seen_message_ids: set[str] = set()
+        self._seen_message_ids_max = 500
+
+        # CardKit 流式更新：card_id → sequence（必须严格递增）
+        self._card_sequences: dict[str, int] = {}
+
     async def start(self) -> None:
         """
         启动飞书客户端并自动建立 WebSocket 长连接
@@ -214,23 +225,33 @@ class FeishuAdapter(ChannelAdapter):
             asyncio.set_event_loop(new_loop)
             self._ws_loop = new_loop
 
-            # 覆盖 SDK ws 模块的全局 loop
-            ws_client_mod.loop = new_loop
-            importlib.reload(ws_client_mod)
-            ws_client_mod.loop = new_loop
+            # 串行化：多实例共享模块级 loop，必须加锁保证 reload + Client 构造原子性
+            with _ws_startup_lock:
+                ws_client_mod.loop = new_loop
+                importlib.reload(ws_client_mod)
+                ws_client_mod.loop = new_loop
 
+                try:
+                    WsClient = ws_client_mod.Client
+                    ws_client = WsClient(
+                        self.config.app_id,
+                        self.config.app_secret,
+                        event_handler=self._event_dispatcher,
+                        log_level=getattr(
+                            lark_oapi.LogLevel, self.config.log_level, lark_oapi.LogLevel.INFO
+                        ),
+                    )
+                except Exception as e:
+                    if self._running:
+                        logger.error(f"Feishu WebSocket init error: {e}", exc_info=True)
+                    self._ws_loop = None
+                    with contextlib.suppress(Exception):
+                        new_loop.close()
+                    return
+
+            self._ws_client = ws_client
             try:
-                WsClient = ws_client_mod.Client
-                ws_client = WsClient(
-                    self.config.app_id,
-                    self.config.app_secret,
-                    event_handler=self._event_dispatcher,
-                    log_level=getattr(
-                        lark_oapi.LogLevel, self.config.log_level, lark_oapi.LogLevel.INFO
-                    ),
-                )
-                self._ws_client = ws_client
-                ws_client.start()  # 阻塞运行于该线程
+                ws_client.start()  # 阻塞运行于该线程（锁已释放）
             except Exception as e:
                 if self._running:
                     logger.error(f"Feishu WebSocket error: {e}", exc_info=True)
@@ -287,6 +308,19 @@ class FeishuAdapter(ChannelAdapter):
             event = data.event
             message = event.message
             sender = event.sender
+
+            # 消息去重（WebSocket 重连可能重复投递）
+            msg_id = message.message_id
+            if msg_id in self._seen_message_ids:
+                logger.debug(f"Feishu: duplicate message ignored: {msg_id}")
+                return
+            self._seen_message_ids.add(msg_id)
+            if len(self._seen_message_ids) > self._seen_message_ids_max:
+                # 淘汰最早的一半
+                to_remove = len(self._seen_message_ids) - self._seen_message_ids_max // 2
+                it = iter(self._seen_message_ids)
+                for _ in range(to_remove):
+                    self._seen_message_ids.discard(next(it))
 
             logger.info(f"Feishu: received message from {sender.sender_id.open_id}")
 
@@ -357,9 +391,41 @@ class FeishuAdapter(ChannelAdapter):
         """机器人进入会话事件，仅需静默消费以避免 SDK 报错"""
         pass
 
+    async def add_reaction(self, message_id: str, emoji_type: str = "THUMBSUP") -> None:
+        """给消息添加表情回复，用作「已读」回执替代"""
+        if not self._client:
+            return
+        try:
+            _import_lark()
+            request = (
+                lark_oapi.api.im.v1.CreateMessageReactionRequest.builder()
+                .message_id(message_id)
+                .request_body(
+                    lark_oapi.api.im.v1.CreateMessageReactionRequestBody.builder()
+                    .reaction_type(
+                        lark_oapi.api.im.v1.Emoji.builder()
+                        .emoji_type(emoji_type)
+                        .build()
+                    )
+                    .build()
+                )
+                .build()
+            )
+            resp = await asyncio.get_event_loop().run_in_executor(
+                None, lambda: self._client.im.v1.message_reaction.create(request)
+            )
+            if not resp.success():
+                logger.debug(f"Add reaction failed: {resp.code} {resp.msg}")
+        except Exception as e:
+            logger.debug(f"Add reaction failed for {message_id}: {e}")
+
     async def _handle_message_async(self, msg_dict: dict, sender_dict: dict) -> None:
         """异步处理消息"""
         try:
+            msg_id = msg_dict.get("message_id")
+            if msg_id:
+                asyncio.create_task(self.add_reaction(msg_id))
+
             unified = await self._convert_message(msg_dict, sender_dict)
             self._log_message(unified)
             await self._emit_message(unified)
@@ -433,6 +499,10 @@ class FeishuAdapter(ChannelAdapter):
         try:
             message = event.get("message", {})
             sender = event.get("sender", {})
+
+            msg_id = message.get("message_id")
+            if msg_id:
+                asyncio.create_task(self.add_reaction(msg_id))
 
             unified = await self._convert_message(message, sender)
             self._log_message(unified)
@@ -1070,3 +1140,202 @@ class FeishuAdapter(ChannelAdapter):
             },
             "elements": elements,
         }
+
+    # ==================== CardKit 流式更新 ====================
+
+    def _next_card_seq(self, card_id: str) -> int:
+        seq = self._card_sequences.get(card_id, 0) + 1
+        self._card_sequences[card_id] = seq
+        return seq
+
+    async def create_card_entity(
+        self,
+        content: str,
+        title: str = "OpenAkita",
+        *,
+        streaming: bool = True,
+    ) -> str | None:
+        """创建 CardKit 卡片实体，返回 card_id。
+
+        Args:
+            content: 初始 Markdown 内容（如"正在思考..."）
+            title: 卡片标题
+            streaming: 是否启用流式更新优化模式
+
+        Returns:
+            card_id 或 None（创建失败时）
+        """
+        if not self._client:
+            return None
+
+        _import_lark()
+        try:
+            from lark_oapi.api.cardkit.v1 import CreateCardRequest, CreateCardRequestBody
+
+            card_json: dict[str, Any] = {
+                "schema": "2.0",
+                "config": {
+                    "update_multi": True,
+                    "style": {"text_size": "normal"},
+                },
+                "header": {
+                    "title": {"tag": "plain_text", "content": title},
+                    "template": "blue",
+                    "ud_icon": {"tag": "standard_icon", "token": "chat-robot_outlined"},
+                },
+                "body": {
+                    "elements": [{"tag": "markdown", "content": content}],
+                },
+            }
+            if streaming:
+                card_json["config"]["streaming_mode"] = True
+
+            request = (
+                CreateCardRequest.builder()
+                .request_body(
+                    CreateCardRequestBody.builder()
+                    .type("card_json")
+                    .data(json.dumps(card_json))
+                    .build()
+                )
+                .build()
+            )
+
+            response = await asyncio.get_event_loop().run_in_executor(
+                None, lambda: self._client.cardkit.v1.card.create(request)
+            )
+
+            if not response.success():
+                logger.warning(f"CardKit create failed: {response.code} {response.msg}")
+                return None
+
+            card_id = response.data.card_id
+            self._card_sequences[card_id] = 0
+            logger.info(f"CardKit card entity created: {card_id}")
+            return card_id
+
+        except Exception as e:
+            logger.warning(f"CardKit create_card_entity error: {e}")
+            return None
+
+    async def update_card_content(
+        self, card_id: str, content: str, *, title: str | None = None
+    ) -> bool:
+        """更新 CardKit 卡片实体的内容（用于流式输出）。
+
+        Args:
+            card_id: 卡片实体 ID
+            content: 新的 Markdown 内容
+            title: 可选，更新标题
+
+        Returns:
+            是否成功
+        """
+        if not self._client:
+            return False
+
+        _import_lark()
+        try:
+            from lark_oapi.api.cardkit.v1 import (
+                Card,
+                UpdateCardRequest,
+                UpdateCardRequestBody,
+            )
+
+            card_json: dict[str, Any] = {
+                "schema": "2.0",
+                "config": {"update_multi": True},
+                "body": {
+                    "elements": [{"tag": "markdown", "content": content}],
+                },
+            }
+            if title:
+                card_json["header"] = {
+                    "title": {"tag": "plain_text", "content": title},
+                    "template": "blue",
+                    "ud_icon": {"tag": "standard_icon", "token": "chat-robot_outlined"},
+                }
+
+            card_obj = Card.builder().type("card_json").data(json.dumps(card_json)).build()
+            seq = self._next_card_seq(card_id)
+
+            request = (
+                UpdateCardRequest.builder()
+                .card_id(card_id)
+                .request_body(
+                    UpdateCardRequestBody.builder()
+                    .card(card_obj)
+                    .sequence(seq)
+                    .build()
+                )
+                .build()
+            )
+
+            response = await asyncio.get_event_loop().run_in_executor(
+                None, lambda: self._client.cardkit.v1.card.update(request)
+            )
+
+            if not response.success():
+                logger.warning(
+                    f"CardKit update failed (card={card_id}, seq={seq}): "
+                    f"{response.code} {response.msg}"
+                )
+                return False
+            return True
+
+        except Exception as e:
+            logger.warning(f"CardKit update error: {e}")
+            return False
+
+    async def send_card_by_id(self, chat_id: str, card_id: str) -> str:
+        """发送关联 CardKit 卡片实体的消息。
+
+        Args:
+            chat_id: 聊天 ID
+            card_id: CardKit 卡片实体 ID
+
+        Returns:
+            消息 ID
+        """
+        if not self._client:
+            raise RuntimeError("Feishu client not started")
+
+        content = json.dumps({
+            "type": "card_id",
+            "data": {"card_id": card_id},
+        })
+
+        request = (
+            lark_oapi.api.im.v1.CreateMessageRequest.builder()
+            .receive_id_type("chat_id")
+            .request_body(
+                lark_oapi.api.im.v1.CreateMessageRequestBody.builder()
+                .receive_id(chat_id)
+                .msg_type("interactive")
+                .content(content)
+                .build()
+            )
+            .build()
+        )
+
+        response = await asyncio.get_event_loop().run_in_executor(
+            None, lambda: self._client.im.v1.message.create(request)
+        )
+
+        if not response.success():
+            raise RuntimeError(f"Failed to send card_id message: {response.msg}")
+
+        return response.data.message_id
+
+    async def send_typing(self, chat_id: str) -> None:
+        """飞书「正在思考」占位卡片。
+
+        由 gateway 在 Agent 处理期间调用。首次调用时创建 CardKit 卡片实体
+        并发送占位消息，后续调用更新卡片内容为动画点。
+        """
+        pass
+
+    @property
+    def supports_streaming(self) -> bool:
+        """标识此适配器支持流式卡片更新。"""
+        return True

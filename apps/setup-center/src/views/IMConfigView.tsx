@@ -5,6 +5,30 @@ import type { EnvMap } from "../types";
 import { envGet, envSet } from "../utils";
 import { copyToClipboard } from "../utils/clipboard";
 
+const FEISHU_SCOPE_TEMPLATE = JSON.stringify({
+  scopes: {
+    tenant: [
+      "im:message:send_as_bot",
+      "im:message:send_sys_msg",
+      "aily:file:read",
+      "aily:file:write",
+      "cardkit:card:read",
+      "cardkit:card:write",
+      "cardkit:template:read",
+      "corehr:file:download",
+      "im:app_feed_card:write",
+      "im:message",
+      "im:message.group_at_msg:readonly",
+      "im:resource",
+    ],
+    user: [
+      "cardkit:card:read",
+      "cardkit:card:write",
+      "cardkit:template:read",
+    ],
+  },
+}, null, 2);
+
 type IMConfigViewProps = {
   envDraft: EnvMap;
   setEnvDraft: (updater: (prev: EnvMap) => EnvMap) => void;
@@ -56,6 +80,21 @@ export function IMConfigView(props: IMConfigViewProps) {
         <>
           <FT k="FEISHU_APP_ID" label="App ID" />
           <FT k="FEISHU_APP_SECRET" label="App Secret" type="password" />
+          <div style={{ marginTop: 6, padding: "10px 12px", background: "var(--bg2)", borderRadius: 8, fontSize: 12, lineHeight: 1.7 }}>
+            <div style={{ fontWeight: 600, marginBottom: 4 }}>{t("config.imFeishuPermTitle")}</div>
+            <div style={{ color: "var(--text3)" }}>{t("config.imFeishuPermHint")}</div>
+            <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+              <button className="btnSmall" style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11 }}
+                onClick={() => {
+                  navigator.clipboard.writeText(FEISHU_SCOPE_TEMPLATE);
+                  setNotice(t("config.imFeishuPermCopied"));
+                }}
+              ><IconClipboard size={12} />{t("config.imFeishuPermCopyBtn")}</button>
+              <button className="btnSmall" style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11 }}
+                onClick={() => { navigator.clipboard.writeText("https://open.feishu.cn/app"); setNotice(t("config.imDocCopied")); }}
+              ><IconBook size={12} />{t("config.imFeishuPermConsole")}</button>
+            </div>
+          </div>
         </>
       ),
     },

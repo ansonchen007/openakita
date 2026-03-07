@@ -2,8 +2,8 @@
 
 import logging
 from datetime import datetime, timedelta
-from fastapi import APIRouter, HTTPException, Request
 
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
@@ -11,6 +11,59 @@ router = APIRouter()
 
 # Valid IM bot types
 VALID_BOT_TYPES = frozenset({"feishu", "telegram", "dingtalk", "wework", "onebot", "qqbot"})
+
+
+def _bot_channel_name(bot: dict) -> str:
+    """Derive the channel_name for a bot config dict."""
+    bot_type = bot.get("type", "")
+    bot_id = bot.get("id", "")
+    return f"{bot_type}:{bot_id}" if bot_id else bot_type
+
+
+async def _hot_register_bot(request: Request, bot: dict) -> None:
+    """Create an adapter and register it in the running gateway (if available)."""
+    gateway = getattr(request.app.state, "gateway", None)
+    if gateway is None:
+        logger.info("[Agents API] No running gateway, bot will activate on next restart")
+        return
+    try:
+        from openakita.main import _create_bot_adapter
+
+        channel_name = _bot_channel_name(bot)
+        bot_id = bot.get("id", "")
+        agent_id = bot.get("agent_profile_id", "default")
+        adapter = _create_bot_adapter(
+            bot.get("type", ""), bot.get("credentials", {}),
+            channel_name=channel_name, bot_id=bot_id, agent_profile_id=agent_id,
+        )
+        if adapter:
+            await gateway.register_adapter(adapter)
+            logger.info(f"[Agents API] Hot-registered adapter: {channel_name}")
+    except Exception as e:
+        logger.warning(f"[Agents API] Hot-register failed (will activate on restart): {e}")
+
+
+async def _hot_unregister_bot(request: Request, bot: dict) -> None:
+    """Stop and remove an adapter from the running gateway."""
+    gateway = getattr(request.app.state, "gateway", None)
+    if gateway is None:
+        return
+    channel_name = _bot_channel_name(bot)
+    adapters = getattr(gateway, "_adapters", {})
+    adapter = adapters.pop(channel_name, None)
+    if adapter:
+        try:
+            await adapter.stop()
+            logger.info(f"[Agents API] Hot-unregistered adapter: {channel_name}")
+        except Exception as e:
+            logger.warning(f"[Agents API] Failed to stop adapter {channel_name}: {e}")
+
+
+async def _hot_update_bot(request: Request, bot: dict) -> None:
+    """Replace a running adapter with a new one (stop old → register new)."""
+    await _hot_unregister_bot(request, bot)
+    if bot.get("enabled", True):
+        await _hot_register_bot(request, bot)
 
 
 # ─── Pydantic models ─────────────────────────────────────────────────────
@@ -75,7 +128,7 @@ async def list_bots():
 
 
 @router.post("/api/agents/bots")
-async def create_bot(body: BotCreateRequest):
+async def create_bot(body: BotCreateRequest, request: Request):
     """Add a new bot. Validates id uniqueness and type."""
     from openakita.config import runtime_state, settings
 
@@ -104,11 +157,16 @@ async def create_bot(body: BotCreateRequest):
     settings.im_bots = list(settings.im_bots) + [bot]
     runtime_state.save()
     logger.info(f"[Agents API] Created bot: {body.id}")
+
+    # 热注册：如果 gateway 正在运行且 bot 已启用，立即创建并注册 adapter
+    if body.enabled:
+        await _hot_register_bot(request, bot)
+
     return {"status": "ok", "bot": bot}
 
 
 @router.put("/api/agents/bots/{bot_id}")
-async def update_bot(bot_id: str, body: BotUpdateRequest):
+async def update_bot(bot_id: str, body: BotUpdateRequest, request: Request):
     """Update an existing bot. Partial update (only provided fields are changed)."""
     from openakita.config import runtime_state, settings
 
@@ -131,15 +189,20 @@ async def update_bot(bot_id: str, body: BotUpdateRequest):
     settings.im_bots = bots
     runtime_state.save()
     logger.info(f"[Agents API] Updated bot: {bot_id}")
+
+    # 热更新：停掉旧 adapter 并重新注册（凭据或绑定可能变化）
+    await _hot_update_bot(request, bot)
+
     return {"status": "ok", "bot": bot}
 
 
 @router.delete("/api/agents/bots/{bot_id}")
-async def delete_bot(bot_id: str):
+async def delete_bot(bot_id: str, request: Request):
     """Remove a bot."""
     from openakita.config import runtime_state, settings
 
     bots = list(settings.im_bots)
+    target = next((b for b in bots if isinstance(b, dict) and b.get("id") == bot_id), None)
     new_bots = [b for b in bots if isinstance(b, dict) and b.get("id") != bot_id]
     if len(new_bots) == len(bots):
         raise HTTPException(status_code=404, detail=f"bot '{bot_id}' not found")
@@ -147,11 +210,16 @@ async def delete_bot(bot_id: str):
     settings.im_bots = new_bots
     runtime_state.save()
     logger.info(f"[Agents API] Deleted bot: {bot_id}")
+
+    # 热注销：停止并移除运行中的 adapter
+    if target:
+        await _hot_unregister_bot(request, target)
+
     return {"status": "ok"}
 
 
 @router.post("/api/agents/bots/{bot_id}/toggle")
-async def toggle_bot(bot_id: str, body: BotToggleRequest):
+async def toggle_bot(bot_id: str, body: BotToggleRequest, request: Request):
     """Enable or disable a bot."""
     from openakita.config import runtime_state, settings
 
@@ -166,6 +234,13 @@ async def toggle_bot(bot_id: str, body: BotToggleRequest):
     settings.im_bots = bots
     runtime_state.save()
     logger.info(f"[Agents API] Toggled bot {bot_id}: enabled={body.enabled}")
+
+    # 热切换：enable 时注册，disable 时注销
+    if body.enabled:
+        await _hot_register_bot(request, bot)
+    else:
+        await _hot_unregister_bot(request, bot)
+
     return {"status": "ok", "bot": bot}
 
 
