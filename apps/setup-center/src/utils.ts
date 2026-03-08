@@ -1,6 +1,5 @@
 // ─── Shared utility functions for Setup Center ───
 
-import { confirm as tauriConfirm } from "@tauri-apps/plugin-dialog";
 import type { EnvMap } from "./types";
 
 /**
@@ -11,7 +10,8 @@ import type { EnvMap } from "./types";
  */
 export async function askConfirm(message: string): Promise<boolean> {
   if (typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) {
-    return tauriConfirm(message, { title: "OpenAkita", kind: "info" });
+    const { confirm } = await import("@tauri-apps/plugin-dialog");
+    return confirm(message, { title: "OpenAkita", kind: "info" });
   }
   return window.confirm(message);
 }
