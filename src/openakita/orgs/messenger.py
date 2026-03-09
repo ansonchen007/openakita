@@ -253,6 +253,13 @@ class OrgMessenger:
                 await self._message_handlers[msg.to_node](msg)
             except Exception as e:
                 logger.error(f"[Messenger] Handler error for {msg.to_node}: {e}")
+            finally:
+                if mailbox:
+                    try:
+                        mailbox._queue.get_nowait()
+                        mailbox._queue.task_done()
+                    except Exception:
+                        pass
 
         return True
 
@@ -355,6 +362,13 @@ class OrgMessenger:
                     await self._message_handlers[nid](copy)
                 except Exception as e:
                     logger.error(f"[Messenger] Broadcast handler error for {nid}: {e}")
+                finally:
+                    if mailbox:
+                        try:
+                            mailbox._queue.get_nowait()
+                            mailbox._queue.task_done()
+                        except Exception:
+                            pass
 
         self._log_message(msg)
         return True

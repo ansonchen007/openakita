@@ -808,6 +808,8 @@ export function OrgEditorView({
             pushActivity(ev, d);
           } else if (ev === "org:task_complete") {
             pushActivity(ev, d);
+          } else if (ev === "org:meeting_started" || ev === "org:meeting_round" || ev === "org:meeting_speak" || ev === "org:meeting_completed") {
+            pushActivity(ev, d);
           }
         } catch { /* ignore parse errors */ }
       };
@@ -1731,6 +1733,18 @@ export function OrgEditorView({
                   } else if (ev.event === "org:task_complete") {
                     icon = "✔"; color = "#22c55e";
                     text = `${nodeLabel(ev.data.node_id)} 完成任务`;
+                  } else if (ev.event === "org:meeting_started") {
+                    icon = "🏛"; color = "#6366f1";
+                    text = `会议开始：${ev.data.topic?.slice(0, 40) || ""}（${ev.data.participants?.length || 0} 人参会）`;
+                  } else if (ev.event === "org:meeting_round") {
+                    icon = "🔄"; color = "#6366f1";
+                    text = `会议进入第 ${ev.data.round}/${ev.data.total_rounds} 轮`;
+                  } else if (ev.event === "org:meeting_speak") {
+                    icon = "🎤"; color = "#8b5cf6";
+                    text = `${ev.data.role_title || nodeLabel(ev.data.node_id)} 发言：${ev.data.content?.slice(0, 60) || ""}`;
+                  } else if (ev.event === "org:meeting_completed") {
+                    icon = "✅"; color = "#22c55e";
+                    text = `会议结束：${ev.data.topic?.slice(0, 40) || ""}`;
                   } else if (ev.event === "org:node_status" && ev.data.status === "busy") {
                     icon = "⚡"; color = "var(--primary)";
                     text = `${nodeLabel(ev.data.node_id)} 开始执行`;

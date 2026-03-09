@@ -852,6 +852,9 @@ class OrgToolHandler:
                 memory_type=MemoryType.DECISION,
                 tags=["meeting"],
             )
+            await self._runtime._broadcast_ws("org:blackboard_update", {
+                "org_id": org_id, "node_id": node_id, "scope": "org",
+            })
 
         self._runtime.get_event_store(org_id).emit(
             "meeting_completed", node_id,
@@ -860,6 +863,7 @@ class OrgToolHandler:
 
         await self._runtime._broadcast_ws("org:meeting_completed", {
             "org_id": org_id, "topic": topic,
+            "conclusion": (conclusion or "")[:300],
         })
 
         return "\n".join(meeting_record)
@@ -874,8 +878,6 @@ class OrgToolHandler:
         prev_round_summary: str,
     ) -> str:
         """轻量会议发言：直接 LLM 单次调用，不走完整 Agent/ReAct 循环。"""
-        from openakita.llm.client import chat as llm_chat
-
         identity = self._runtime._get_identity(org.id)
         role_prompt = ""
         if identity:
@@ -888,8 +890,9 @@ class OrgToolHandler:
         context_parts = [
             f"你是「{org.name}」的 {node.role_title}（{node.department or ''}）。",
         ]
-        if node.responsibilities:
-            context_parts.append(f"你的职责: {', '.join(node.responsibilities[:3])}")
+        role_goal = getattr(node, "role_goal", "") or ""
+        if role_goal:
+            context_parts.append(f"你的目标: {role_goal[:200]}")
         if role_prompt:
             context_parts.append(role_prompt)
 
@@ -905,11 +908,11 @@ class OrgToolHandler:
             "直接表达核心观点，不要客套寒暄。"
         )
 
-        messages = [{"role": "user", "content": "\n".join(user_parts)}]
         try:
-            resp = await llm_chat(messages, system=system_prompt, max_tokens=400)
-            text = resp.text or "(无内容)"
-            return text[:500]
+            text = await self._llm_simple_call(
+                system_prompt, "\n".join(user_parts), max_tokens=400,
+            )
+            return text[:500] if text else "(无内容)"
         except Exception as e:
             logger.error(f"[Meeting] LLM call failed for {node.id}: {e}")
             return f"(发言失败: {e})"
@@ -918,23 +921,38 @@ class OrgToolHandler:
         self, org_id: str, topic: str, meeting_record: list[str],
     ) -> str:
         """用 LLM 生成会议结论。"""
-        from openakita.llm.client import chat as llm_chat
-
         full_record = "\n".join(meeting_record)
         if len(full_record) > 3000:
             full_record = full_record[:3000] + "\n...(已截断)"
 
-        messages = [{"role": "user", "content": (
+        user_msg = (
             f"以下是关于「{topic}」的会议讨论记录:\n\n{full_record}\n\n"
             "请总结会议结论，包括: 1) 达成的共识 2) 待决事项 3) 行动计划。"
             "用 150-300 字简洁总结。"
-        )}]
+        )
         try:
-            resp = await llm_chat(messages, system="你是一位专业的会议记录员。", max_tokens=500)
-            return (resp.text or "")[:600]
+            text = await self._llm_simple_call(
+                "你是一位专业的会议记录员。", user_msg, max_tokens=500,
+            )
+            return (text or "")[:600]
         except Exception as e:
             logger.error(f"[Meeting] Summary LLM failed: {e}")
             return ""
+
+    async def _llm_simple_call(
+        self, system: str, user_content: str, max_tokens: int = 400,
+    ) -> str:
+        """统一的轻量 LLM 调用：兼容 Message 类型和 dict 类型 response。"""
+        from openakita.llm.client import chat as llm_chat
+        from openakita.llm.types import Message
+
+        messages = [Message(role="user", content=user_content)]
+        resp = await llm_chat(messages, system=system, max_tokens=max_tokens)
+        if hasattr(resp, "text"):
+            return resp.text or ""
+        if isinstance(resp, dict):
+            return resp.get("text", "") or str(resp.get("content", ""))
+        return str(resp)
 
     # ------------------------------------------------------------------
     # Schedule tools
