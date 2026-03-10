@@ -18,8 +18,7 @@ Usage:
 
     # With CDN URL rewriting
     python scripts/backfill_versions.py --repo openakita/openakita --output-dir ./backfill-out \\
-        --cdn-base-url https://dl-cn.openakita.ai \\
-        --cdn-fallback-url https://dl.openakita.ai
+        --cdn-base-url https://dl-cn.openakita.ai
 
     # Upload to OSS after review
     ossutil cp -r ./backfill-out/api/ oss://{bucket}/api/ -f
@@ -97,7 +96,6 @@ def main():
     parser.add_argument("--repo", default=DEFAULT_REPO)
     parser.add_argument("--output-dir", required=True, help="Output directory (e.g. ./backfill-out)")
     parser.add_argument("--cdn-base-url", default=os.environ.get("CDN_BASE_URL", ""))
-    parser.add_argument("--cdn-fallback-url", default=os.environ.get("CDN_FALLBACK_URL", ""))
     parser.add_argument(
         "--channel-override", default="",
         help="Force all releases to a specific channel (for manual correction)"
@@ -107,7 +105,6 @@ def main():
 
     token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
     cdn_base = args.cdn_base_url.strip()
-    cdn_fallback = args.cdn_fallback_url.strip()
     out_dir = Path(args.output_dir) / "api"
 
     releases = fetch_all_releases(args.repo, token)
@@ -148,8 +145,8 @@ def main():
             continue
 
         # Build manifest
-        updater = build_updater_platforms(assets, cdn_base, cdn_fallback, tag)
-        downloads = build_grouped_downloads(assets, cdn_base, cdn_fallback, tag)
+        updater = build_updater_platforms(assets, cdn_base, tag)
+        downloads = build_grouped_downloads(assets, cdn_base, tag)
 
         manifest = {
             "version": version,

@@ -19,7 +19,6 @@ Usage:
     python scripts/generate_release_manifest.py \\
         --tag v1.25.9 --channel stable --output-dir ./out \\
         --cdn-base-url https://dl-cn.openakita.ai \\
-        --cdn-fallback-url https://dl.openakita.ai \\
         --existing-index ./existing-versions.json
 """
 
@@ -208,14 +207,12 @@ def rewrite_url(github_url: str, cdn_base: str, tag: str) -> str:
     return f"{cdn_base.rstrip('/')}/{tag}/{filename}"
 
 
-def make_download_url(asset: dict, cdn_base: str, cdn_fallback: str, tag: str) -> dict:
+def make_download_url(asset: dict, cdn_base: str, tag: str) -> dict:
     github_url = asset["browser_download_url"]
     url = rewrite_url(github_url, cdn_base, tag) if cdn_base else github_url
     entry: dict = {"url": url}
     if cdn_base:
         entry["github_url"] = github_url
-    if cdn_fallback:
-        entry["fallback_url"] = rewrite_url(github_url, cdn_fallback, tag)
     return entry
 
 
@@ -238,7 +235,7 @@ def parse_semver(v: str) -> tuple:
 # ---------------------------------------------------------------------------
 
 def build_updater_platforms(
-    assets: list[dict], cdn_base: str, cdn_fallback: str, tag: str
+    assets: list[dict], cdn_base: str, tag: str
 ) -> dict:
     platforms = {}
     for platform_key, config in UPDATER_PATTERNS.items():
@@ -254,14 +251,14 @@ def build_updater_platforms(
         if not sig:
             print(f"  updater.{platform_key}: {asset['name']} — no .sig, skipping")
             continue
-        urls = make_download_url(asset, cdn_base, cdn_fallback, tag)
+        urls = make_download_url(asset, cdn_base, tag)
         platforms[platform_key] = {"signature": sig, **urls}
         print(f"  updater.{platform_key}: {asset['name']} ✓")
     return platforms
 
 
 def build_grouped_downloads(
-    assets: list[dict], cdn_base: str, cdn_fallback: str, tag: str
+    assets: list[dict], cdn_base: str, tag: str
 ) -> dict[str, list[dict]]:
     downloads: dict[str, list[dict]] = {}
     for platform, patterns in PLATFORM_DOWNLOADS.items():
@@ -270,7 +267,7 @@ def build_grouped_downloads(
             asset = find_asset(assets, pat)
             if not asset:
                 continue
-            urls = make_download_url(asset, cdn_base, cdn_fallback, tag)
+            urls = make_download_url(asset, cdn_base, tag)
             items.append({
                 "key": pat["key"],
                 "nickname": pat["nickname"],
@@ -289,7 +286,6 @@ def generate_manifest(
     tag: str,
     channel: str,
     cdn_base: str,
-    cdn_fallback: str,
 ) -> dict:
     version = tag.lstrip("v")
     assets = release.get("assets", [])
@@ -298,8 +294,8 @@ def generate_manifest(
 
     print(f"Release {tag}: {len(assets)} assets")
 
-    updater = build_updater_platforms(assets, cdn_base, cdn_fallback, tag)
-    downloads = build_grouped_downloads(assets, cdn_base, cdn_fallback, tag)
+    updater = build_updater_platforms(assets, cdn_base, tag)
+    downloads = build_grouped_downloads(assets, cdn_base, tag)
 
     return {
         "version": version,
@@ -379,7 +375,6 @@ def main():
     )
     parser.add_argument("--repo", default=DEFAULT_REPO)
     parser.add_argument("--cdn-base-url", default=os.environ.get("CDN_BASE_URL", ""))
-    parser.add_argument("--cdn-fallback-url", default=os.environ.get("CDN_FALLBACK_URL", ""))
     parser.add_argument(
         "--existing-index", default="",
         help="Path to existing versions.json to merge into (downloaded from OSS)"
@@ -391,7 +386,6 @@ def main():
     args = parser.parse_args()
 
     cdn_base = args.cdn_base_url.strip()
-    cdn_fallback = args.cdn_fallback_url.strip()
     token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
     tag = args.tag
     channel = args.channel
@@ -406,7 +400,7 @@ def main():
         print(f"Error fetching release: {e}", file=sys.stderr)
         sys.exit(1)
 
-    manifest = generate_manifest(release, tag, channel, cdn_base, cdn_fallback)
+    manifest = generate_manifest(release, tag, channel, cdn_base)
     version = manifest["version"]
     available_platforms = list(manifest["downloads"].keys())
 

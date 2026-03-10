@@ -2,7 +2,7 @@ name: Publish Release
 
 # 发布流程（构建自动，渠道手动）：
 #   1. 推送 tag → release.yml / mobile.yml 自动构建，产物上传到 draft Release
-#   2. 所有构建完成后 → 手动运行此工作流，选择 tag + 渠道 → 发布 + 生成 manifest + 上传 OSS/R2
+#   2. 所有构建完成后 → 手动运行此工作流，选择 tag + 渠道 → 发布 + 生成 manifest + 上传 OSS
 #
 # 如果移动端构建晚于桌面端完成，可在全部构建完成后再运行此工作流，
 # 或先运行一次（仅含桌面端），待移动端完成后再运行一次（manifest 会自动包含新增资产）。
@@ -35,7 +35,6 @@ jobs:
       contents: write
     env:
       HAS_WEBSITE_TOKEN: ${{ secrets.WEBSITE_DEPLOY_TOKEN }}
-      HAS_R2_KEY: ${{ secrets.R2_ACCESS_KEY_ID }}
       HAS_OSS_KEY: ${{ secrets.ALIYUN_OSS_ACCESS_KEY_ID }}
     steps:
       - uses: actions/checkout@v4
@@ -97,11 +96,6 @@ jobs:
           CDN_ARGS=""
           if [ -n "${HAS_OSS_KEY}" ]; then
             CDN_ARGS="--cdn-base-url https://${{ secrets.ALIYUN_OSS_CDN_DOMAIN }}"
-            if [ -n "${HAS_R2_KEY}" ]; then
-              CDN_ARGS="${CDN_ARGS} --cdn-fallback-url https://dl-openakita.fzstack.com"
-            fi
-          elif [ -n "${HAS_R2_KEY}" ]; then
-            CDN_ARGS="--cdn-base-url https://dl-openakita.fzstack.com"
           fi
 
           EXISTING_INDEX_ARGS=""
@@ -239,34 +233,6 @@ jobs:
             ossutil cp "${MD}/versions.json" "oss://${OSS_BUCKET}/api/versions.json" -f --meta "${CC}"
             echo "✅ Uploaded api/versions.json"
           fi
-
-      # ── 上传安装包到 Cloudflare R2（国际备用） ──
-      - name: Upload release assets to Cloudflare R2
-        if: ${{ env.HAS_R2_KEY != '' }}
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          R2_ENDPOINT: https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
-          R2_BUCKET: openakita-releases
-        run: |
-          set -euo pipefail
-          pip install -q awscli
-
-          TAG="${{ inputs.tag }}"
-          echo "Uploading release assets to R2 for ${TAG}..."
-
-          ASSET_COUNT=0
-          for file in /tmp/release-assets/*; do
-            [ -f "$file" ] || continue
-            FILENAME="$(basename "$file")"
-            echo "  Uploading: ${FILENAME}"
-            aws s3 cp "$file" "s3://${R2_BUCKET}/${TAG}/${FILENAME}" \
-              --endpoint-url "${R2_ENDPOINT}" \
-              --no-progress
-            ASSET_COUNT=$((ASSET_COUNT + 1))
-          done
-
-          echo "Uploaded ${ASSET_COUNT} asset(s) to R2 (${R2_BUCKET}/${TAG}/)"
 
       # ── 推送到官网仓库（回退方案，仅在未配置 OSS 时使用） ──
       - name: Push to website repo (fallback)
