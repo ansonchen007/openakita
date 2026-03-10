@@ -6,11 +6,11 @@ Generates per-version manifests and a versions.json index for all existing
 GitHub Releases. This is a one-time migration tool to populate the new
 download page data structure from historical releases.
 
-Channel detection heuristics (since old releases didn't follow the new flow):
-  - GitHub "latest" release  → stable
-  - Tag with -rc/-beta/-alpha suffix → pre-release
-  - GitHub prerelease=true (no suffix) → dev
-  - Otherwise → stable (if only one non-prerelease exists)
+Channel detection (four-tier priority):
+  1. Release Asset (release.json / pre-release.json) uploaded by CI
+  2. Release title badge "[稳定版]" / "[抢先版]" / "[开发版]"
+  3. release-channels.json config (tag minor version → channel mapping)
+  4. Heuristic fallback: "latest" → release, -rc/-beta/-alpha → pre-release, else → dev
 
 Usage:
     # Generate all manifests locally for review
@@ -79,20 +79,21 @@ def fetch_all_releases(repo: str, token: str | None = None) -> list[dict]:
     return releases
 
 
-CHANNEL_NAMES = {"stable", "pre-release", "dev"}
+CHANNEL_NAMES = {"release", "pre-release", "dev"}
 
 TITLE_CHANNEL_MAP = {
-    "稳定版": "stable",
+    "稳定版": "release",
     "抢先版": "pre-release",
     "开发版": "dev",
 }
 
 
 def detect_channel(release: dict) -> str:
-    """Detect release channel with three-tier priority:
-    1. Manifest asset (stable.json / pre-release.json / dev.json) uploaded by CI
+    """Detect release channel with four-tier priority:
+    1. Manifest asset (release.json / pre-release.json / dev.json) uploaded by CI
     2. Title badge like "v1.25.9 [抢先版]" set by CI
-    3. Heuristic fallback for old releases without CI metadata
+    3. release-channels.json config (tag minor version → channel mapping)
+    4. Heuristic fallback for old releases without CI metadata
     """
     # Priority 1: check for channel manifest asset uploaded by publish-release.yml
     assets = release.get("assets", [])
@@ -108,16 +109,40 @@ def detect_channel(release: dict) -> str:
         if label in title:
             return channel
 
-    # Priority 3: heuristic fallback (old releases without CI metadata)
+    # Priority 3: infer from release-channels.json config if available
     tag = release.get("tag_name", "")
+    config = release.get("_channel_config")
+    if config:
+        version = tag.lstrip("v")
+        parts = version.split(".")
+        if len(parts) >= 2:
+            minor = f"{parts[0]}.{parts[1]}"
+            if minor == config.get("release", ""):
+                return "release"
+            if minor == config.get("pre-release", ""):
+                return "pre-release"
+
+    # Priority 4: heuristic fallback (old releases without CI metadata or config)
     is_prerelease = release.get("prerelease", False)
     is_latest = release.get("is_the_latest", False)
 
     if PRE_RELEASE_SUFFIX.search(tag):
         return "pre-release"
     if is_latest or (not is_prerelease and not release.get("draft", False)):
-        return "stable"
+        return "release"
     return "dev"
+
+
+def load_channel_config(path: str | None) -> dict | None:
+    """Load .github/release-channels.json if available."""
+    if path and os.path.exists(path):
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    default_path = Path(__file__).resolve().parent.parent / ".github" / "release-channels.json"
+    if default_path.exists():
+        with open(default_path, encoding="utf-8") as f:
+            return json.load(f)
+    return None
 
 
 def main():
@@ -125,6 +150,10 @@ def main():
     parser.add_argument("--repo", default=DEFAULT_REPO)
     parser.add_argument("--output-dir", required=True, help="Output directory (e.g. ./backfill-out)")
     parser.add_argument("--cdn-base-url", default=os.environ.get("CDN_BASE_URL", ""))
+    parser.add_argument(
+        "--channel-config", default="",
+        help="Path to release-channels.json (auto-detected from repo root if omitted)"
+    )
     parser.add_argument(
         "--channel-override", default="",
         help="Force all releases to a specific channel (for manual correction)"
@@ -135,6 +164,13 @@ def main():
     token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
     cdn_base = args.cdn_base_url.strip()
     out_dir = Path(args.output_dir) / "api"
+
+    channel_config = load_channel_config(args.channel_config or None)
+    if channel_config:
+        print(f"Channel config: release={channel_config.get('release')}, "
+              f"pre-release={channel_config.get('pre-release')}")
+    else:
+        print("No channel config found, using heuristic detection only")
 
     releases = fetch_all_releases(args.repo, token)
     print(f"\nFound {len(releases)} releases total\n")
@@ -151,9 +187,14 @@ def main():
         else:
             r["is_the_latest"] = False
 
+    # Inject channel config into each release for detect_channel to use
+    if channel_config:
+        for r in releases:
+            r["_channel_config"] = channel_config
+
     # Build index
-    index: dict = {"generated_at": "", "stable": [], "pre_release": [], "dev": []}
-    stats = {"stable": 0, "pre-release": 0, "dev": 0, "skipped": 0}
+    index: dict = {"generated_at": "", "release": [], "pre_release": [], "dev": []}
+    stats = {"release": 0, "pre-release": 0, "dev": 0, "skipped": 0}
 
     for release in releases:
         tag = release.get("tag_name", "")
@@ -208,7 +249,7 @@ def main():
         print(f"\nWritten index: {index_file}")
 
         # Write channel manifests for the latest of each channel
-        for channel_key in ["stable", "pre_release", "dev"]:
+        for channel_key in ["release", "pre_release", "dev"]:
             entries = index.get(channel_key, [])
             if not entries:
                 continue
@@ -223,8 +264,8 @@ def main():
                     json.dump(data, dst, indent=2, ensure_ascii=False)
                 print(f"Written channel: {channel_file} (v{latest_version})")
 
-                # Backward-compat release.json for stable
-                if channel_key == "stable":
+                # Tauri updater compat (latest.json) for release channel
+                if channel_key == "release":
                     compat = {
                         "version": data["version"],
                         "notes": data["notes"],
@@ -232,12 +273,12 @@ def main():
                         "platforms": data["platforms"],
                         "downloads": flatten_downloads(data["downloads"]),
                     }
-                    compat_file = out_dir / "release.json"
+                    compat_file = out_dir / "latest.json"
                     with open(compat_file, "w", encoding="utf-8") as f:
                         json.dump(compat, f, indent=2, ensure_ascii=False)
-                    print(f"Written compat: {compat_file}")
+                    print(f"Written Tauri updater compat: {compat_file}")
 
-    print(f"\nSummary: stable={stats.get('stable',0)}, "
+    print(f"\nSummary: release={stats.get('release',0)}, "
           f"pre-release={stats.get('pre-release',0)}, dev={stats.get('dev',0)}, "
           f"skipped={stats.get('skipped',0)}")
     if args.dry_run:

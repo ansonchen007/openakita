@@ -1,11 +1,14 @@
 name: Publish Release
 
-# 发布流程（构建自动，渠道手动）：
+# 发布流程（构建自动，渠道自动推断）：
 #   1. 推送 tag → release.yml / mobile.yml 自动构建，产物上传到 draft Release
-#   2. 所有构建完成后 → 手动运行此工作流，选择 tag + 渠道 → 发布 + 生成 manifest + 上传 OSS
+#   2. 所有构建完成后 → 手动运行此工作流，指定 tag → 自动推断渠道 → 发布 + 生成 manifest + 上传 OSS
 #
-# 如果移动端构建晚于桌面端完成，可在全部构建完成后再运行此工作流，
-# 或先运行一次（仅含桌面端），待移动端完成后再运行一次（manifest 会自动包含新增资产）。
+# 渠道推断规则（基于 .github/release-channels.json）：
+#   - tag 的 minor 版本匹配 release → "release" (稳定版)
+#   - tag 的 minor 版本匹配 pre-release → "pre-release" (抢先版)
+#   - 其他 → "dev" (开发版)
+#   - 可通过 channel 输入手动覆盖
 
 on:
   workflow_dispatch:
@@ -15,11 +18,13 @@ on:
         required: true
         type: string
       channel:
-        description: "发布渠道"
-        required: true
+        description: "发布渠道（默认自动推断，手动可覆盖）"
+        required: false
         type: choice
+        default: auto
         options:
-          - stable
+          - auto
+          - release
           - pre-release
           - dev
       force_update:
@@ -46,6 +51,41 @@ jobs:
         with:
           python-version: '3.11'
 
+      # ── 自动推断发布渠道 ──
+      - name: Detect release channel
+        run: |
+          TAG="${{ inputs.tag }}"
+          MANUAL="${{ inputs.channel }}"
+
+          if [ "$MANUAL" != "auto" ] && [ -n "$MANUAL" ]; then
+            echo "CHANNEL=${MANUAL}" >> "$GITHUB_ENV"
+            echo "✅ Using manual channel override: ${MANUAL}"
+            exit 0
+          fi
+
+          MINOR=$(echo "$TAG" | sed 's/^v//' | cut -d. -f1,2)
+          CONFIG=".github/release-channels.json"
+
+          if [ ! -f "$CONFIG" ]; then
+            echo "⚠️ No release-channels.json found, defaulting to dev"
+            echo "CHANNEL=dev" >> "$GITHUB_ENV"
+            exit 0
+          fi
+
+          RELEASE_LINE=$(jq -r '.release // ""' "$CONFIG")
+          PREVIEW_LINE=$(jq -r '."pre-release" // ""' "$CONFIG")
+
+          if [ "$MINOR" = "$RELEASE_LINE" ]; then
+            CHANNEL="release"
+          elif [ "$MINOR" = "$PREVIEW_LINE" ]; then
+            CHANNEL="pre-release"
+          else
+            CHANNEL="dev"
+          fi
+
+          echo "CHANNEL=${CHANNEL}" >> "$GITHUB_ENV"
+          echo "✅ Auto-detected channel: ${CHANNEL} (tag=${TAG}, minor=${MINOR}, release_line=${RELEASE_LINE}, preview_line=${PREVIEW_LINE})"
+
       # ── 验证 Release 存在（构建工作流应已创建 draft） ──
       - name: Verify release exists
         env:
@@ -65,10 +105,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           TAG="${{ inputs.tag }}"
-          CHANNEL="${{ inputs.channel }}"
 
           case "$CHANNEL" in
-            stable)
+            release)
               LATEST_FLAG="--latest"
               PRERELEASE_FLAG="--prerelease=false"
               CHANNEL_LABEL="稳定版"
@@ -93,13 +132,12 @@ jobs:
             ${LATEST_FLAG}
           echo "✅ Release ${TAG} published as ${CHANNEL} [${CHANNEL_LABEL}]"
 
-      # ── 生成 manifest（channel / per-version / versions.json / release.json compat） ──
+      # ── 生成 manifest（channel / per-version / versions.json / latest.json compat） ──
       - name: Generate release manifest
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           TAG="${{ inputs.tag }}"
-          CHANNEL="${{ inputs.channel }}"
           FORCE="${{ inputs.force_update }}"
           echo "Tag: ${TAG}, Channel: ${CHANNEL}, Force: ${FORCE}"
 
@@ -134,11 +172,11 @@ jobs:
           echo "Generated manifest for version: ${NEW_VER}"
 
           SHOULD_UPDATE="true"
-          if [ "$CHANNEL" = "stable" ] && [ "$FORCE" != "true" ]; then
-            STABLE_URL="${INDEX_URL%versions.json}stable.json"
-            if curl -sf "${STABLE_URL}" -o existing-stable.json 2>/dev/null; then
-              OLD_VER=$(python -c "import json; print(json.load(open('existing-stable.json'))['version'])" 2>/dev/null || echo "0.0.0")
-              echo "Existing stable version: ${OLD_VER}"
+          if [ "$CHANNEL" = "release" ] && [ "$FORCE" != "true" ]; then
+            RELEASE_URL="${INDEX_URL%versions.json}release.json"
+            if curl -sf "${RELEASE_URL}" -o existing-release.json 2>/dev/null; then
+              OLD_VER=$(python -c "import json; print(json.load(open('existing-release.json'))['version'])" 2>/dev/null || echo "0.0.0")
+              echo "Existing release version: ${OLD_VER}"
               IS_OLDER=$(python -c "
           old=list(map(int,'${OLD_VER}'.split('.')[:3]))
           new=list(map(int,'${NEW_VER}'.split('.')[:3]))
@@ -161,7 +199,6 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          CHANNEL="${{ inputs.channel }}"
           gh release upload "${{ inputs.tag }}" \
             "manifest-out/${CHANNEL}.json" --clobber \
             || echo "Warning: failed to upload manifest asset"
@@ -202,7 +239,6 @@ jobs:
             -k "${OSS_ACCESS_KEY_SECRET}"
 
           TAG="${{ inputs.tag }}"
-          CHANNEL="${{ inputs.channel }}"
           CC="Cache-Control:public, max-age=60"
           MD="$GITHUB_WORKSPACE/manifest-out"
 
@@ -232,9 +268,10 @@ jobs:
               ossutil cp "$CHANNEL_FILE" "oss://${OSS_BUCKET}/api/${CHANNEL}.json" -f --meta "${CC}"
               echo "✅ Uploaded api/${CHANNEL}.json"
             fi
-            if [ "$CHANNEL" = "stable" ] && [ -f "${MD}/release.json" ]; then
-              ossutil cp "${MD}/release.json" "oss://${OSS_BUCKET}/api/release.json" -f --meta "${CC}"
-              echo "✅ Uploaded api/release.json (Tauri updater compat)"
+            # Tauri updater compat (latest.json) for release channel
+            if [ "$CHANNEL" = "release" ] && [ -f "${MD}/latest.json" ]; then
+              ossutil cp "${MD}/latest.json" "oss://${OSS_BUCKET}/api/latest.json" -f --meta "${CC}"
+              echo "✅ Uploaded api/latest.json (Tauri updater compat)"
             fi
           fi
 
@@ -250,7 +287,6 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.WEBSITE_DEPLOY_TOKEN }}
         run: |
-          CHANNEL="${{ inputs.channel }}"
           MD="$GITHUB_WORKSPACE/manifest-out"
 
           git clone "https://x-access-token:${GH_TOKEN}@github.com/openakita/openakita-web.git" /tmp/openakita-web

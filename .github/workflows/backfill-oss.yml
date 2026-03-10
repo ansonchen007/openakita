@@ -66,7 +66,7 @@ jobs:
           python -c "
           import json
           idx = json.load(open('backfill-out/api/versions.json'))
-          for ch in ['stable','pre_release','dev']:
+          for ch in ['release','pre_release','dev']:
               entries = idx.get(ch, [])
               print(f'  {ch}: {len(entries)} versions')
               for e in entries[:3]:
@@ -169,7 +169,7 @@ jobs:
           echo "✅ Uploaded ${MANIFEST_COUNT} per-version manifests"
 
           # Channel manifests
-          for f in "${MD}"/stable.json "${MD}"/pre-release.json "${MD}"/dev.json; do
+          for f in "${MD}"/release.json "${MD}"/pre-release.json "${MD}"/dev.json; do
             if [ -f "$f" ]; then
               FNAME="$(basename "$f")"
               ossutil cp "$f" "oss://${OSS_BUCKET}/api/${FNAME}" -f --meta "${CC}"
@@ -177,10 +177,10 @@ jobs:
             fi
           done
 
-          # release.json (Tauri updater compat)
-          if [ -f "${MD}/release.json" ]; then
-            ossutil cp "${MD}/release.json" "oss://${OSS_BUCKET}/api/release.json" -f --meta "${CC}"
-            echo "✅ Uploaded api/release.json"
+          # latest.json (Tauri updater compat)
+          if [ -f "${MD}/latest.json" ]; then
+            ossutil cp "${MD}/latest.json" "oss://${OSS_BUCKET}/api/latest.json" -f --meta "${CC}"
+            echo "✅ Uploaded api/latest.json (Tauri updater compat)"
           fi
 
           # versions.json (index)

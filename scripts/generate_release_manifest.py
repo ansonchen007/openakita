@@ -2,22 +2,24 @@
 """
 Generate release manifests for the download page and Tauri updater.
 
-Produces three types of output:
-  1. Channel manifest  (stable.json / pre-release.json / dev.json)
-     — latest version info for one channel, consumed by the website + Tauri updater.
+Produces four types of output:
+  1. Channel manifest  (release.json / pre-release.json / dev.json)
+     — latest version info for one channel, consumed by the website.
   2. Per-version manifest  (releases/v{x}.json)
      — archived manifest for one specific version, consumed by the "history" UI.
   3. Version index  (versions.json)
      — lightweight index of all versions across all channels.
+  4. Tauri updater compat  (latest.json)
+     — flat format consumed by Tauri's built-in updater (only for "release" channel).
 
 Usage:
     # Basic: generate manifest for a single tag
     python scripts/generate_release_manifest.py \\
-        --tag v1.25.9 --channel stable --output-dir ./out
+        --tag v1.25.9 --channel release --output-dir ./out
 
     # With CDN rewriting + index update
     python scripts/generate_release_manifest.py \\
-        --tag v1.25.9 --channel stable --output-dir ./out \\
+        --tag v1.25.9 --channel release --output-dir ./out \\
         --cdn-base-url https://dl-cn.openakita.ai \\
         --existing-index ./existing-versions.json
 """
@@ -316,7 +318,7 @@ def update_version_index(
     available_platforms: list[str],
 ) -> dict:
     if existing is None:
-        existing = {"generated_at": "", "stable": [], "pre_release": [], "dev": []}
+        existing = {"generated_at": "", "release": [], "pre_release": [], "dev": []}
 
     channel_key = channel.replace("-", "_")  # "pre-release" → "pre_release"
     if channel_key not in existing:
@@ -366,7 +368,7 @@ def main():
     )
     parser.add_argument("--tag", required=True, help="Release tag (e.g. v1.25.9)")
     parser.add_argument(
-        "--channel", required=True, choices=["stable", "pre-release", "dev"],
+        "--channel", required=True, choices=["release", "pre-release", "dev"],
         help="Release channel"
     )
     parser.add_argument(
@@ -381,7 +383,7 @@ def main():
     )
     parser.add_argument(
         "--compat-release-json", action="store_true",
-        help="Also output release.json in old flat format (Tauri updater backward compat)"
+        help="Also output latest.json in flat format (Tauri updater compat)"
     )
     args = parser.parse_args()
 
@@ -404,7 +406,7 @@ def main():
     version = manifest["version"]
     available_platforms = list(manifest["downloads"].keys())
 
-    # 1) Channel manifest  (e.g. stable.json)
+    # 1) Channel manifest  (e.g. release.json)
     out_dir.mkdir(parents=True, exist_ok=True)
     channel_file = out_dir / f"{channel}.json"
     with open(channel_file, "w", encoding="utf-8") as f:
@@ -419,8 +421,8 @@ def main():
         json.dump(manifest, f, indent=2, ensure_ascii=False)
     print(f"Written per-version manifest: {version_file}")
 
-    # 3) Backward-compatible release.json (old flat format + updater platforms)
-    if args.compat_release_json or channel == "stable":
+    # 3) Tauri updater compat (latest.json — matches tauri.conf.json endpoint)
+    if args.compat_release_json or channel == "release":
         compat = {
             "version": version,
             "notes": manifest["notes"],
@@ -428,10 +430,10 @@ def main():
             "platforms": manifest["platforms"],
             "downloads": flatten_downloads(manifest["downloads"]),
         }
-        compat_file = out_dir / "release.json"
+        compat_file = out_dir / "latest.json"
         with open(compat_file, "w", encoding="utf-8") as f:
             json.dump(compat, f, indent=2, ensure_ascii=False)
-        print(f"Written compat manifest: {compat_file}")
+        print(f"Written Tauri updater compat: {compat_file}")
 
     # 4) Update version index
     existing_index = None
