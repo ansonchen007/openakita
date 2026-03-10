@@ -140,7 +140,7 @@ jobs:
             for file in /tmp/release-assets/*; do
               [ -f "$file" ] || continue
               FILENAME="$(basename "$file")"
-              ossutil cp "$file" "oss://${OSS_BUCKET}/${TAG}/${FILENAME}" -f --quiet
+              ossutil cp "$file" "oss://${OSS_BUCKET}/${TAG}/${FILENAME}" -f
             done
             echo "  ✅ Uploaded ${ASSET_COUNT} asset(s) for ${TAG}"
             TOTAL_UPLOADED=$((TOTAL_UPLOADED + ASSET_COUNT))
@@ -163,7 +163,7 @@ jobs:
           for f in "${MD}"/releases/*.json; do
             [ -f "$f" ] || continue
             FNAME="$(basename "$f")"
-            ossutil cp "$f" "oss://${OSS_BUCKET}/api/releases/${FNAME}" -f --meta "${CC}" --quiet
+            ossutil cp "$f" "oss://${OSS_BUCKET}/api/releases/${FNAME}" -f --meta "${CC}"
             MANIFEST_COUNT=$((MANIFEST_COUNT + 1))
           done
           echo "✅ Uploaded ${MANIFEST_COUNT} per-version manifests"
