@@ -3,9 +3,37 @@
  * Renders a scrollable message list, input box, and real-time WS progress.
  * Messages are persisted to backend session API (same as main ChatView).
  */
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect, useCallback, type ComponentType } from "react";
 import { safeFetch } from "../providers";
 import { onWsEvent } from "../platform";
+
+// ── Lazy-loaded markdown modules (same pattern as ChatView) ──
+type MdMods = {
+  ReactMarkdown: ComponentType<{ children: string; remarkPlugins?: any[]; rehypePlugins?: any[] }>;
+  remarkGfm: any;
+  rehypeHighlight: any;
+};
+let _md: MdMods | null = null;
+let _mdTried = false;
+
+function useMd(): MdMods | null {
+  const [m, setM] = useState<MdMods | null>(() => _md);
+  useEffect(() => {
+    if (_md) { setM(_md); return; }
+    if (_mdTried) return;
+    _mdTried = true;
+    try { new RegExp("\\p{L}", "u"); new RegExp("(?<=a)b"); } catch { return; }
+    Promise.all([
+      import("react-markdown"),
+      import("remark-gfm"),
+      import("rehype-highlight"),
+    ]).then(([md, gfm, hl]) => {
+      _md = { ReactMarkdown: md.default, remarkGfm: gfm.default, rehypeHighlight: hl.default };
+      setM(_md);
+    }).catch(() => {});
+  }, []);
+  return m;
+}
 
 interface ChatMsg {
   id: string;
@@ -33,6 +61,7 @@ let _seq = 0;
 function genId() { return `orgchat-${Date.now()}-${++_seq}`; }
 
 export function OrgChatPanel({ orgId, nodeId, apiBaseUrl, compact, showHeader, title, onClose }: OrgChatPanelProps) {
+  const md = useMd();
   const [messages, setMessages] = useState<ChatMsg[]>([]);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
@@ -287,8 +316,14 @@ export function OrgChatPanel({ orgId, nodeId, apiBaseUrl, compact, showHeader, t
         )}
         {messages.map(m => (
           <div key={m.id} className={`ocp-msg ocp-msg-${m.role} ${m.streaming ? "ocp-msg-streaming" : ""}`}>
-            <div className="ocp-msg-bubble">
-              {m.content}
+            <div className={`ocp-msg-bubble ${m.role !== "user" && !m.streaming ? "chatMdContent" : ""}`}>
+              {m.role === "user" || !md || m.streaming ? (
+                m.content
+              ) : (
+                <md.ReactMarkdown remarkPlugins={[md.remarkGfm]} rehypePlugins={[md.rehypeHighlight]}>
+                  {m.content}
+                </md.ReactMarkdown>
+              )}
               {m.streaming && <span className="ocp-typing">●</span>}
             </div>
           </div>
@@ -393,11 +428,12 @@ const CHAT_CSS = `
 
 .ocp-msg-bubble {
   max-width: 85%; padding: 10px 14px; border-radius: 12px;
-  font-size: 13px; line-height: 1.6; white-space: pre-wrap; word-break: break-word;
+  font-size: 13px; line-height: 1.6; word-break: break-word;
 }
 .ocp-msg-user .ocp-msg-bubble {
   background: linear-gradient(135deg, #3b82f6, #6366f1);
   color: #fff; border-bottom-right-radius: 4px;
+  white-space: pre-wrap;
 }
 .ocp-msg-assistant .ocp-msg-bubble {
   background: var(--bg-subtle, rgba(30,41,59,0.8));
@@ -405,15 +441,21 @@ const CHAT_CSS = `
   color: var(--text, #e2e8f0);
   border-bottom-left-radius: 4px;
 }
+.ocp-msg-streaming .ocp-msg-bubble {
+  white-space: pre-wrap;
+}
 .ocp-msg-system .ocp-msg-bubble {
   background: rgba(239,68,68,0.08);
   border: 1px solid rgba(239,68,68,0.2);
   color: #fca5a5;
   border-bottom-left-radius: 4px;
 }
-.ocp-msg-streaming .ocp-msg-bubble {
+.ocp-msg-streaming .ocp-msg-bubble:not(.chatMdContent) {
   border-color: rgba(99,102,241,0.3);
 }
+.ocp-msg-bubble.chatMdContent { font-size: 13px; line-height: 1.6; }
+.ocp-msg-bubble.chatMdContent > :first-child { margin-top: 0; }
+.ocp-msg-bubble.chatMdContent > :last-child { margin-bottom: 0; }
 .ocp-typing {
   display: inline-block; margin-left: 4px; color: #818cf8;
   animation: ocp-typing-blink 1.2s ease-in-out infinite;
