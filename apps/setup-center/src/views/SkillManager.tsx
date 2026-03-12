@@ -519,7 +519,7 @@ export function SkillManager({
   const [marketplace, setMarketplace] = useState<MarketplaceSkill[]>([]);
   const [marketLoading, setMarketLoading] = useState(false);
   const [marketSearch, setMarketSearch] = useState("");
-  const [installing, setInstalling] = useState<string | null>(null);
+  const [installingSet, setInstallingSet] = useState<Set<string>>(new Set());
   const [manualUrl, setManualUrl] = useState("");
   const [manualInstalling, setManualInstalling] = useState(false);
   const [enabledDraft, setEnabledDraft] = useState<Record<string, boolean>>({});
@@ -1040,7 +1040,7 @@ export function SkillManager({
       return;
     }
     const uniqueKey = skill.url || skill.id || skill.name;
-    setInstalling(uniqueKey);
+    setInstallingSet(prev => new Set(prev).add(uniqueKey));
     setError(null);
     try {
       let installed = false;
@@ -1095,7 +1095,7 @@ export function SkillManager({
         setError(msg);
       }
     } finally {
-      setInstalling(null);
+      setInstallingSet(prev => { const next = new Set(prev); next.delete(uniqueKey); return next; });
     }
   }, [loadSkills, venvDir, currentWorkspaceId, dataMode, serviceRunning, apiBaseUrl, onNotice, t]);
 
@@ -1382,7 +1382,7 @@ export function SkillManager({
                   key={uk}
                   skill={skill}
                   onInstall={() => handleInstall(skill)}
-                  installing={installing === uk}
+                  installing={installingSet.has(uk)}
                 />
               );
             })}
