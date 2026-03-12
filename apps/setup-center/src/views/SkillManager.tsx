@@ -592,7 +592,7 @@ export function SkillManager({
       // 优先从运行中的服务 HTTP API 获取（远程模式或本地服务运行时）
       if (serviceRunning && apiBaseUrl != null) {
         try {
-          const res = await safeFetch(`${apiBaseUrl}/api/skills`, { signal: AbortSignal.timeout(5000) });
+          const res = await safeFetch(`${apiBaseUrl}/api/skills`, { signal: AbortSignal.timeout(15_000) });
           data = await res.json();
         } catch (e) {
           httpError = String(e);

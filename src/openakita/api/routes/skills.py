@@ -29,6 +29,17 @@ router = APIRouter()
 SKILLS_SH_API = "https://skills.sh/api/search"
 
 
+_skills_cache: dict | None = None
+"""Module-level cache for GET /api/skills response.
+Populated on first request, invalidated by install/uninstall/reload/edit."""
+
+
+def _invalidate_skills_cache() -> None:
+    """Clear the cached skill list so the next GET /api/skills re-scans disk."""
+    global _skills_cache
+    _skills_cache = None
+
+
 def _read_external_allowlist() -> tuple[Path, set[str] | None]:
     """Read external_allowlist from data/skills.json.
 
@@ -156,19 +167,26 @@ async def list_skills(request: Request):
 
     Returns ALL discovered skills (including disabled ones) with correct
     ``enabled`` status derived from ``data/skills.json`` allowlist.
+
+    Uses a module-level cache to avoid re-scanning disk on every request.
+    The cache is invalidated by install/uninstall/reload/edit operations.
     """
+    global _skills_cache
+    if _skills_cache is not None:
+        return _skills_cache
+
     base_path, external_allowlist = _read_external_allowlist()
 
-    # Load all skills via a fresh SkillLoader (not pruned by allowlist)
+    # load_all() does synchronous file I/O — run in a thread to avoid blocking
+    # the event loop.
     try:
         from openakita.skills.loader import SkillLoader
 
         loader = SkillLoader()
-        loader.load_all(base_path=base_path)
+        await asyncio.to_thread(loader.load_all, base_path=base_path)
         all_skills = loader.registry.list_all()
         effective_allowlist = loader.compute_effective_allowlist(external_allowlist)
     except Exception:
-        # Fallback to agent's registry (only enabled skills)
         from openakita.core.agent import Agent
 
         agent = getattr(request.app.state, "agent", None)
@@ -213,16 +231,18 @@ async def list_skills(request: Request):
         enabled = s.get("enabled", False)
         system = s.get("system", False)
         if enabled and not system:
-            tier = 0  # 启用的外部技能
+            tier = 0
         elif enabled and system:
-            tier = 1  # 启用的系统技能
+            tier = 1
         else:
-            tier = 2  # 禁用的技能
+            tier = 2
         return (tier, s.get("name", ""))
 
     skills.sort(key=_sort_key)
 
-    return {"skills": skills}
+    result = {"skills": skills}
+    _skills_cache = result
+    return result
 
 
 @router.post("/api/skills/config")
@@ -332,6 +352,7 @@ async def install_skill(request: Request):
     except Exception as e:
         logger.warning(f"Post-install reload failed (skill was installed): {e}")
 
+    _invalidate_skills_cache()
     _notify_skills_changed("install")
     result: dict = {"status": "ok", "url": url}
     if install_warning:
@@ -381,6 +402,7 @@ async def uninstall_skill(request: Request):
     except Exception as e:
         logger.warning(f"Post-uninstall reload failed: {e}")
 
+    _invalidate_skills_cache()
     _notify_skills_changed("uninstall")
     return {"status": "ok", "skill_id": skill_id}
 
@@ -412,6 +434,7 @@ async def reload_skills(request: Request):
         return {"error": "Skill loader/registry not available"}
 
     try:
+        _invalidate_skills_cache()
         if skill_name:
             reloaded = loader.reload_skill(skill_name)
             if reloaded:
@@ -549,6 +572,7 @@ async def update_skill_content(skill_name: str, request: Request):
         except Exception as e:
             logger.warning(f"Skill reload after edit failed: {e}")
 
+    _invalidate_skills_cache()
     return {
         "status": "ok",
         "reloaded": reloaded,

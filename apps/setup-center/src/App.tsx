@@ -3747,7 +3747,7 @@ export function App() {
       let skillsList: any[] = [];
       // ── 后端运行中 → HTTP API ──
       if (shouldUseHttpApi()) {
-        const res = await safeFetch(`${httpApiBase()}/api/skills`, { signal: AbortSignal.timeout(5000) });
+        const res = await safeFetch(`${httpApiBase()}/api/skills`, { signal: AbortSignal.timeout(15_000) });
         const data = await res.json();
         skillsList = Array.isArray(data?.skills) ? data.skills : [];
       }
