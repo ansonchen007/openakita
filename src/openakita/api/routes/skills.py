@@ -157,8 +157,6 @@ async def list_skills(request: Request):
     Returns ALL discovered skills (including disabled ones) with correct
     ``enabled`` status derived from ``data/skills.json`` allowlist.
     """
-    from pathlib import Path
-
     base_path, external_allowlist = _read_external_allowlist()
 
     # Load all skills via a fresh SkillLoader (not pruned by allowlist)
@@ -195,16 +193,6 @@ async def list_skills(request: Request):
         is_system = bool(skill.system)
         is_enabled = is_system or effective_allowlist is None or skill.name in effective_allowlist
 
-        # Read install origin (.openakita-source) for marketplace matching
-        source_url = None
-        if skill.skill_path:
-            try:
-                origin_file = Path(skill.skill_path).parent / ".openakita-source"
-                if origin_file.exists():
-                    source_url = origin_file.read_text(encoding="utf-8").strip()
-            except Exception:
-                pass
-
         skills.append({
             "name": skill.name,
             "description": skill.description,
@@ -216,7 +204,7 @@ async def list_skills(request: Request):
             "tool_name": skill.tool_name,
             "config": config,
             "path": skill.skill_path,
-            "source_url": source_url,
+            "source_url": getattr(skill, "source_url", None),
         })
 
     def _sort_key(s: dict) -> tuple:

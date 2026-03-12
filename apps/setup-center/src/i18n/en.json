@@ -210,6 +210,7 @@
     "loadingContent": "Loading skill content...",
     "readOnlyHint": "Built-in system skill, read-only",
     "filePath": "File Path",
+    "source": "Source",
     "skillType": "Type",
     "skillCategory": "Category",
     "requiresBackend": "Requires backend service running"

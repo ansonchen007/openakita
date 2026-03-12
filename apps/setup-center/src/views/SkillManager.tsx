@@ -180,11 +180,18 @@ function SkillCard({
           {skill.system ? <IconGear size={18} /> : <IconZap size={18} />}
         </div>
         <div style={{ flex: 1, minWidth: 0, cursor: "pointer" }} onClick={onViewDetail}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
             <span style={{ fontWeight: 800, fontSize: 14 }}>{displayName}</span>
             {displayName !== skill.name && (
               <span style={{ fontSize: 11, opacity: 0.4, fontFamily: "monospace" }}>{skill.name}</span>
             )}
+            {!skill.system && skill.sourceUrl && (() => {
+              const src = skill.sourceUrl!;
+              const ownerRepo = src.includes("@") ? src.split("@")[0] : src.replace(/^https?:\/\/github\.com\//, "").replace(/\.git$/, "");
+              return ownerRepo ? (
+                <span style={{ fontSize: 11, opacity: 0.45, fontFamily: "monospace" }}>{ownerRepo}</span>
+              ) : null;
+            })()}
             <span className="pill" style={{ fontSize: 11, borderColor: statusColor + "33" }}>
               <span style={{ display: "inline-block", width: 6, height: 6, borderRadius: 3, background: statusColor, marginRight: 4 }} />
               {statusText}
@@ -318,6 +325,11 @@ function SkillDetailModal({
           <div style={{ display: "flex", gap: 16, marginTop: 12, fontSize: 12, opacity: 0.6, flexWrap: "wrap" }}>
             <span><b>{t("skills.skillType")}:</b> {isSystem ? t("skills.system") : t("skills.external")}</span>
             {skill.category && <span><b>{t("skills.skillCategory")}:</b> {skill.category}</span>}
+            {!isSystem && skill.sourceUrl && (
+              <span style={{ fontFamily: "monospace", fontSize: 11, opacity: 0.8 }}>
+                <b>{t("skills.source")}:</b> {skill.sourceUrl}
+              </span>
+            )}
             {skill.path && (
               <span style={{ fontFamily: "monospace", fontSize: 11, opacity: 0.8, wordBreak: "break-all" }}>
                 <b>{t("skills.filePath")}:</b> {skill.path}

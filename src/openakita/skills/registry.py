@@ -57,6 +57,9 @@ class SkillEntry:
     # 技能路径 (用于延迟加载)
     skill_path: str | None = None
 
+    # 技能来源 URL（来自 .openakita-source 文件，用于区分同名技能）
+    source_url: str | None = None
+
     # 国际化（由 .openakita-i18n.json sidecar 文件注入）
     name_i18n: dict[str, str] = field(default_factory=dict)
     description_i18n: dict[str, str] = field(default_factory=dict)
@@ -82,6 +85,17 @@ class SkillEntry:
     def from_parsed_skill(cls, skill: "ParsedSkill") -> "SkillEntry":
         """从 ParsedSkill 创建条目"""
         meta = skill.metadata
+
+        source_url: str | None = None
+        if skill.path:
+            from pathlib import Path
+
+            source_file = Path(skill.path).parent / ".openakita-source"
+            try:
+                source_url = source_file.read_text(encoding="utf-8").strip() or None
+            except Exception:
+                pass
+
         return cls(
             name=meta.name,
             description=meta.description,
@@ -99,6 +113,7 @@ class SkillEntry:
             required_bins=list(meta.required_bins),
             required_env=list(meta.required_env),
             skill_path=str(skill.path),
+            source_url=source_url,
             name_i18n=dict(meta.name_i18n),
             description_i18n=dict(meta.description_i18n),
             _parsed_skill=skill,

@@ -210,6 +210,7 @@
     "loadingContent": "正在加载技能内容...",
     "readOnlyHint": "系统内置技能，不可编辑",
     "filePath": "文件路径",
+    "source": "来源",
     "skillType": "类型",
     "skillCategory": "分类",
     "requiresBackend": "需要后端服务运行中"

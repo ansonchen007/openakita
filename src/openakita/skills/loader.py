@@ -287,6 +287,37 @@ class SkillLoader:
                 for error in errors:
                     logger.warning(f"Skill validation warning: {error}")
 
+            # 同名冲突消歧：SKILL.md 中的 name 不唯一时，用目录名替代
+            orig_name = skill.metadata.name
+            if orig_name in self._loaded_skills:
+                existing = self._loaded_skills[orig_name]
+                existing_path = str(existing.path) if existing.path else ""
+                new_path = str(skill.path) if skill.path else ""
+                if existing_path != new_path:
+                    dir_name = skill_dir.name
+                    if dir_name != orig_name:
+                        skill.metadata.name = dir_name
+                        logger.info(
+                            "Skill name '%s' conflicts with existing from %s, "
+                            "using directory name '%s' instead",
+                            orig_name, existing_path, dir_name,
+                        )
+                    else:
+                        # 新技能目录名和冲突名相同，将先注册的那个改为其目录名
+                        if existing.path:
+                            ex_dir = Path(existing.path).parent.name
+                            if ex_dir != orig_name:
+                                existing.metadata.name = ex_dir
+                                self.registry.unregister(orig_name)
+                                self.registry.register(existing)
+                                del self._loaded_skills[orig_name]
+                                self._loaded_skills[ex_dir] = existing
+                                logger.info(
+                                    "Renamed previously loaded skill '%s' to '%s' "
+                                    "to resolve conflict with %s",
+                                    orig_name, ex_dir, skill_dir,
+                                )
+
             # 注册到 registry
             self.registry.register(skill)
             self._loaded_skills[skill.metadata.name] = skill
