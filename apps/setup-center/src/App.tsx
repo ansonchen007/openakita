@@ -36,6 +36,7 @@ import {
 import { ChevronDownIcon, XIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -4220,35 +4221,41 @@ export function App() {
           </div>
 
           {savedEndpoints.length === 0 ? (
-            <div className="cardHint" style={{ textAlign: "center", padding: "24px 0" }}>{t("llm.noEndpoints")}</div>
+            <div className="text-sm text-muted-foreground text-center py-6">{t("llm.noEndpoints")}</div>
           ) : (
-            <div className="epTable">
-              <div className="epTableHeader">
-                <span>{t("status.endpoint")}</span>
-                <span>{t("status.model")}</span>
-                <span>Key</span>
-                <span>Priority</span>
-                <span></span>
-              </div>
-              {savedEndpoints.map((e) => (
-                <div key={e.name} className="epTableRow" style={e.enabled === false ? { opacity: 0.45 } : undefined}>
-                  <span className="epTableName">
-                    {e.name}
-                    {savedEndpoints[0]?.name === e.name && e.enabled !== false && <span style={{ marginLeft: 6, color: "var(--brand)", fontSize: 10, fontWeight: 800 }}>{t("llm.primary")}</span>}
-                    {e.enabled === false && <span style={{ marginLeft: 6, color: "var(--muted)", fontSize: 10, fontWeight: 700 }}>{t("llm.disabled")}</span>}
-                  </span>
-                  <span className="epTableModel">{e.model}</span>
-                  <span>{(envDraft[e.api_key_env] || "").trim() ? <DotGreen /> : <DotGray />}</span>
-                  <span style={{ fontSize: 12 }}>{e.priority}</span>
-                  <span style={{ display: "flex", gap: 4, justifyContent: "flex-end" }}>
-                    <Button variant="ghost" size="icon-sm" className={e.enabled !== false ? "text-primary" : "text-muted-foreground"} onClick={() => doToggleEndpointEnabled(e.name)} disabled={!!busy} title={e.enabled === false ? t("llm.enable") : t("llm.disable")}>{e.enabled !== false ? <IconPower size={14} /> : <IconCircle size={14} />}</Button>
-                    <Button variant="ghost" size="icon-sm" style={savedEndpoints[0]?.name === e.name ? { visibility: "hidden" } : undefined} onClick={() => doSetPrimaryEndpoint(e.name)} disabled={!!busy} title={t("llm.setPrimary")}><IconChevronUp size={14} /></Button>
-                    <Button variant="ghost" size="icon-sm" onClick={() => doStartEditEndpoint(e.name)} disabled={!!busy} title={t("llm.edit")}><IconEdit size={14} /></Button>
-                    <Button variant="ghost" size="icon-sm" className="text-muted-foreground hover:text-destructive hover:bg-destructive/10" onClick={() => askConfirm(`${t("common.confirmDeleteMsg")} "${e.name}"?`, () => doDeleteEndpoint(e.name))} disabled={!!busy} title={t("common.delete")}><IconTrash size={14} /></Button>
-                  </span>
-                </div>
-              ))}
-            </div>
+            <Table>
+              <TableHeader>
+                <TableRow className="hover:bg-transparent">
+                  <TableHead>{t("status.endpoint")}</TableHead>
+                  <TableHead>{t("status.model")}</TableHead>
+                  <TableHead className="w-[50px]">Key</TableHead>
+                  <TableHead className="w-[80px]">Priority</TableHead>
+                  <TableHead className="w-[140px]"></TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {savedEndpoints.map((e) => (
+                  <TableRow key={e.name} className={e.enabled === false ? "opacity-45" : undefined}>
+                    <TableCell className="font-semibold">
+                      {e.name}
+                      {savedEndpoints[0]?.name === e.name && e.enabled !== false && <span className="ml-1.5 text-[10px] font-extrabold text-primary">{t("llm.primary")}</span>}
+                      {e.enabled === false && <span className="ml-1.5 text-[10px] font-bold text-muted-foreground">{t("llm.disabled")}</span>}
+                    </TableCell>
+                    <TableCell className="text-muted-foreground">{e.model}</TableCell>
+                    <TableCell>{(envDraft[e.api_key_env] || "").trim() ? <DotGreen /> : <DotGray />}</TableCell>
+                    <TableCell>{e.priority}</TableCell>
+                    <TableCell>
+                      <div className="flex gap-1 justify-end">
+                        <Button variant="ghost" size="icon-sm" className="text-muted-foreground hover:text-foreground" style={savedEndpoints[0]?.name === e.name ? { visibility: "hidden" } : undefined} onClick={() => doSetPrimaryEndpoint(e.name)} disabled={!!busy} title={t("llm.setPrimary")}><IconChevronUp size={14} /></Button>
+                        <Button variant="ghost" size="icon-sm" className="text-muted-foreground hover:text-foreground" onClick={() => doToggleEndpointEnabled(e.name)} disabled={!!busy} title={e.enabled === false ? t("llm.enable") : t("llm.disable")}>{e.enabled !== false ? <IconPower size={14} /> : <IconCircle size={14} />}</Button>
+                        <Button variant="ghost" size="icon-sm" className="text-muted-foreground hover:text-foreground" onClick={() => doStartEditEndpoint(e.name)} disabled={!!busy} title={t("llm.edit")}><IconEdit size={14} /></Button>
+                        <Button variant="ghost" size="icon-sm" className="text-muted-foreground hover:text-destructive hover:bg-destructive/10" onClick={() => askConfirm(`${t("common.confirmDeleteMsg")} "${e.name}"?`, () => doDeleteEndpoint(e.name))} disabled={!!busy} title={t("common.delete")}><IconTrash size={14} /></Button>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
           )}
         </div>
 

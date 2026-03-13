@@ -6,7 +6,7 @@
 /*
  * shadcn/ui theme — new variables only.
  * Existing variables (--primary, --border, --danger, --bg-app, --text, etc.)
- * live in styles.css and are referenced via var() in @theme inline below.
+ * live in styles.css and are referenced via var() in @theme below.
  */
 
 :root {
@@ -49,7 +49,21 @@
   --chart-5: #f472b6;
 }
 
-@theme inline {
+/*
+ * Tailwind v4 changed the default border-color from gray-200 to currentColor.
+ * Restore the expected behavior so border-b etc. use the theme border color.
+ */
+@layer base {
+  *,
+  ::after,
+  ::before,
+  ::backdrop,
+  ::file-selector-button {
+    border-color: var(--color-border, currentColor);
+  }
+}
+
+@theme {
   --color-background: var(--bg-app);
   --color-foreground: var(--text);
   --color-card: var(--card-bg);
