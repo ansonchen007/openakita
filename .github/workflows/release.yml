@@ -210,6 +210,7 @@ jobs:
         with:
           workspaces: |
             apps/setup-center/src-tauri -> target
+          prefix-key: "release-${{ matrix.suffix }}"
 
       - name: Build web frontend for remote browser access
         working-directory: apps/setup-center
@@ -311,6 +312,8 @@ jobs:
           CARGO_HTTP_MULTIPLEXING: "false"
         run: |
           set -euo pipefail
+          # Clear cached build-scripts to avoid glibc mismatch across Ubuntu versions
+          rm -rf target/debug/build
           MAX_ATTEMPTS=3
           ATTEMPT=1
           while [ $ATTEMPT -le $MAX_ATTEMPTS ]; do

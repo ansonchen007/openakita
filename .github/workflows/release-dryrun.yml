@@ -142,6 +142,7 @@ jobs:
         with:
           workspaces: |
             apps/setup-center/src-tauri -> target
+          prefix-key: "dryrun-${{ matrix.suffix }}"
 
       - name: Build web frontend for remote browser access
         working-directory: apps/setup-center
@@ -240,6 +241,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # Clear cached build-scripts to avoid glibc mismatch across Ubuntu versions
+          rm -rf target/debug/build
           cargo fetch --locked
           if [ -n "${{ matrix.rust_target }}" ]; then
             cargo check --target "${{ matrix.rust_target }}"
