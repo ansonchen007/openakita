@@ -1301,6 +1301,7 @@
     "webPasswordNewPlaceholder": "Enter new password",
     "webPasswordSet": "Set Password",
     "webPasswordRandomize": "Randomize",
+    "webPasswordSetHint": "Password changes take effect immediately, no need to click \"Save\" at the bottom",
     "webPasswordChanged": "Web access password changed. All remote sessions invalidated.",
     "webPasswordReset": "Web access password reset to: {{password}}",
     "opsTitle": "System Operations",

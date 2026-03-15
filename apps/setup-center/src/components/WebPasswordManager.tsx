@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
-import { Eye, EyeOff } from "lucide-react";
 import { safeFetch } from "../providers";
 import { copyToClipboard } from "../utils/clipboard";
 import { Button } from "@/components/ui/button";
@@ -11,7 +10,6 @@ export function WebPasswordManager({ apiBase }: { apiBase: string }) {
   const { t } = useTranslation();
   const [hint, setHint] = useState<string | null>(null);
   const [newPw, setNewPw] = useState("");
-  const [showNew, setShowNew] = useState(false);
   const [isBusy, setIsBusy] = useState(false);
 
   const loadHint = useCallback(async () => {
@@ -83,15 +81,12 @@ export function WebPasswordManager({ apiBase }: { apiBase: string }) {
       )}
       <div className="flex items-center gap-1.5 flex-wrap">
         <Input
-          type={showNew ? "text" : "password"}
+          type="password"
           value={newPw}
           onChange={(e) => setNewPw(e.target.value)}
           placeholder={t("adv.webPasswordNewPlaceholder")}
           className="flex-1 min-w-[160px]"
         />
-        <Button variant="ghost" size="icon-sm" onClick={() => setShowNew((v) => !v)}>
-          {showNew ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
-        </Button>
         <Button
           size="sm"
           onClick={() => { if (newPw.trim()) doChangePassword(newPw.trim()); }}
@@ -103,6 +98,7 @@ export function WebPasswordManager({ apiBase }: { apiBase: string }) {
           {t("adv.webPasswordRandomize")}
         </Button>
       </div>
+      <p className="text-xs text-muted-foreground/70">{t("adv.webPasswordSetHint")}</p>
     </div>
   );
 }

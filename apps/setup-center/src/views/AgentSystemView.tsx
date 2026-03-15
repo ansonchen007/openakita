@@ -124,7 +124,7 @@ export function AgentSystemView(props: AgentSystemViewProps) {
       {/* ═══════ 灵魂 Soul ═══════ */}
       <div className="card">
         <h3 className="text-base font-bold tracking-tight">{t("config.soulTitle")}</h3>
-        <p className="text-sm text-muted-foreground mt-1 mb-3 italic">{t("config.soulSubtitle")}</p>
+        <p className="text-sm text-muted-foreground mt-1 mb-3">{t("config.soulSubtitle")}</p>
 
         {/* ── 角色选择 ── */}
         <Section title={t("config.agentPersona")} subtitle={t("config.agentPersonaSub")}>
@@ -219,7 +219,7 @@ export function AgentSystemView(props: AgentSystemViewProps) {
       {/* ═══════ 意志 Will ═══════ */}
       <div className="card" style={{ marginTop: 16 }}>
         <h3 className="text-base font-bold tracking-tight">{t("config.willTitle")}</h3>
-        <p className="text-sm text-muted-foreground mt-1 mb-3 italic">{t("config.willSubtitle")}</p>
+        <p className="text-sm text-muted-foreground mt-1 mb-3">{t("config.willSubtitle")}</p>
 
         {/* ── 活人感模式 ── */}
         <Section
