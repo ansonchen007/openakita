@@ -477,15 +477,23 @@ async def get_topology(request: Request):
     session_manager = getattr(request.app.state, "session_manager", None)
 
     profile_map: dict[str, dict] = {}
-    for p in SYSTEM_PRESETS:
-        profile_map[p.id] = {"name": p.name, "icon": p.icon or "🤖", "color": p.color or "#6b7280"}
+    hidden_profile_ids: set[str] = set()
+    stored_profiles: dict[str, object] = {}
     try:
         store = ProfileStore(settings.data_dir / "agents")
-        for p in store.list_all():
-            if p.id not in profile_map:
-                profile_map[p.id] = {"name": p.name, "icon": p.icon or "🤖", "color": p.color or "#6b7280"}
+        stored_profiles = {p.id: p for p in store.list_all(include_hidden=True)}
     except Exception:
         pass
+    for p in SYSTEM_PRESETS:
+        sp = stored_profiles.get(p.id)
+        if sp and getattr(sp, "hidden", False):
+            hidden_profile_ids.add(p.id)
+        profile_map[p.id] = {"name": p.name, "icon": p.icon or "🤖", "color": p.color or "#6b7280"}
+    for pid, p in stored_profiles.items():
+        if getattr(p, "hidden", False):
+            hidden_profile_ids.add(pid)
+        if pid not in profile_map:
+            profile_map[pid] = {"name": p.name, "icon": p.icon or "🤖", "color": getattr(p, "color", None) or "#6b7280"}
 
     nodes: list[dict] = []
     edges: list[dict] = []
@@ -645,9 +653,11 @@ async def get_topology(request: Request):
         except Exception as exc:
             logger.warning(f"[Topology] session_manager fallback error: {exc}")
 
-    # Always include system presets as dormant neurons when not active
+    # Always include system presets as dormant neurons when not active (skip hidden)
     active_profile_ids = {n["profile_id"] for n in nodes}
     for pid, pinfo in profile_map.items():
+        if pid in hidden_profile_ids:
+            continue
         if pid not in active_profile_ids:
             dormant_id = f"dormant::{pid}"
             if dormant_id not in seen_ids:
