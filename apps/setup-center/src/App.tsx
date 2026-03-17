@@ -23,6 +23,7 @@ import { TYPE_TO_ENABLED_KEY } from "./views/im-shared";
 import { AgentSystemView } from "./views/AgentSystemView";
 import { AgentStoreView } from "./views/AgentStoreView";
 import { SkillStoreView } from "./views/SkillStoreView";
+import SecurityView from "./views/SecurityView";
 import type {
   EndpointSummary as EndpointSummaryType,
   PlatformInfo, WorkspaceSummary, ProviderInfo, ListedModel,
@@ -114,7 +115,7 @@ interface EnvFieldCtx {
 
 const EnvFieldContext = createContext<EnvFieldCtx | null>(null);
 
-type ViewId = "wizard" | "status" | "chat" | "skills" | "im" | "onboarding" | "modules" | "token_stats" | "mcp" | "scheduler" | "memory" | "identity" | "dashboard" | "org_editor" | "agent_manager" | "agent_store" | "skill_store" | "docs";
+type ViewId = "wizard" | "status" | "chat" | "skills" | "im" | "onboarding" | "modules" | "token_stats" | "mcp" | "scheduler" | "memory" | "identity" | "dashboard" | "org_editor" | "agent_manager" | "agent_store" | "skill_store" | "docs" | "security";
 
 const _HASH_TO_VIEW: Record<string, ViewId> = {
   "chat": "chat", "im": "im", "skills": "skills", "mcp": "mcp",
@@ -123,6 +124,7 @@ const _HASH_TO_VIEW: Record<string, ViewId> = {
   "dashboard": "dashboard", "org-editor": "org_editor",
   "agent-manager": "agent_manager", "agent-store": "agent_store",
   "skill-store": "skill_store", "wizard": "wizard", "docs": "docs",
+  "security": "security",
 };
 
 const _VIEW_TO_HASH: Record<string, string> = Object.fromEntries(
@@ -313,7 +315,7 @@ export function App() {
     [t],
   );
 
-  const [view, setView] = useState<"wizard" | "status" | "chat" | "skills" | "im" | "onboarding" | "modules" | "token_stats" | "mcp" | "scheduler" | "memory" | "identity" | "dashboard" | "org_editor" | "agent_manager" | "agent_store" | "skill_store">(() => {
+  const [view, setView] = useState<ViewId>(() => {
     const parsed = _parseHashRoute(window.location.hash);
     if (parsed) return parsed.view;
     return (IS_WEB || IS_CAPACITOR) ? "chat" : "wizard";
@@ -8115,6 +8117,14 @@ export function App() {
         <SkillStoreView
           apiBaseUrl={apiBaseUrl}
           visible={view === "skill_store"}
+        />
+      );
+    }
+    if (view === "security") {
+      return (
+        <SecurityView
+          apiBaseUrl={apiBaseUrl}
+          serviceRunning={serviceStatus?.running ?? false}
         />
       );
     }
