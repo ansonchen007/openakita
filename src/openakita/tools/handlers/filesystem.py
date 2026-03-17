@@ -279,6 +279,15 @@ class FilesystemHandler:
         path = params.get("path")
         content = params.get("content")
         if not path:
+            content_len = len(str(content)) if content else 0
+            if content_len > 5000:
+                return (
+                    f"❌ write_file 缺少必要参数 'path'（content 长度 {content_len} 字符，"
+                    "疑似因内容过长导致 JSON 参数被截断）。\n"
+                    "请缩短内容后重试：\n"
+                    "1. 将大文件拆分为多次写入（每次 < 8000 字符）\n"
+                    "2. 或用 run_shell 执行 Python 脚本生成大文件"
+                )
             return "❌ write_file 缺少必要参数 'path'。请提供文件路径和内容后重试。"
         if content is None:
             return "❌ write_file 缺少必要参数 'content'。请提供文件内容后重试。"

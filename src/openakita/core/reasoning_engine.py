@@ -124,6 +124,11 @@ class ReasoningEngine:
         self._checkpoints: list[Checkpoint] = []
         self._tool_failure_counter: dict[str, int] = {}  # tool_name -> consecutive_failures
 
+        # 跨 rollback 的持久性失败计数器（rollback 不会清除）
+        # 用于检测 "write_file 因截断反复失败" 等跨 rollback 循环
+        self._persistent_tool_failures: dict[str, int] = {}
+        self.PERSISTENT_FAIL_LIMIT = 5  # 同一工具跨 rollback 累计失败 N 次强制终止
+
         # 思维链: 暂存最近一次推理的 react_trace，供 agent_handler 读取
         self._last_react_trace: list[dict] = []
 
@@ -350,9 +355,14 @@ class ReasoningEngine:
         """记录工具执行结果，用于连续失败检测。"""
         if success:
             self._tool_failure_counter[tool_name] = 0
+            # 成功时也重置持久计数器
+            self._persistent_tool_failures.pop(tool_name, None)
         else:
             self._tool_failure_counter[tool_name] = (
                 self._tool_failure_counter.get(tool_name, 0) + 1
+            )
+            self._persistent_tool_failures[tool_name] = (
+                self._persistent_tool_failures.get(tool_name, 0) + 1
             )
 
     def _should_rollback(self, tool_results: list[dict]) -> tuple[bool, str]:
@@ -1208,6 +1218,35 @@ class ReasoningEngine:
                         r_len = len(str(tr.get("content", "")))
                         logger.info(f"[ReAct] Iter {iteration+1} — tool_result id={t_id} len={r_len}")
                 react_trace.append(_iter_trace)
+
+                # 持久性失败检测：跨 rollback 累计同一工具失败达上限时，
+                # 注入强制策略切换提示而非继续回滚（防止截断导致的无限循环）
+                _persistent_exceeded = {
+                    name: count for name, count in self._persistent_tool_failures.items()
+                    if count >= self.PERSISTENT_FAIL_LIMIT
+                }
+                if _persistent_exceeded:
+                    _tool_names = ", ".join(_persistent_exceeded.keys())
+                    _hint = (
+                        f"[系统提示] 工具 {_tool_names} 累计失败已达 {self.PERSISTENT_FAIL_LIMIT} 次"
+                        f"（含跨回滚），通常是因为参数过长被 API 截断。"
+                        "你必须改用完全不同的策略：\n"
+                        "- 使用 run_shell 执行 Python 脚本来生成大文件\n"
+                        "- 将内容拆分成多次小写入\n"
+                        "- 先写骨架，再逐步填充\n"
+                        "禁止再次用同样方式调用该工具。"
+                    )
+                    working_messages.append({"role": "user", "content": tool_results})
+                    working_messages.append({"role": "user", "content": _hint})
+                    logger.warning(
+                        f"[PersistentFail] {_tool_names} exceeded persistent fail limit "
+                        f"({self.PERSISTENT_FAIL_LIMIT}), injecting strategy switch"
+                    )
+                    # 重置计数器以给新策略一次机会
+                    for name in _persistent_exceeded:
+                        self._persistent_tool_failures[name] = 0
+                    self._tool_failure_counter.clear()
+                    continue
 
                 # 检查是否应该回滚
                 should_rb, rb_reason = self._should_rollback(tool_results)

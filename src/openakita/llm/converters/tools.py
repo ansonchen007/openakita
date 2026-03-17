@@ -186,6 +186,20 @@ def convert_tool_calls_from_openai(tool_calls: list[dict]) -> list[ToolUseBlock]
                             f"(recovered keys: {recovered_keys}), treating as truncation "
                             f"error. Raw args ({arg_len} chars) dumped to data/llm_debug/."
                         )
+                        # write_file 截断修复后若 path 丢失，注入截断提示而非传入不完整参数
+                        if tool_name == "write_file" and "content" in input_dict and "path" not in input_dict:
+                            content_len = len(str(input_dict.get("content", "")))
+                            logger.warning(
+                                f"[TOOL_CALL] write_file JSON repaired but 'path' is missing "
+                                f"(content length={content_len}). Likely truncated by output token limit."
+                            )
+                            input_dict = {PARSE_ERROR_KEY: (
+                                f"⚠️ 你的 write_file 调用因内容过长（{content_len} 字符）被 API 截断，"
+                                f"'path' 参数丢失。请用以下方法解决：\n"
+                                "1. 将大文件内容拆分为多次小写入（每次 < 8000 字符）\n"
+                                "2. 或使用 run_shell + Python 脚本生成大文件\n"
+                                "3. 先写骨架文件，再用多次追加写入填充内容"
+                            )}
                     else:
                         err_msg = (
                             f"❌ 工具 '{tool_name}' 的参数 JSON 被 API 截断且无法修复"
