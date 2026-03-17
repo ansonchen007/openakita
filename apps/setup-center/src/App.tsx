@@ -5346,38 +5346,14 @@ export function App() {
   function renderIM(opts?: { onboarding?: boolean }) {
     const imDisabled = disabledViews.includes("im");
     return (
-      <>
-        {!opts?.onboarding && (
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", marginBottom: 8 }}>
-            <label style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 13, color: "var(--muted)", cursor: "pointer" }}>
-              <span>{imDisabled ? "IM 通道 已禁用" : "IM 通道 已启用"}</span>
-              <div
-                onClick={() => toggleViewDisabled("im")}
-                style={{
-                  width: 40, height: 22, borderRadius: 11, cursor: "pointer",
-                  background: imDisabled ? "var(--line)" : "var(--ok)",
-                  position: "relative", transition: "background 0.2s",
-                }}
-              >
-                <div style={{
-                  width: 18, height: 18, borderRadius: 9, background: "#fff",
-                  position: "absolute", top: 2,
-                  left: imDisabled ? 2 : 20,
-                  transition: "left 0.2s", boxShadow: "0 1px 3px rgba(0,0,0,0.2)",
-                }} />
-              </div>
-            </label>
-          </div>
-        )}
-        <IMConfigView
-          {..._configViewProps}
-          imDisabled={imDisabled}
-          onToggleIM={() => toggleViewDisabled("im")}
-          apiBaseUrl={httpApiBase()}
-          onNavigateToBotConfig={opts?.onboarding ? undefined : (presetType) => { setView("im"); }}
-          {...(opts?.onboarding ? { pendingBots: obPendingBots, onPendingBotsChange: setObPendingBots } : {})}
-        />
-      </>
+      <IMConfigView
+        {..._configViewProps}
+        imDisabled={imDisabled}
+        onToggleIM={opts?.onboarding ? undefined : () => toggleViewDisabled("im")}
+        apiBaseUrl={httpApiBase()}
+        onNavigateToBotConfig={opts?.onboarding ? undefined : (presetType) => { setView("im"); }}
+        {...(opts?.onboarding ? { pendingBots: obPendingBots, onPendingBotsChange: setObPendingBots } : {})}
+      />
     );
   }
 
