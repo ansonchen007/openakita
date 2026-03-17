@@ -46,6 +46,7 @@ jobs:
       - name: Build wheel
         run: |
           pip install build
+          mkdir -p docs-site/.vitepress/dist
           python -m build --wheel
 
       - name: Verify wheel installs correctly
@@ -156,6 +157,7 @@ jobs:
       - name: Install Python project and PyInstaller
         shell: bash
         run: |
+          mkdir -p docs-site/.vitepress/dist
           pip install -e ".[all]"
           pip install "pyinstaller>=6.18.0"
 

@@ -100,6 +100,16 @@ jobs:
           python -m pip install --upgrade pip
           pip install build
       
+      - name: Build user docs (VitePress)
+        working-directory: docs-site
+        run: |
+          npm ci
+          npx vitepress build
+        continue-on-error: true
+
+      - name: Ensure docs dist dir exists
+        run: mkdir -p docs-site/.vitepress/dist
+
       - name: Build package
         run: python -m build --wheel
       
@@ -222,6 +232,7 @@ jobs:
       - name: Install Python project and PyInstaller
         shell: bash
         run: |
+          mkdir -p docs-site/.vitepress/dist
           pip install -e ".[all]"
           pip install "pyinstaller>=6.18.0"
 
