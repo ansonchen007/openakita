@@ -3,7 +3,7 @@
 ## 基本信息
 
 - **Worker 地址**: `https://feedback.openakita.ai`（备用: `https://bug-report-worker.zacon365.workers.dev`）
-- **Admin API Key**: `bdce15d792befc17902c524996401f8c383c1dcd696e3a5208cf67735bfcae26`
+- **Admin API Key**: `4d8c535c9d5aa05e4238ce3f9e2692fb91319e0d955a703f96b3eceed17ecbfd`
 - **认证方式**: HTTP Header `Authorization: Bearer <ADMIN_API_KEY>`
 
 ## API 接口
