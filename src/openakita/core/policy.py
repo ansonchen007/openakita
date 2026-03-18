@@ -16,11 +16,10 @@ from __future__ import annotations
 
 import fnmatch
 import logging
-import os
 import platform
 import re
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
@@ -31,14 +30,14 @@ logger = logging.getLogger(__name__)
 # Enums
 # ---------------------------------------------------------------------------
 
-class PolicyDecision(str, Enum):
+class PolicyDecision(StrEnum):
     """策略判定结果"""
     ALLOW = "allow"
     DENY = "deny"
     CONFIRM = "confirm"
 
 
-class Zone(str, Enum):
+class Zone(StrEnum):
     """安全区域"""
     WORKSPACE = "workspace"
     CONTROLLED = "controlled"
@@ -46,7 +45,7 @@ class Zone(str, Enum):
     FORBIDDEN = "forbidden"
 
 
-class OpType(str, Enum):
+class OpType(StrEnum):
     """操作类型"""
     READ = "read"
     CREATE = "create"
@@ -56,7 +55,7 @@ class OpType(str, Enum):
     RECURSIVE_DELETE = "recursive_delete"
 
 
-class RiskLevel(str, Enum):
+class RiskLevel(StrEnum):
     """Shell 命令风险等级"""
     CRITICAL = "critical"
     HIGH = "high"
@@ -327,10 +326,7 @@ def _path_matches(normalised_path: str, pattern: str) -> bool:
     """Check if *normalised_path* matches the zone *pattern* (glob or prefix)."""
     norm_pattern = _normalise(pattern)
 
-    if norm_pattern.endswith("/**"):
-        prefix = norm_pattern[:-3]
-    else:
-        prefix = norm_pattern.rstrip("/")
+    prefix = norm_pattern[:-3] if norm_pattern.endswith("/**") else norm_pattern.rstrip("/")
 
     if normalised_path == prefix or normalised_path.startswith(prefix + "/"):
         return True
@@ -350,8 +346,7 @@ def _tool_to_optype(tool_name: str, params: dict[str, Any]) -> OpType:
         path = params.get("path", "")
         if path:
             try:
-                from pathlib import Path as P
-                fp = P(path) if P(path).is_absolute() else P.cwd() / path
+                fp = Path(path) if Path(path).is_absolute() else Path.cwd() / path
                 if fp.exists():
                     return OpType.OVERWRITE
             except Exception:

@@ -1,5 +1,19 @@
 import { useEffect, useState, useCallback } from "react";
 import { useTranslation } from "react-i18next";
+import {
+  IconShield, IconRefresh, IconPlus, IconX, IconTrash,
+  IconChevronDown, IconChevronRight, IconClock, IconSave, IconAlertCircle,
+} from "../icons";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Badge } from "@/components/ui/badge";
+import { Switch } from "@/components/ui/switch";
+import { Label } from "@/components/ui/label";
+import {
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+} from "@/components/ui/select";
+import { toast } from "sonner";
+import { Loader2 } from "lucide-react";
 
 type SecurityViewProps = {
   apiBaseUrl: string;
@@ -44,11 +58,11 @@ type CheckpointEntry = {
   file_count: number;
 };
 
-const ZONE_LABELS: Record<string, { zh: string; en: string; color: string }> = {
-  workspace: { zh: "自由区", en: "Workspace", color: "#22c55e" },
-  controlled: { zh: "可控区", en: "Controlled", color: "#3b82f6" },
-  protected: { zh: "保护区", en: "Protected", color: "#f59e0b" },
-  forbidden: { zh: "禁区", en: "Forbidden", color: "#ef4444" },
+const ZONE_META: Record<string, { color: string }> = {
+  workspace: { color: "#22c55e" },
+  controlled: { color: "#3b82f6" },
+  protected: { color: "#f59e0b" },
+  forbidden: { color: "#ef4444" },
 };
 
 const BACKEND_OPTIONS = [
@@ -57,21 +71,21 @@ const BACKEND_OPTIONS = [
   { value: "bubblewrap", label: "Bubblewrap (Linux)" },
   { value: "seatbelt", label: "Seatbelt (macOS)" },
   { value: "docker", label: "Docker" },
-  { value: "none", label: "None" },
+  { value: "none", label: "None (Disabled)" },
 ];
 
-export default function SecurityView({ apiBaseUrl, serviceRunning }: SecurityViewProps) {
-  const { t, i18n } = useTranslation();
-  const isZh = i18n.language?.startsWith("zh");
+type TabId = "zones" | "commands" | "sandbox" | "audit" | "checkpoints";
 
-  const [tab, setTab] = useState<"zones" | "commands" | "sandbox" | "audit" | "checkpoints">("zones");
+export default function SecurityView({ apiBaseUrl, serviceRunning }: SecurityViewProps) {
+  const { t } = useTranslation();
+
+  const [tab, setTab] = useState<TabId>("zones");
   const [zones, setZones] = useState<ZoneConfig>({ workspace: [], controlled: [], protected: [], forbidden: [] });
   const [commands, setCommands] = useState<CommandConfig>({ custom_critical: [], custom_high: [], excluded_patterns: [], blocked_commands: [] });
   const [sandbox, setSandbox] = useState<SandboxConfig>({ enabled: true, backend: "auto", sandbox_risk_levels: ["HIGH"], exempt_commands: [] });
   const [audit, setAudit] = useState<AuditEntry[]>([]);
   const [checkpoints, setCheckpoints] = useState<CheckpointEntry[]>([]);
   const [saving, setSaving] = useState(false);
-  const [msg, setMsg] = useState("");
 
   const api = useCallback(async (path: string, method = "GET", body?: unknown) => {
     const opts: RequestInit = { method, headers: { "Content-Type": "application/json" } };
@@ -117,315 +131,303 @@ export default function SecurityView({ apiBaseUrl, serviceRunning }: SecurityVie
     if (tab === "checkpoints") loadCheckpoints();
   }, [tab, loadAudit, loadCheckpoints]);
 
-  const saveZones = async () => {
+  const doSave = async (endpoint: string, body: unknown, successKey: string) => {
     setSaving(true);
     try {
-      await api("/api/config/security/zones", "POST", zones);
-      setMsg(isZh ? "区域配置已保存" : "Zone config saved");
-    } catch { setMsg(isZh ? "保存失败" : "Save failed"); }
+      await api(endpoint, "POST", body);
+      toast.success(t(`security.${successKey}`));
+    } catch {
+      toast.error(t("security.saveFailed"));
+    }
     setSaving(false);
-    setTimeout(() => setMsg(""), 3000);
-  };
-
-  const saveCommands = async () => {
-    setSaving(true);
-    try {
-      await api("/api/config/security/commands", "POST", commands);
-      setMsg(isZh ? "命令配置已保存" : "Command config saved");
-    } catch { setMsg(isZh ? "保存失败" : "Save failed"); }
-    setSaving(false);
-    setTimeout(() => setMsg(""), 3000);
-  };
-
-  const saveSandbox = async () => {
-    setSaving(true);
-    try {
-      await api("/api/config/security/sandbox", "POST", sandbox);
-      setMsg(isZh ? "沙箱配置已保存" : "Sandbox config saved");
-    } catch { setMsg(isZh ? "保存失败" : "Save failed"); }
-    setSaving(false);
-    setTimeout(() => setMsg(""), 3000);
   };
 
   const rewindCheckpoint = async (id: string) => {
-    if (!confirm(isZh ? `确认回滚到 ${id}？` : `Rewind to ${id}?`)) return;
+    if (!confirm(t("security.rewindConfirm", { id }))) return;
     try {
       await api("/api/config/security/checkpoint/rewind", "POST", { checkpoint_id: id });
-      setMsg(isZh ? "已回滚" : "Rewound");
-      setTimeout(() => setMsg(""), 3000);
+      toast.success(t("security.rewound"));
+      loadCheckpoints();
     } catch { /* ignore */ }
   };
 
   if (!serviceRunning) {
     return (
-      <div className="card" style={{ textAlign: "center", padding: 40 }}>
-        <p style={{ color: "var(--muted)" }}>{isZh ? "后端未运行" : "Backend not running"}</p>
+      <div className="flex flex-col items-center justify-center py-20 text-muted-foreground">
+        <IconAlertCircle size={32} className="mb-3 opacity-50" />
+        <p className="text-sm">{t("security.backendOff")}</p>
       </div>
     );
   }
 
-  const tabStyle = (id: string): React.CSSProperties => ({
-    padding: "8px 16px",
-    cursor: "pointer",
-    borderBottom: tab === id ? "2px solid var(--accent, #3b82f6)" : "2px solid transparent",
-    fontWeight: tab === id ? 600 : 400,
-    color: tab === id ? "var(--accent, #3b82f6)" : "var(--fg)",
-    fontSize: 13,
-  });
+  const TABS: { id: TabId; labelKey: string }[] = [
+    { id: "zones", labelKey: "security.zones" },
+    { id: "commands", labelKey: "security.commands" },
+    { id: "sandbox", labelKey: "security.sandbox" },
+    { id: "audit", labelKey: "security.audit" },
+    { id: "checkpoints", labelKey: "security.checkpoints" },
+  ];
 
   return (
-    <div style={{ padding: 0, maxWidth: 900, margin: "0 auto" }}>
-      <h2 style={{ fontSize: 18, fontWeight: 600, marginBottom: 4 }}>
-        {t("security.title")}
-      </h2>
-      <p style={{ color: "var(--muted)", fontSize: 13, marginBottom: 16 }}>
-        {t("security.desc")}
-      </p>
-
-      {msg && (
-        <div style={{ padding: "8px 14px", background: "var(--ok-bg, #ecfdf5)", borderRadius: 6, marginBottom: 12, fontSize: 13, color: "var(--ok, #059669)" }}>
-          {msg}
-        </div>
-      )}
-
-      <div style={{ display: "flex", gap: 0, borderBottom: "1px solid var(--line)", marginBottom: 16 }}>
-        <div style={tabStyle("zones")} onClick={() => setTab("zones")}>
-          {t("security.zones")}
-        </div>
-        <div style={tabStyle("commands")} onClick={() => setTab("commands")}>
-          {t("security.commands")}
-        </div>
-        <div style={tabStyle("sandbox")} onClick={() => setTab("sandbox")}>
-          {t("security.sandbox")}
-        </div>
-        <div style={tabStyle("audit")} onClick={() => setTab("audit")}>
-          {t("security.audit")}
-        </div>
-        <div style={tabStyle("checkpoints")} onClick={() => setTab("checkpoints")}>
-          {t("security.checkpoints")}
-        </div>
+    <div className="mx-auto max-w-[900px]">
+      <div className="mb-4">
+        <h2 className="text-lg font-semibold">{t("security.title")}</h2>
+        <p className="text-sm text-muted-foreground">{t("security.desc")}</p>
       </div>
 
+      {/* Tab bar */}
+      <div style={{ display: "flex", borderBottom: "1px solid var(--line)", marginBottom: 16 }}>
+        {TABS.map((tb) => {
+          const active = tab === tb.id;
+          return (
+            <button
+              key={tb.id}
+              onClick={() => setTab(tb.id)}
+              className="text-sm font-medium transition-colors"
+              style={{
+                padding: "8px 16px",
+                borderBottom: active ? "2px solid var(--accent, #3b82f6)" : "2px solid transparent",
+                color: active ? "var(--accent, #3b82f6)" : "var(--muted)",
+                marginBottom: -1,
+                background: "none",
+                border: "none",
+                borderBottomWidth: 2,
+                borderBottomStyle: "solid",
+                borderBottomColor: active ? "var(--accent, #3b82f6)" : "transparent",
+                cursor: "pointer",
+              }}
+            >
+              {t(tb.labelKey)}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Zones */}
       {tab === "zones" && (
-        <div className="card">
-          <p style={{ fontSize: 13, color: "var(--muted)", marginBottom: 16 }}>
-            {t("security.zonesDesc")}
-          </p>
+        <div className="space-y-3">
+          <p className="text-sm text-muted-foreground">{t("security.zonesDesc")}</p>
           {(["workspace", "controlled", "protected", "forbidden"] as const).map((zone) => (
             <ZonePanel
               key={zone}
               zone={zone}
-              label={isZh ? ZONE_LABELS[zone].zh : ZONE_LABELS[zone].en}
-              color={ZONE_LABELS[zone].color}
+              color={ZONE_META[zone].color}
               paths={zones[zone] || []}
               onChange={(paths) => setZones((prev) => ({ ...prev, [zone]: paths }))}
             />
           ))}
-          <button className="btn btnPrimary" onClick={saveZones} disabled={saving} style={{ marginTop: 12 }}>
-            {saving ? "..." : t("security.save")}
-          </button>
+          <Button onClick={() => doSave("/api/config/security/zones", zones, "zonesSaved")} disabled={saving}>
+            {saving ? <Loader2 className="size-4 animate-spin" /> : <IconSave size={14} />}
+            {t("security.save")}
+          </Button>
         </div>
       )}
 
+      {/* Commands */}
       {tab === "commands" && (
-        <div className="card">
-          <p style={{ fontSize: 13, color: "var(--muted)", marginBottom: 16 }}>
-            {t("security.commandsDesc")}
-          </p>
-          <ListEditor
-            label={isZh ? "CRITICAL 模式（自定义）" : "Custom CRITICAL patterns"}
+        <div className="space-y-4">
+          <p className="text-sm text-muted-foreground">{t("security.commandsDesc")}</p>
+          <TagEditor
+            label={t("security.criticalPatterns")}
             items={commands.custom_critical}
             onChange={(v) => setCommands((p) => ({ ...p, custom_critical: v }))}
-            placeholder="e.g. rm\s+-rf\s+/"
+            placeholder={`e.g. rm\\s+-rf\\s+/`}
           />
-          <ListEditor
-            label={isZh ? "HIGH 模式（自定义）" : "Custom HIGH patterns"}
+          <TagEditor
+            label={t("security.highPatterns")}
             items={commands.custom_high}
             onChange={(v) => setCommands((p) => ({ ...p, custom_high: v }))}
             placeholder="e.g. Remove-Item.*-Recurse"
           />
-          <ListEditor
-            label={isZh ? "排除的模式" : "Excluded patterns"}
+          <TagEditor
+            label={t("security.excludedPatterns")}
             items={commands.excluded_patterns}
             onChange={(v) => setCommands((p) => ({ ...p, excluded_patterns: v }))}
-            placeholder={isZh ? "排除误报的模式" : "Exclude false positive patterns"}
+            placeholder={t("security.excludedPh")}
           />
-          <ListEditor
-            label={isZh ? "命令黑名单" : "Blocked commands"}
+          <TagEditor
+            label={t("security.blockedCommands")}
             items={commands.blocked_commands}
             onChange={(v) => setCommands((p) => ({ ...p, blocked_commands: v }))}
             placeholder="e.g. diskpart"
           />
-          <button className="btn btnPrimary" onClick={saveCommands} disabled={saving} style={{ marginTop: 12 }}>
-            {saving ? "..." : t("security.save")}
-          </button>
+          <Button onClick={() => doSave("/api/config/security/commands", commands, "commandsSaved")} disabled={saving}>
+            {saving ? <Loader2 className="size-4 animate-spin" /> : <IconSave size={14} />}
+            {t("security.save")}
+          </Button>
         </div>
       )}
 
+      {/* Sandbox */}
       {tab === "sandbox" && (
-        <div className="card">
-          <p style={{ fontSize: 13, color: "var(--muted)", marginBottom: 16 }}>
-            {t("security.sandboxDesc")}
-          </p>
-          <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16 }}>
-            <span style={{ fontSize: 13 }}>{t("security.sandboxEnabled")}</span>
-            <ToggleSwitch checked={sandbox.enabled} onChange={(v) => setSandbox((p) => ({ ...p, enabled: v }))} />
+        <div className="space-y-5">
+          <p className="text-sm text-muted-foreground">{t("security.sandboxDesc")}</p>
+          <div className="flex items-center gap-3">
+            <Switch
+              checked={sandbox.enabled}
+              onCheckedChange={(v) => setSandbox((p) => ({ ...p, enabled: v }))}
+            />
+            <Label className="text-sm">{t("security.sandboxEnabled")}</Label>
           </div>
-          <div style={{ marginBottom: 16 }}>
-            <label style={{ fontSize: 13, display: "block", marginBottom: 4 }}>{t("security.sandboxBackend")}</label>
-            <select
+          <div className="space-y-1.5">
+            <Label className="text-sm">{t("security.sandboxBackend")}</Label>
+            <Select
               value={sandbox.backend}
-              onChange={(e) => setSandbox((p) => ({ ...p, backend: e.target.value }))}
-              style={{ padding: "6px 10px", borderRadius: 6, border: "1px solid var(--line)", fontSize: 13, background: "var(--bg)" }}
+              onValueChange={(v) => setSandbox((p) => ({ ...p, backend: v }))}
             >
-              {BACKEND_OPTIONS.map((o) => (
-                <option key={o.value} value={o.value}>{o.label}</option>
-              ))}
-            </select>
+              <SelectTrigger className="w-[260px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {BACKEND_OPTIONS.map((o) => (
+                  <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
-          <button className="btn btnPrimary" onClick={saveSandbox} disabled={saving} style={{ marginTop: 12 }}>
-            {saving ? "..." : t("security.save")}
-          </button>
+          <Button onClick={() => doSave("/api/config/security/sandbox", sandbox, "sandboxSaved")} disabled={saving}>
+            {saving ? <Loader2 className="size-4 animate-spin" /> : <IconSave size={14} />}
+            {t("security.save")}
+          </Button>
         </div>
       )}
 
+      {/* Audit */}
       {tab === "audit" && (
-        <div className="card">
-          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 12 }}>
-            <span style={{ fontSize: 13, color: "var(--muted)" }}>
-              {isZh ? `最近 ${audit.length} 条记录` : `Last ${audit.length} entries`}
+        <div className="space-y-3">
+          <div className="flex items-center justify-between">
+            <span className="text-sm text-muted-foreground">
+              {t("security.auditCount", { count: audit.length })}
             </span>
-            <button className="btn" onClick={loadAudit} style={{ fontSize: 12 }}>
-              {isZh ? "刷新" : "Refresh"}
-            </button>
+            <Button variant="outline" size="sm" onClick={loadAudit}>
+              <IconRefresh size={14} /> {t("security.refresh")}
+            </Button>
           </div>
-          <div style={{ maxHeight: 400, overflow: "auto" }}>
-            {audit.length === 0 && (
-              <p style={{ color: "var(--muted)", textAlign: "center", padding: 20 }}>
-                {isZh ? "暂无审计记录" : "No audit entries"}
-              </p>
-            )}
-            {[...audit].reverse().map((e, i) => (
-              <div key={i} style={{
-                padding: "8px 12px", borderBottom: "1px solid var(--line)", fontSize: 12,
-                display: "flex", gap: 8, alignItems: "flex-start",
-              }}>
-                <span style={{
-                  padding: "2px 6px", borderRadius: 4, fontSize: 11, fontWeight: 600,
-                  background: e.decision === "deny" ? "#fee2e2" : e.decision === "confirm" ? "#fef3c7" : "#ecfdf5",
-                  color: e.decision === "deny" ? "#dc2626" : e.decision === "confirm" ? "#d97706" : "#059669",
-                }}>
-                  {e.decision.toUpperCase()}
-                </span>
-                <div style={{ flex: 1 }}>
-                  <span style={{ fontWeight: 500 }}>{e.tool}</span>
-                  <span style={{ color: "var(--muted)", marginLeft: 8 }}>{e.reason}</span>
+          {audit.length === 0 ? (
+            <div className="py-12 text-center text-muted-foreground text-sm">
+              <IconShield size={28} className="mx-auto mb-2 opacity-30" />
+              {t("security.noAudit")}
+            </div>
+          ) : (
+            <div className="rounded-md border max-h-[420px] overflow-auto">
+              {[...audit].reverse().map((e, i) => (
+                <div key={i} className="flex items-start gap-2.5 px-3 py-2.5 border-b last:border-b-0 text-sm">
+                  <DecisionBadge decision={e.decision} />
+                  <div className="flex-1 min-w-0">
+                    <span className="font-medium">{e.tool}</span>
+                    <span className="ml-2 text-muted-foreground text-xs">{e.reason}</span>
+                  </div>
+                  <span className="text-xs text-muted-foreground whitespace-nowrap">
+                    {new Date(e.ts * 1000).toLocaleTimeString()}
+                  </span>
                 </div>
-                <span style={{ color: "var(--muted)", whiteSpace: "nowrap" }}>
-                  {new Date(e.ts * 1000).toLocaleTimeString()}
-                </span>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
+      {/* Checkpoints */}
       {tab === "checkpoints" && (
-        <div className="card">
-          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 12 }}>
-            <span style={{ fontSize: 13, color: "var(--muted)" }}>
-              {isZh ? `${checkpoints.length} 个快照` : `${checkpoints.length} checkpoints`}
+        <div className="space-y-3">
+          <div className="flex items-center justify-between">
+            <span className="text-sm text-muted-foreground">
+              {t("security.checkpointCount", { count: checkpoints.length })}
             </span>
-            <button className="btn" onClick={loadCheckpoints} style={{ fontSize: 12 }}>
-              {isZh ? "刷新" : "Refresh"}
-            </button>
+            <Button variant="outline" size="sm" onClick={loadCheckpoints}>
+              <IconRefresh size={14} /> {t("security.refresh")}
+            </Button>
           </div>
-          {checkpoints.length === 0 && (
-            <p style={{ color: "var(--muted)", textAlign: "center", padding: 20 }}>
-              {isZh ? "暂无快照" : "No checkpoints"}
-            </p>
-          )}
-          {checkpoints.map((cp) => (
-            <div key={cp.checkpoint_id} style={{
-              padding: "10px 14px", borderBottom: "1px solid var(--line)", fontSize: 13,
-              display: "flex", alignItems: "center", gap: 10,
-            }}>
-              <div style={{ flex: 1 }}>
-                <div style={{ fontWeight: 500 }}>{cp.checkpoint_id}</div>
-                <div style={{ color: "var(--muted)", fontSize: 12 }}>
-                  {cp.tool_name} — {cp.file_count} {isZh ? "个文件" : "file(s)"}
-                  <span style={{ marginLeft: 8 }}>{new Date(cp.timestamp * 1000).toLocaleString()}</span>
-                </div>
-              </div>
-              <button
-                className="btn"
-                style={{ fontSize: 11 }}
-                onClick={() => rewindCheckpoint(cp.checkpoint_id)}
-              >
-                {isZh ? "回滚" : "Rewind"}
-              </button>
+          {checkpoints.length === 0 ? (
+            <div className="py-12 text-center text-muted-foreground text-sm">
+              <IconClock size={28} className="mx-auto mb-2 opacity-30" />
+              {t("security.noCheckpoints")}
             </div>
-          ))}
+          ) : (
+            <div className="rounded-md border">
+              {checkpoints.map((cp) => (
+                <div key={cp.checkpoint_id} className="flex items-center gap-3 px-3 py-2.5 border-b last:border-b-0">
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-medium font-mono truncate">{cp.checkpoint_id}</div>
+                    <div className="text-xs text-muted-foreground">
+                      {cp.tool_name} — {cp.file_count} {t("security.files")}
+                      <span className="ml-2">{new Date(cp.timestamp * 1000).toLocaleString()}</span>
+                    </div>
+                  </div>
+                  <Button variant="outline" size="xs" onClick={() => rewindCheckpoint(cp.checkpoint_id)}>
+                    {t("security.rewind")}
+                  </Button>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
     </div>
   );
 }
 
+/* ─── Sub-components ─── */
 
-function ZonePanel({ zone, label, color, paths, onChange }: {
-  zone: string; label: string; color: string;
+function DecisionBadge({ decision }: { decision: string }) {
+  const variant = decision === "deny" ? "destructive" : decision === "confirm" ? "outline" : "secondary";
+  return (
+    <Badge variant={variant} className="text-[11px] uppercase shrink-0">
+      {decision}
+    </Badge>
+  );
+}
+
+function ZonePanel({ zone, color, paths, onChange }: {
+  zone: string; color: string;
   paths: string[]; onChange: (v: string[]) => void;
 }) {
+  const { t } = useTranslation();
   const [input, setInput] = useState("");
   const [expanded, setExpanded] = useState(zone === "workspace" || zone === "controlled");
 
   const add = () => {
     const v = input.trim();
-    if (v && !paths.includes(v)) {
-      onChange([...paths, v]);
-    }
+    if (v && !paths.includes(v)) onChange([...paths, v]);
     setInput("");
   };
 
   return (
-    <div style={{ marginBottom: 12, border: "1px solid var(--line)", borderRadius: 8, overflow: "hidden" }}>
-      <div
+    <div className="rounded-lg border overflow-hidden">
+      <button
         onClick={() => setExpanded(!expanded)}
-        style={{
-          padding: "10px 14px", cursor: "pointer", display: "flex", alignItems: "center", gap: 8,
-          background: "var(--bg-hover, #f8fafc)",
-        }}
+        className="flex w-full items-center gap-2.5 px-3.5 py-2.5 text-left hover:bg-accent/50 transition-colors"
       >
-        <div style={{ width: 10, height: 10, borderRadius: "50%", background: color }} />
-        <span style={{ fontWeight: 600, fontSize: 13, flex: 1 }}>{label}</span>
-        <span style={{ color: "var(--muted)", fontSize: 12 }}>{paths.length}</span>
-        <span style={{ fontSize: 11 }}>{expanded ? "▾" : "▸"}</span>
-      </div>
+        <span className="size-2.5 rounded-full shrink-0" style={{ background: color }} />
+        <span className="flex-1 text-sm font-semibold">{t(`security.zone_${zone}`)}</span>
+        <span className="text-xs text-muted-foreground">{paths.length}</span>
+        {expanded ? <IconChevronDown size={14} /> : <IconChevronRight size={14} />}
+      </button>
       {expanded && (
-        <div style={{ padding: "8px 14px" }}>
+        <div className="px-3.5 pb-3 pt-1 space-y-1.5">
           {paths.map((p, i) => (
-            <div key={i} style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
-              <code style={{ flex: 1, fontSize: 12, padding: "2px 6px", background: "var(--bg-code, #f1f5f9)", borderRadius: 4 }}>
-                {p}
-              </code>
-              <button
+            <div key={i} className="flex items-center gap-1.5 group">
+              <code className="flex-1 text-xs px-2 py-1 bg-muted rounded">{p}</code>
+              <Button
+                variant="ghost" size="icon-xs"
+                className="opacity-0 group-hover:opacity-100 text-destructive"
                 onClick={() => onChange(paths.filter((_, j) => j !== i))}
-                style={{ background: "none", border: "none", cursor: "pointer", color: "#ef4444", fontSize: 14, padding: "0 4px" }}
               >
-                x
-              </button>
+                <IconX size={12} />
+              </Button>
             </div>
           ))}
-          <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
-            <input
+          <div className="flex gap-1.5 mt-2">
+            <Input
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && add()}
               placeholder="D:/path/to/dir/**"
-              style={{ flex: 1, padding: "4px 8px", fontSize: 12, border: "1px solid var(--line)", borderRadius: 4 }}
+              className="h-7 text-xs"
             />
-            <button className="btn" onClick={add} style={{ fontSize: 11, padding: "4px 10px" }}>+</button>
+            <Button variant="outline" size="xs" onClick={add}>
+              <IconPlus size={12} />
+            </Button>
           </div>
         </div>
       )}
@@ -433,70 +435,47 @@ function ZonePanel({ zone, label, color, paths, onChange }: {
   );
 }
 
-
-function ListEditor({ label, items, onChange, placeholder }: {
+function TagEditor({ label, items, onChange, placeholder }: {
   label: string; items: string[]; onChange: (v: string[]) => void; placeholder?: string;
 }) {
   const [input, setInput] = useState("");
 
   const add = () => {
     const v = input.trim();
-    if (v && !items.includes(v)) {
-      onChange([...items, v]);
-    }
+    if (v && !items.includes(v)) onChange([...items, v]);
     setInput("");
   };
 
   return (
-    <div style={{ marginBottom: 16 }}>
-      <label style={{ fontSize: 13, fontWeight: 500, display: "block", marginBottom: 6 }}>{label}</label>
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 6 }}>
-        {items.map((item, i) => (
-          <span key={i} style={{
-            display: "inline-flex", alignItems: "center", gap: 4,
-            padding: "2px 8px", background: "var(--bg-code, #f1f5f9)", borderRadius: 4, fontSize: 12,
-          }}>
-            <code>{item}</code>
-            <button
-              onClick={() => onChange(items.filter((_, j) => j !== i))}
-              style={{ background: "none", border: "none", cursor: "pointer", color: "#ef4444", fontSize: 12, padding: 0 }}
-            >
-              x
-            </button>
-          </span>
-        ))}
-      </div>
-      <div style={{ display: "flex", gap: 6 }}>
-        <input
+    <div className="space-y-2">
+      <Label className="text-sm">{label}</Label>
+      {items.length > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          {items.map((item, i) => (
+            <Badge key={i} variant="secondary" className="gap-1 pr-1 font-mono text-xs">
+              {item}
+              <button
+                onClick={() => onChange(items.filter((_, j) => j !== i))}
+                className="ml-0.5 rounded-sm hover:bg-destructive/20 transition-colors"
+              >
+                <IconX size={10} className="text-muted-foreground hover:text-destructive" />
+              </button>
+            </Badge>
+          ))}
+        </div>
+      )}
+      <div className="flex gap-1.5">
+        <Input
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && add()}
           placeholder={placeholder}
-          style={{ flex: 1, padding: "4px 8px", fontSize: 12, border: "1px solid var(--line)", borderRadius: 4 }}
+          className="h-8 text-xs"
         />
-        <button className="btn" onClick={add} style={{ fontSize: 11, padding: "4px 10px" }}>+</button>
+        <Button variant="outline" size="sm" onClick={add}>
+          <IconPlus size={12} />
+        </Button>
       </div>
-    </div>
-  );
-}
-
-
-function ToggleSwitch({ checked, onChange }: { checked: boolean; onChange: (v: boolean) => void }) {
-  return (
-    <div
-      onClick={() => onChange(!checked)}
-      style={{
-        width: 40, height: 22, borderRadius: 11, cursor: "pointer",
-        background: checked ? "var(--ok, #22c55e)" : "var(--line)",
-        position: "relative", transition: "background 0.2s",
-      }}
-    >
-      <div style={{
-        width: 18, height: 18, borderRadius: 9, background: "#fff",
-        position: "absolute", top: 2,
-        left: checked ? 20 : 2,
-        transition: "left 0.2s", boxShadow: "0 1px 3px rgba(0,0,0,0.2)",
-      }} />
     </div>
   );
 }

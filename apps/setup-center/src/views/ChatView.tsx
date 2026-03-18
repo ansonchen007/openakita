@@ -5,6 +5,7 @@ import { useEffect, useMemo, useRef, useState, useCallback, memo } from "react";
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import { ConfirmDialog } from "../components/ConfirmDialog";
+import { Button } from "@/components/ui/button";
 import { setThemePref } from "../theme";
 import type { Theme } from "../theme";
 import { invoke, downloadFile, openFileWithDefault, showInFolder, readFileBase64, onDragDrop, IS_TAURI, IS_WEB, onWsEvent, logger } from "../platform";
@@ -38,7 +39,7 @@ import {
   IconImage, IconRefresh, IconClipboard, IconTrash, IconZap,
   IconMask, IconBot, IconUsers, IconHelp, IconEdit, IconDownload,
   IconPin, IconSearch, IconCircleDot, IconXCircle,
-  IconBuilding,
+  IconBuilding, IconShield, IconAlertCircle,
   getFileTypeIcon,
 } from "../icons";
 
@@ -1781,41 +1782,46 @@ function SecurityConfirmModal({
   };
 
   const riskColors: Record<string, string> = {
-    CRITICAL: "bg-red-600", HIGH: "bg-orange-500", MEDIUM: "bg-yellow-500", LOW: "bg-green-500",
+    CRITICAL: "text-red-600 bg-red-100 dark:bg-red-900/30",
+    HIGH: "text-orange-600 bg-orange-100 dark:bg-orange-900/30",
+    MEDIUM: "text-yellow-600 bg-yellow-100 dark:bg-yellow-900/30",
+    LOW: "text-green-600 bg-green-100 dark:bg-green-900/30",
   };
-  const riskBg = riskColors[data.riskLevel] || "bg-gray-500";
+  const riskCls = riskColors[data.riskLevel] || "text-muted-foreground bg-muted";
 
   return (
     <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 backdrop-blur-sm">
-      <div className="w-[440px] rounded-xl bg-white dark:bg-gray-900 shadow-2xl border border-gray-200 dark:border-gray-700 p-6">
+      <div className="w-[440px] rounded-xl bg-background shadow-2xl border p-6">
         <div className="flex items-center gap-3 mb-4">
-          <div className="w-10 h-10 rounded-full bg-orange-100 dark:bg-orange-900/30 flex items-center justify-center text-xl">⚠️</div>
-          <div>
-            <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100">{t("security.confirmTitle", "安全确认")}</h3>
-            <span className={`inline-block px-2 py-0.5 rounded text-xs font-medium text-white ${riskBg}`}>{data.riskLevel}</span>
+          <div className="size-10 rounded-full bg-orange-100 dark:bg-orange-900/30 flex items-center justify-center">
+            <IconAlertCircle size={20} className="text-orange-500" />
           </div>
-          <span className="ml-auto text-sm text-gray-400">{data.countdown}s</span>
+          <div>
+            <h3 className="text-lg font-semibold">{t("security.confirmTitle")}</h3>
+            <span className={`inline-block px-2 py-0.5 rounded text-xs font-semibold ${riskCls}`}>{data.riskLevel}</span>
+          </div>
+          <span className="ml-auto tabular-nums text-sm text-muted-foreground">{data.countdown}s</span>
         </div>
-        <div className="mb-4 space-y-2 text-sm text-gray-700 dark:text-gray-300">
-          <div><span className="font-medium">{t("security.tool", "工具")}:</span> <code className="px-1 py-0.5 bg-gray-100 dark:bg-gray-800 rounded">{data.tool}</code></div>
-          <div><span className="font-medium">{t("security.reason", "原因")}:</span> {data.reason}</div>
+        <div className="mb-4 space-y-2 text-sm">
+          <div><span className="font-medium">{t("security.tool")}:</span> <code className="px-1.5 py-0.5 bg-muted rounded text-xs">{data.tool}</code></div>
+          <div><span className="font-medium">{t("security.reason")}:</span> <span className="text-muted-foreground">{data.reason}</span></div>
           {data.args.command ? (
-            <div className="mt-2 p-2 bg-gray-50 dark:bg-gray-800 rounded font-mono text-xs break-all max-h-24 overflow-y-auto">
+            <div className="mt-2 p-2.5 bg-muted rounded-md font-mono text-xs break-all max-h-24 overflow-y-auto">
               {String(data.args.command)}
             </div>
           ) : null}
         </div>
         <div className="flex gap-2">
-          <button onClick={() => respond("allow")} className="flex-1 py-2 rounded-lg bg-green-600 hover:bg-green-700 text-white font-medium text-sm transition-colors">
-            ✅ {t("security.allow", "允许")}
-          </button>
-          <button onClick={() => respond("deny")} className="flex-1 py-2 rounded-lg bg-red-600 hover:bg-red-700 text-white font-medium text-sm transition-colors">
-            ❌ {t("security.deny", "拒绝")}
-          </button>
+          <Button onClick={() => respond("allow")} className="flex-1 bg-green-600 hover:bg-green-700 text-white">
+            <IconCheck size={14} /> {t("security.allow")}
+          </Button>
+          <Button onClick={() => respond("deny")} variant="destructive" className="flex-1">
+            <IconX size={14} /> {t("security.deny")}
+          </Button>
           {data.needsSandbox && (
-            <button onClick={() => respond("sandbox")} className="flex-1 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-medium text-sm transition-colors">
-              🔒 {t("security.sandbox", "沙箱执行")}
-            </button>
+            <Button onClick={() => respond("sandbox")} className="flex-1 bg-blue-600 hover:bg-blue-700 text-white">
+              <IconShield size={14} /> {t("security.sandboxExec")}
+            </Button>
           )}
         </div>
       </div>
