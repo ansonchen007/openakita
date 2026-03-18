@@ -880,6 +880,21 @@ class QQBotAdapter(ChannelAdapter):
                 srv_send_msg=srv_send_msg,
             )
 
+    async def _build_api_headers(self, content_type: str = "application/json") -> dict:
+        """构建 QQ API V2 请求头，使用正确的 QQBot {access_token} 格式。"""
+        token = await self._get_access_token()
+        headers = {"Authorization": f"QQBot {token}"}
+        if content_type:
+            headers["Content-Type"] = content_type
+        return headers
+
+    def _api_base_url(self) -> str:
+        return (
+            "https://sandbox.api.sgroup.qq.com"
+            if self.sandbox
+            else "https://api.sgroup.qq.com"
+        )
+
     async def _upload_rich_media_base64(
         self,
         chat_type: str,
@@ -896,16 +911,8 @@ class QQBotAdapter(ChannelAdapter):
         """
         import httpx as hx
 
-        token = await self._get_access_token()
-        base_url = (
-            "https://sandbox.api.sgroup.qq.com"
-            if self.sandbox
-            else "https://api.sgroup.qq.com"
-        )
-        headers = {
-            "Authorization": f"QQBotToken {self.app_id}.{token}",
-            "Content-Type": "application/json",
-        }
+        headers = await self._build_api_headers()
+        base_url = self._api_base_url()
 
         if chat_type == "group":
             url = f"{base_url}/v2/groups/{target_id}/files"
@@ -932,16 +939,8 @@ class QQBotAdapter(ChannelAdapter):
         """Webhook 模式下通过 HTTP 直接发送媒体消息 (msg_type=7)。"""
         import httpx as hx
 
-        token = await self._get_access_token()
-        base_url = (
-            "https://sandbox.api.sgroup.qq.com"
-            if self.sandbox
-            else "https://api.sgroup.qq.com"
-        )
-        headers = {
-            "Authorization": f"QQBotToken {self.app_id}.{token}",
-            "Content-Type": "application/json",
-        }
+        headers = await self._build_api_headers()
+        base_url = self._api_base_url()
 
         if chat_type == "group":
             url = f"{base_url}/v2/groups/{target_id}/messages"
@@ -1140,16 +1139,8 @@ class QQBotAdapter(ChannelAdapter):
         except ImportError:
             raise ImportError("httpx not installed. Run: pip install httpx")
 
-        token = await self._get_access_token()
-        base_url = (
-            "https://sandbox.api.sgroup.qq.com"
-            if self.sandbox
-            else "https://api.sgroup.qq.com"
-        )
-        headers = {
-            "Authorization": f"QQBotToken {self.app_id}.{token}",
-            "Content-Type": "application/json",
-        }
+        headers = await self._build_api_headers()
+        base_url = self._api_base_url()
 
         text = message.content.text or ""
         target_id = message.chat_id
@@ -1227,17 +1218,14 @@ class QQBotAdapter(ChannelAdapter):
 
         # 发送图片（公网 URL 或本地文件 base64 上传）
         if first_image_url or first_image_path:
-            try:
-                media_id = await self._send_rich_media(
-                    None, chat_type, target_id,
-                    file_type=1,
-                    url=first_image_url,
-                    msg_id=msg_id,
-                    local_path=first_image_path if not first_image_url else None,
-                )
-                result_id = result_id or media_id
-            except Exception as img_err:
-                logger.warning(f"QQ Webhook: failed to send image: {img_err}")
+            media_id = await self._send_rich_media(
+                None, chat_type, target_id,
+                file_type=1,
+                url=first_image_url,
+                msg_id=msg_id,
+                local_path=first_image_path if not first_image_url else None,
+            )
+            result_id = result_id or media_id
 
         return result_id
 
@@ -1330,27 +1318,21 @@ class QQBotAdapter(ChannelAdapter):
 
         # 发送图片（公网 URL 或本地文件 base64 上传）
         if image_url:
-            try:
-                media_id = await self._send_rich_media(
-                    api, chat_type, target_id,
-                    file_type=1,
-                    url=image_url,
-                    msg_id=msg_id,
-                )
-                result_id = result_id or media_id
-            except Exception as img_err:
-                logger.warning(f"Failed to send image via URL: {img_err}")
+            media_id = await self._send_rich_media(
+                api, chat_type, target_id,
+                file_type=1,
+                url=image_url,
+                msg_id=msg_id,
+            )
+            result_id = result_id or media_id
         elif image_path:
-            try:
-                media_id = await self._send_rich_media(
-                    api, chat_type, target_id,
-                    file_type=1,
-                    msg_id=msg_id,
-                    local_path=image_path,
-                )
-                result_id = result_id or media_id
-            except Exception as img_err:
-                logger.warning(f"Failed to send local image via base64: {img_err}")
+            media_id = await self._send_rich_media(
+                api, chat_type, target_id,
+                file_type=1,
+                msg_id=msg_id,
+                local_path=image_path,
+            )
+            result_id = result_id or media_id
 
         return result_id
 
@@ -1493,16 +1475,8 @@ class QQBotAdapter(ChannelAdapter):
         except ImportError:
             return ""
 
-        token = await self._get_access_token()
-        base_url = (
-            "https://sandbox.api.sgroup.qq.com"
-            if self.sandbox
-            else "https://api.sgroup.qq.com"
-        )
-        headers = {
-            "Authorization": f"QQBotToken {self.app_id}.{token}",
-            "Content-Type": "application/json",
-        }
+        headers = await self._build_api_headers()
+        base_url = self._api_base_url()
 
         body: dict[str, Any] = {"msg_type": 0, "content": "正在思考中..."}
         if msg_id:
@@ -1560,13 +1534,8 @@ class QQBotAdapter(ChannelAdapter):
         except ImportError:
             return
 
-        token = await self._get_access_token()
-        base_url = (
-            "https://sandbox.api.sgroup.qq.com"
-            if self.sandbox
-            else "https://api.sgroup.qq.com"
-        )
-        headers = {"Authorization": f"QQBotToken {self.app_id}.{token}"}
+        headers = await self._build_api_headers(content_type="")
+        base_url = self._api_base_url()
 
         if chat_type == "group":
             url = f"/v2/groups/{chat_id}/messages/{message_id}"

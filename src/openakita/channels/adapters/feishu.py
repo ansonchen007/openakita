@@ -565,6 +565,15 @@ class FeishuAdapter(ChannelAdapter):
             builder = builder.register_p2_im_chat_member_bot_deleted_v1(self._on_bot_chat_deleted)
         except AttributeError:
             pass
+        # 注册卡片交互回调（card.action.trigger），需要 lark-oapi >= 1.3.0
+        try:
+            builder = builder.register_p2_card_action_trigger(self._on_card_action)
+        except AttributeError:
+            logger.warning(
+                "Feishu: register_p2_card_action_trigger not available, "
+                "card button interactions will not work. "
+                "Upgrade lark-oapi to >= 1.3.0."
+            )
         self._event_dispatcher = builder.build()
 
     def _on_message_receive(self, data: Any) -> None:
@@ -703,6 +712,224 @@ class FeishuAdapter(ChannelAdapter):
                 logger.info(f"Feishu: bot removed from chat {chat_id}")
         except Exception as e:
             logger.debug(f"Feishu: failed to handle bot_deleted event: {e}")
+
+    # ==================== 卡片交互回调 ====================
+
+    def _on_card_action(self, data: Any) -> Any:
+        """卡片回传交互回调 (card.action.trigger) — WebSocket 长连接模式。
+
+        在 WS 线程中同步调用，必须在 3 秒内返回 P2CardActionTriggerResponse。
+        """
+        try:
+            from lark_oapi.event.callback.model.p2_card_action_trigger import (
+                P2CardActionTriggerResponse,
+            )
+        except ImportError:
+            logger.error("P2CardActionTriggerResponse not available, card action ignored")
+            return None
+
+        try:
+            event = data.event
+            action = event.action
+            value = action.value
+            if isinstance(value, str):
+                try:
+                    value = json.loads(value)
+                except (json.JSONDecodeError, TypeError):
+                    value = {"action": value}
+
+            resp_dict = self._dispatch_card_action(value or {})
+            return P2CardActionTriggerResponse(resp_dict)
+
+        except Exception as e:
+            logger.error(f"Feishu: card action callback error: {e}", exc_info=True)
+            return P2CardActionTriggerResponse({
+                "toast": {"type": "error", "content": "处理失败，请稍后重试"},
+            })
+
+    def _handle_card_action_webhook(self, body: dict) -> dict:
+        """卡片回传交互回调 (card.action.trigger) — Webhook 模式。
+
+        直接返回响应 dict 作为 HTTP 响应体。
+        """
+        try:
+            event = body.get("event", {})
+            action = event.get("action", {})
+            value = action.get("value", {})
+            if isinstance(value, str):
+                try:
+                    value = json.loads(value)
+                except (json.JSONDecodeError, TypeError):
+                    value = {"action": value}
+
+            return self._dispatch_card_action(value or {})
+
+        except Exception as e:
+            logger.error(f"Feishu: card action webhook error: {e}", exc_info=True)
+            return {
+                "toast": {"type": "error", "content": "处理失败，请稍后重试"},
+            }
+
+    def _dispatch_card_action(self, value: dict) -> dict:
+        """根据按钮 value 中的 action 字段分发到对应处理逻辑。
+
+        返回飞书卡片回调响应 dict（含可选的 toast / card 字段）。
+        """
+        action_type = value.get("action", "")
+
+        if action_type == "expand_folder":
+            return self._handle_expand_folder(value.get("path", ""))
+
+        if action_type == "collapse_folder":
+            return self._handle_collapse_folder(value)
+
+        logger.debug(f"Feishu: unknown card action: {action_type}")
+        return {}
+
+    def _handle_expand_folder(self, path: str) -> dict:
+        """读取目录内容并返回包含文件树和展开按钮的更新卡片。"""
+        if not path:
+            return {"toast": {"type": "error", "content": "路径为空"}}
+
+        norm = os.path.normpath(path)
+        if ".." in norm.split(os.sep):
+            return {"toast": {"type": "error", "content": "不允许的路径"}}
+
+        if not os.path.isdir(norm):
+            return {"toast": {"type": "warning", "content": f"目录不存在: {os.path.basename(norm)}"}}
+
+        try:
+            entries = os.listdir(norm)
+        except PermissionError:
+            return {"toast": {"type": "error", "content": "没有权限访问此目录"}}
+        except OSError as e:
+            return {"toast": {"type": "error", "content": f"读取失败: {e}"}}
+
+        card = self._build_folder_card(norm, entries)
+        return {"card": {"type": "raw", "data": card}}
+
+    def _handle_collapse_folder(self, value: dict) -> dict:
+        """折叠目录：返回仅含目录名和展开按钮的精简卡片。"""
+        path = value.get("path", "")
+        parent = value.get("parent", "")
+        if not path:
+            return {}
+
+        folder_name = os.path.basename(path) or path
+        elements = [
+            {"tag": "markdown", "content": f"📁 **{folder_name}**"},
+            {
+                "tag": "action",
+                "actions": [
+                    {
+                        "tag": "button",
+                        "text": {"tag": "plain_text", "content": f"📂 展开 {folder_name}"},
+                        "type": "default",
+                        "value": {"action": "expand_folder", "path": path},
+                    },
+                ],
+            },
+        ]
+
+        title = os.path.basename(parent) if parent else folder_name
+        return {
+            "card": {
+                "type": "raw",
+                "data": {
+                    "config": {"wide_screen_mode": True},
+                    "header": {
+                        "title": {"tag": "plain_text", "content": f"📁 {title}"},
+                        "template": "blue",
+                    },
+                    "elements": elements,
+                },
+            },
+        }
+
+    @staticmethod
+    def _build_folder_card(dir_path: str, entries: list[str]) -> dict:
+        """构建含文件列表和子目录展开按钮的飞书交互卡片（JSON 1.0）。"""
+        folder_name = os.path.basename(dir_path) or dir_path
+
+        dirs: list[str] = []
+        files: list[str] = []
+        for entry in sorted(entries):
+            if entry.startswith("."):
+                continue
+            full = os.path.join(dir_path, entry)
+            if os.path.isdir(full):
+                dirs.append(entry)
+            else:
+                files.append(entry)
+
+        _ICON = {
+            "dir": "📁", "md": "📝", "txt": "📄", "pdf": "📕",
+            "png": "🖼️", "jpg": "🖼️", "jpeg": "🖼️", "gif": "🖼️",
+            "mp3": "🎵", "wav": "🎵", "mp4": "🎬",
+            "py": "🐍", "js": "📜", "json": "📋", "csv": "📊",
+        }
+
+        md_lines: list[str] = []
+        for d in dirs:
+            md_lines.append(f"📁 **{d}/**")
+        for f in files:
+            ext = f.rsplit(".", 1)[-1].lower() if "." in f else ""
+            icon = _ICON.get(ext, "📄")
+            md_lines.append(f"{icon} {f}")
+
+        elements: list[dict] = []
+
+        if md_lines:
+            MAX_DISPLAY = 50
+            if len(md_lines) > MAX_DISPLAY:
+                shown = md_lines[:MAX_DISPLAY]
+                shown.append(f"\n*...共 {len(md_lines)} 项，已显示前 {MAX_DISPLAY} 项*")
+                md_lines = shown
+            elements.append({"tag": "markdown", "content": "\n".join(md_lines)})
+        else:
+            elements.append({"tag": "markdown", "content": "*(空目录)*"})
+
+        if dirs:
+            MAX_BUTTONS_PER_ROW = 5
+            for i in range(0, min(len(dirs), 20), MAX_BUTTONS_PER_ROW):
+                chunk = dirs[i : i + MAX_BUTTONS_PER_ROW]
+                actions = []
+                for d in chunk:
+                    actions.append({
+                        "tag": "button",
+                        "text": {"tag": "plain_text", "content": f"📂 展开 {d}"},
+                        "type": "default",
+                        "value": {
+                            "action": "expand_folder",
+                            "path": os.path.join(dir_path, d),
+                        },
+                    })
+                elements.append({"tag": "action", "actions": actions})
+
+        elements.append({
+            "tag": "action",
+            "actions": [
+                {
+                    "tag": "button",
+                    "text": {"tag": "plain_text", "content": "📁 折叠"},
+                    "type": "default",
+                    "value": {
+                        "action": "collapse_folder",
+                        "path": dir_path,
+                        "parent": str(Path(dir_path).parent),
+                    },
+                },
+            ],
+        })
+
+        return {
+            "config": {"wide_screen_mode": True},
+            "header": {
+                "title": {"tag": "plain_text", "content": f"📁 {folder_name}"},
+                "template": "blue",
+            },
+            "elements": elements,
+        }
 
     def _buffer_event(self, chat_id: str, event: dict) -> None:
         """线程安全地缓冲事件"""
@@ -1222,6 +1449,8 @@ class FeishuAdapter(ChannelAdapter):
 
         if event_type == "im.message.receive_v1":
             asyncio.create_task(self._handle_message_event(event))
+        elif event_type == "card.action.trigger":
+            return self._handle_card_action_webhook(body)
 
         return {"success": True}
 
@@ -2372,16 +2601,18 @@ class FeishuAdapter(ChannelAdapter):
         content: str,
         buttons: list[dict] | None = None,
     ) -> dict:
-        """
-        构建简单卡片
+        """构建简单卡片。
 
         Args:
             title: 标题
-            content: 内容
-            buttons: 按钮列表 [{"text": "按钮文字", "value": "回调值"}]
+            content: Markdown 内容
+            buttons: 按钮列表，每项支持两种格式：
+                - ``{"text": "按钮文字", "value": "字符串回调值"}``
+                - ``{"text": "按钮文字", "value": {"action": "xxx", ...}}``
+                  传 dict 时整体作为按钮 value，便于卡片回调分发。
 
         Returns:
-            卡片 JSON
+            飞书卡片 JSON（1.0 结构）
         """
         elements = [
             {
@@ -2393,12 +2624,14 @@ class FeishuAdapter(ChannelAdapter):
         if buttons:
             actions = []
             for btn in buttons:
+                raw_value = btn.get("value", btn["text"])
+                btn_value = raw_value if isinstance(raw_value, dict) else {"action": raw_value}
                 actions.append(
                     {
                         "tag": "button",
                         "text": {"tag": "plain_text", "content": btn["text"]},
-                        "type": "primary",
-                        "value": {"action": btn.get("value", btn["text"])},
+                        "type": btn.get("type", "primary"),
+                        "value": btn_value,
                     }
                 )
 

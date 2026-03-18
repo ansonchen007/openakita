@@ -394,6 +394,14 @@ start()
 
 ## 九、变更记录
 
+### 2026-03-19 (六): 修复 flush_progress 绕过 F2 提取
+
+**问题**: F1-F4 修复了 `emit_progress_event` 的中间节流 flush，但 `agent.py` 在返回 response_text 之前显式调用 `gateway.flush_progress(session)`（line 4141），该方法未检查 `_THINK_TAG_NATIVE`，仍将累积的进度缓冲区作为独立消息发送。当 gateway 的 F2 提取逻辑随后运行时，缓冲区已为空。
+
+**修复**:
+
+- `gateway.py` — `flush_progress()`: 新增 `_THINK_TAG_NATIVE` 检查，对支持原生 `<think>` 的适配器直接返回，保留 buffer 供 F2 在回复时提取
+
 ### 2026-03-18 (五): 修复进度事件泄露为独立消息
 
 **问题**: 前一轮修复（P1-P3）仅在最终回复时从 progress buffer 提取 💭 行，但 `emit_progress_event` 的 2 秒节流 `_flush()` 在推理期间已将进度以独立消息发送，导致最终回复时缓冲区为空。此外，仅提取 💭 行而遗漏了 🔧/✅ 等工具进度行。移动端思考指示器因累积式内容和未闭合 `</think>` 标签无法折叠。

@@ -3726,6 +3726,14 @@ class MessageGateway:
         """
         if not session:
             return
+
+        # _THINK_TAG_NATIVE adapters: buffer will be extracted and wrapped in
+        # <think> tags at reply time (F2 in _handle_message / _call_agent_streaming).
+        # Do NOT send as a separate message here.
+        _adapter = self._adapters.get(session.channel)
+        if _adapter and getattr(_adapter, "_THINK_TAG_NATIVE", False):
+            return
+
         session_key = session.session_key
 
         # 等待已运行的 flush task 完成，确保进度消息在回复前送达
