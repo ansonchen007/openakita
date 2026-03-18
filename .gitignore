@@ -129,6 +129,9 @@ tests/**/__pycache__/
 voice_*.txt
 voice_*.py
 
+# Bug reports (user-submitted, contain PII / binaries)
+bug-reports/
+
 # Personal/private folders
 stock_monitor/
 
@@ -227,3 +230,7 @@ botpy.log*
 OPENAKITA_RESEARCH_REPORT.md
 openakita-release.keystore
 ppt_build/
+
+# Cursor commit message drafts
+.commitmsg
+.commitmsg_responses
