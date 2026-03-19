@@ -3486,7 +3486,7 @@ create_agent(name="名称", description="描述", skills=["技能"], custom_prom
                 )
                 return
 
-            # Complexity detection: suggest Plan mode for complex tasks
+            # Complexity detection: force ask_user for complex tasks
             if (
                 mode == "agent"
                 and hasattr(self, "_current_intent")
@@ -3496,28 +3496,24 @@ create_agent(name="名称", description="描述", skills=["技能"], custom_prom
                 _score = getattr(
                     getattr(self._current_intent, "complexity", None), "score", 0
                 )
-                system_prompt += (
-                    "\n\n<system-reminder context='MANDATORY'>"
-                    f"\n⚠️ 复杂任务检测（评分: {_score}/10）"
-                    "\n"
-                    "\n此任务涉及多文件修改、跨模块调整或破坏性操作。"
-                    "\n"
-                    "\n## 强制要求"
-                    "\n你的第一个动作必须是调用 ask_user 工具，询问用户如何继续："
-                    '\n```json'
-                    '\n{"question": "⚠️ 检测到复杂任务（复杂度评分: '
-                    + str(_score)
-                    + '/10），此任务涉及多文件修改和破坏性操作。'
-                    '建议先规划再执行。如何继续？",'
-                    '\n "options": [{"id": "plan", "label": "切换到 Plan 模式详细规划（推荐）"}'
-                    ', {"id": "execute", "label": "直接执行"}]}'
-                    "\n```"
-                    "\n在用户回复前，禁止调用任何其他工具。这不是建议，是系统级强制要求。"
-                    "\n</system-reminder>"
-                )
                 logger.info(
-                    f"[ComplexityDetection] Injected mandatory plan suggestion (score={_score})"
+                    f"[ComplexityDetection] Complex task detected (score={_score}), "
+                    "forcing ask_user before execution"
                 )
+                yield {
+                    "type": "ask_user",
+                    "question": (
+                        f"⚠️ 检测到复杂任务（复杂度: {_score}/10）\n\n"
+                        "此任务涉及多文件修改、跨模块调整或破坏性操作。\n"
+                        "建议先在 Plan 模式下进行详细规划，再执行。"
+                    ),
+                    "options": [
+                        {"id": "plan", "label": "切换到 Plan 模式详细规划（推荐）"},
+                        {"id": "execute", "label": "直接在 Agent 模式执行"},
+                    ],
+                }
+                yield {"type": "done"}
+                return
 
             async for event in self.reasoning_engine.reason_stream(
                 messages=messages,

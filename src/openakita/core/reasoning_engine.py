@@ -19,6 +19,7 @@ import copy
 import hashlib
 import json
 import logging
+import re
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -108,6 +109,76 @@ def _filter_tools_by_mode(tools: list[dict], mode: str) -> list[dict]:
 
     logger.info(f"[ToolFilter] mode={mode}: {len(tools)} -> {len(filtered)} tools")
     return filtered
+
+
+_SHELL_WRITE_PATTERNS = re.compile(
+    r'(?:'
+    r'>\s*["\'/\w]'
+    r'|>>'
+    r'|\btee\b'
+    r'|\bsed\s+-i'
+    r'|\bdd\b'
+    r'|\brm\s'
+    r'|\bmv\s'
+    r'|\bcp\s'
+    r'|\bmkdir\b'
+    r'|\btouch\b'
+    r'|\bchmod\b'
+    r'|\bchown\b'
+    r'|open\s*\([^)]*["\']w'
+    r'|\.write\s*\('
+    r'|echo\s+.*>'
+    r'|\bpip\s+install'
+    r'|\bnpm\s+install'
+    r'|\bgit\s+(?:commit|push|checkout|merge|rebase|reset)'
+    r')',
+    re.IGNORECASE,
+)
+
+
+def _is_shell_write_command(command: str) -> bool:
+    """Check if a shell command appears to perform write operations."""
+    return bool(_SHELL_WRITE_PATTERNS.search(command))
+
+
+def _should_block_tool(
+    tool_name: str,
+    tool_input: Any,
+    allowed_tool_names: set[str] | None,
+    mode: str,
+) -> str | None:
+    """Check if a tool call should be blocked by mode restrictions.
+
+    Returns None if allowed, or an error message string if blocked.
+    """
+    if allowed_tool_names is None:
+        return None
+
+    if tool_name not in allowed_tool_names:
+        return (
+            f"错误：{tool_name} 在当前 {mode} 模式下不可用。"
+            "请使用已提供的工具列表中的工具，或建议用户切换到 agent 模式。"
+        )
+
+    if tool_name == "run_shell":
+        cmd = ""
+        if isinstance(tool_input, dict):
+            cmd = tool_input.get("command", "")
+        elif isinstance(tool_input, str):
+            try:
+                cmd = json.loads(tool_input).get("command", "")
+            except Exception:
+                pass
+        if cmd and _is_shell_write_command(cmd):
+            logger.warning(
+                f"[ModeGuard] Blocked run_shell write command in {mode} mode: {cmd[:100]}"
+            )
+            return (
+                f"错误：在 {mode} 模式下，run_shell 仅允许执行只读命令（如 cat、grep、ls、find 等）。"
+                f"检测到写操作命令，已拦截。请使用只读命令，或建议用户切换到 agent 模式。"
+            )
+
+    return None
 
 
 class DecisionType(Enum):
@@ -1039,18 +1110,18 @@ class ReasoningEngine:
                     for tc in decision.tool_calls:
                         _tc_name = tc.get("name", "")
                         _tc_id = tc.get("id", "")
-                        if _tc_name not in _allowed_tool_names:
+                        _tc_input = tc.get("input", tc.get("arguments", {}))
+                        _block_reason = _should_block_tool(
+                            _tc_name, _tc_input, _allowed_tool_names, mode
+                        )
+                        if _block_reason:
                             logger.warning(
-                                f"[ModeGuard] Blocked '{_tc_name}' in {mode} mode "
-                                f"(not in allowed set of {len(_allowed_tool_names)} tools)"
+                                f"[ModeGuard] Blocked '{_tc_name}' in {mode} mode"
                             )
                             _mode_blocked_results.append({
                                 "type": "tool_result",
                                 "tool_use_id": _tc_id,
-                                "content": (
-                                    f"错误：{_tc_name} 在当前 {mode} 模式下不可用。"
-                                    "请使用已提供的工具列表中的工具，或建议用户切换到 agent 模式。"
-                                ),
+                                "content": _block_reason,
                                 "is_error": True,
                             })
                         else:
@@ -2077,14 +2148,12 @@ class ReasoningEngine:
                             t_args = tc.get("input", tc.get("arguments", {}))
                             t_id = tc.get("id", str(uuid.uuid4()))
                             # Runtime mode guard
-                            if _allowed_tool_names is not None and t_name not in _allowed_tool_names:
+                            _blocked_msg = _should_block_tool(
+                                t_name, t_args, _allowed_tool_names, _effective_mode
+                            )
+                            if _blocked_msg:
                                 logger.warning(
-                                    f"[ModeGuard] Blocked '{t_name}' in {_effective_mode} mode "
-                                    f"(not in allowed set of {len(_allowed_tool_names)} tools)"
-                                )
-                                _blocked_msg = (
-                                    f"错误：{t_name} 在当前 {_effective_mode} 模式下不可用。"
-                                    "请使用已提供的工具列表中的工具，或建议用户切换到 agent 模式。"
+                                    f"[ModeGuard] Blocked '{t_name}' in {_effective_mode} mode"
                                 )
                                 yield {"type": "tool_call_start", "tool": t_name, "args": t_args, "id": t_id}
                                 yield {
@@ -2211,14 +2280,12 @@ class ReasoningEngine:
                         tool_id = tc.get("id", str(uuid.uuid4()))
 
                         # Runtime mode guard
-                        if _allowed_tool_names is not None and tool_name not in _allowed_tool_names:
+                        _blocked_msg = _should_block_tool(
+                            tool_name, tool_args, _allowed_tool_names, _effective_mode
+                        )
+                        if _blocked_msg:
                             logger.warning(
-                                f"[ModeGuard] Blocked '{tool_name}' in {_effective_mode} mode "
-                                f"(not in allowed set of {len(_allowed_tool_names)} tools)"
-                            )
-                            _blocked_msg = (
-                                f"错误：{tool_name} 在当前 {_effective_mode} 模式下不可用。"
-                                "请使用已提供的工具列表中的工具，或建议用户切换到 agent 模式。"
+                                f"[ModeGuard] Blocked '{tool_name}' in {_effective_mode} mode"
                             )
                             yield {"type": "tool_call_start", "tool": tool_name, "args": tool_args, "id": tool_id}
                             yield {
