@@ -173,6 +173,10 @@ class FeishuAdapter(ChannelAdapter):
         self._user_name_cache: collections.OrderedDict[str, str] = collections.OrderedDict()
         self._user_name_cache_max = 200
 
+        # 群名缓存：chat_id → group name（避免重复调 im.v1.chat.get）
+        self._chat_name_cache: collections.OrderedDict[str, str] = collections.OrderedDict()
+        self._chat_name_cache_max = 200
+
         # "思考中..."占位卡片：session_key → 卡片 message_id
         # session_key = chat_id 或 chat_id:thread_id（话题模式）
         self._thinking_cards: dict[str, str] = {}
@@ -1671,6 +1675,10 @@ class FeishuAdapter(ChannelAdapter):
         metadata["sender_name"] = await self._resolve_user_name(
             sender_id.get("open_id", "")
         )
+        if chat_type == "group":
+            metadata["chat_name"] = await self._resolve_chat_name(
+                message.get("chat_id", "")
+            )
 
         return UnifiedMessage.create(
             channel=self.channel_name,
@@ -1709,6 +1717,27 @@ class FeishuAdapter(ChannelAdapter):
         self._user_name_cache[open_id] = name
         while len(self._user_name_cache) > self._user_name_cache_max:
             self._user_name_cache.popitem(last=False)
+
+        return name
+
+    async def _resolve_chat_name(self, chat_id: str) -> str:
+        """从缓存或 im.v1.chat.get API 获取群聊名称，失败时静默返回空字符串。"""
+        if not chat_id:
+            return ""
+
+        if chat_id in self._chat_name_cache:
+            self._chat_name_cache.move_to_end(chat_id)
+            return self._chat_name_cache[chat_id]
+
+        try:
+            info = await self.get_chat_info(chat_id)
+            name = (info or {}).get("name", "") if info else ""
+        except Exception:
+            name = ""
+
+        self._chat_name_cache[chat_id] = name
+        while len(self._chat_name_cache) > self._chat_name_cache_max:
+            self._chat_name_cache.popitem(last=False)
 
         return name
 

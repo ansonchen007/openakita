@@ -518,6 +518,7 @@ class QQBotAdapter(ChannelAdapter):
                 "group_openid": group_openid,
                 "msg_id": data.get("id", ""),
                 "sender_name": "",
+                "chat_name": "",
             },
         )
 
@@ -552,6 +553,7 @@ class QQBotAdapter(ChannelAdapter):
                 "user_openid": user_openid,
                 "msg_id": data.get("id", ""),
                 "sender_name": "",
+                "chat_name": "",
             },
         )
 
@@ -589,6 +591,7 @@ class QQBotAdapter(ChannelAdapter):
                 "guild_id": guild_id,
                 "msg_id": data.get("id", ""),
                 "sender_name": author.get("username", ""),
+                "chat_name": "",
             },
         )
 
@@ -753,6 +756,7 @@ class QQBotAdapter(ChannelAdapter):
                 "group_openid": group_openid,
                 "msg_id": message.id,
                 "sender_name": "",
+                "chat_name": "",
             },
         )
 
@@ -791,6 +795,7 @@ class QQBotAdapter(ChannelAdapter):
                 "user_openid": user_openid,
                 "msg_id": message.id,
                 "sender_name": "",
+                "chat_name": "",
             },
         )
 
@@ -833,6 +838,7 @@ class QQBotAdapter(ChannelAdapter):
                 "guild_id": guild_id,
                 "msg_id": message.id,
                 "sender_name": getattr(author, "username", "") or "",
+                "chat_name": "",
             },
         )
 

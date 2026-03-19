@@ -932,6 +932,7 @@ class WeWorkWsAdapter(ChannelAdapter):
                 "req_id": req_id,
                 "is_group": chat_type == "group",
                 "sender_name": "",
+                "chat_name": body.get("chatname", ""),
             },
         )
 

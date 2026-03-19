@@ -2304,6 +2304,7 @@ class MessageGateway:
 
             # 4. 获取或创建会话
             _msg_sender_name = (message.metadata or {}).get("sender_name", "")
+            _msg_chat_name = (message.metadata or {}).get("chat_name", "")
             session = self.session_manager.get_session(
                 channel=message.channel,
                 chat_id=message.chat_id,
@@ -2311,13 +2312,16 @@ class MessageGateway:
                 thread_id=message.thread_id,
                 chat_type=message.chat_type or "private",
                 display_name=_msg_sender_name,
+                chat_name=_msg_chat_name,
             )
 
-            # 4.0.1 惰性更新 chat_type / display_name（已有 session 可能缺失）
+            # 4.0.1 惰性更新 chat_type / display_name / chat_name（已有 session 可能缺失）
             if message.chat_type and session.chat_type != message.chat_type:
                 session.chat_type = message.chat_type
             if _msg_sender_name and not session.display_name:
                 session.display_name = _msg_sender_name
+            if _msg_chat_name and session.chat_name != _msg_chat_name:
+                session.chat_name = _msg_chat_name
 
             # 4.1 多Bot绑定：将 adapter 配置的 agent_profile_id 写入新 session
             self._apply_bot_agent_profile(session, message.channel)

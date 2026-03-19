@@ -585,6 +585,7 @@ class DingTalkAdapter(ChannelAdapter):
             "conversation_type": conversation_type,
             "is_group": chat_type == "group",
             "sender_name": raw_data.get("senderNick", ""),
+            "chat_name": raw_data.get("conversationTitle", ""),
         }
 
         # 根据消息类型构建 content

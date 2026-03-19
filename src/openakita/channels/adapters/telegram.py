@@ -839,6 +839,7 @@ class TelegramAdapter(ChannelAdapter):
             metadata={
                 "is_group": chat_type == "group",
                 "sender_name": first_name_val or username_val,
+                "chat_name": chat.title or chat.first_name or "",
             },
         )
 

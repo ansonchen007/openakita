@@ -123,6 +123,9 @@ class OneBotAdapter(ChannelAdapter):
         self._chat_type_map: OrderedDict[str, str] = OrderedDict()
         self._CHAT_TYPE_MAP_CAPACITY = 2000
 
+        # group_id → group_name 缓存
+        self._group_name_cache: dict[str, str] = {}
+
     # ==================== 生命周期 ====================
 
     async def start(self) -> None:
@@ -384,6 +387,20 @@ class OneBotAdapter(ChannelAdapter):
         sender = data.get("sender") or {}
         user_id = str(data.get("user_id"))
 
+        chat_name = ""
+        if chat_type == "group" and data.get("group_id"):
+            gid = str(data["group_id"])
+            chat_name = self._group_name_cache.get(gid, "")
+            if not chat_name:
+                try:
+                    info = await self.get_group_info(data["group_id"])
+                    if info:
+                        chat_name = info.get("name", "")
+                        if chat_name:
+                            self._group_name_cache[gid] = chat_name
+                except Exception:
+                    pass
+
         unified = UnifiedMessage.create(
             channel=self.channel_name,
             channel_message_id=msg_id,
@@ -401,6 +418,7 @@ class OneBotAdapter(ChannelAdapter):
                 "card": sender.get("card"),
                 "is_group": chat_type == "group",
                 "sender_name": sender.get("card") or sender.get("nickname") or "",
+                "chat_name": chat_name,
             },
         )
 

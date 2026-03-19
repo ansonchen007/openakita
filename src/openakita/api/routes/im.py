@@ -103,6 +103,7 @@ async def list_sessions(request: Request, channel: str = Query("")):
 
         _chat_type = getattr(sess, "chat_type", "private") or "private"
         _display_name = getattr(sess, "display_name", "") or ""
+        _chat_name = getattr(sess, "chat_name", "") or ""
         _user_id = getattr(sess, "user_id", None)
         _chat_id = getattr(sess, "chat_id", None)
         _sess_id = str(sid)
@@ -113,6 +114,7 @@ async def list_sessions(request: Request, channel: str = Query("")):
             "chatId": _chat_id,
             "userId": _user_id,
             "chatType": _chat_type,
+            "chatName": _chat_name,
             "displayName": _display_name or _user_id or _chat_id or _sess_id[:12],
             "state": state_str,
             "lastActive": str(getattr(sess, "last_active", None) or getattr(sess, "updated_at", "")),

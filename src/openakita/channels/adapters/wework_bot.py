@@ -936,7 +936,7 @@ class WeWorkBotAdapter(ChannelAdapter):
             is_mentioned=is_mentioned,
             is_direct_message=is_direct_message,
             raw=msg_data,
-            metadata={"is_group": chat_type == "group", "sender_name": ""},
+            metadata={"is_group": chat_type == "group", "sender_name": "", "chat_name": msg_data.get("chatname", "")},
         )
 
         self._log_message(unified)
@@ -979,7 +979,7 @@ class WeWorkBotAdapter(ChannelAdapter):
             is_mentioned=is_mentioned,
             is_direct_message=is_direct_message,
             raw=msg_data,
-            metadata={"is_group": chat_type == "group", "sender_name": ""},
+            metadata={"is_group": chat_type == "group", "sender_name": "", "chat_name": msg_data.get("chatname", "")},
         )
 
         self._log_message(unified)
@@ -1063,7 +1063,7 @@ class WeWorkBotAdapter(ChannelAdapter):
             is_mentioned=is_mentioned,
             is_direct_message=is_direct_message,
             raw=msg_data,
-            metadata={"is_group": chat_type == "group", "sender_name": ""},
+            metadata={"is_group": chat_type == "group", "sender_name": "", "chat_name": msg_data.get("chatname", "")},
         )
 
         self._log_message(unified)
@@ -1108,7 +1108,7 @@ class WeWorkBotAdapter(ChannelAdapter):
             is_mentioned=is_mentioned,
             is_direct_message=is_direct_message,
             raw=msg_data,
-            metadata={"is_group": chat_type == "group", "sender_name": ""},
+            metadata={"is_group": chat_type == "group", "sender_name": "", "chat_name": msg_data.get("chatname", "")},
         )
 
         self._log_message(unified)
@@ -1151,7 +1151,7 @@ class WeWorkBotAdapter(ChannelAdapter):
             is_mentioned=is_mentioned,
             is_direct_message=is_direct_message,
             raw=msg_data,
-            metadata={"is_group": chat_type == "group", "sender_name": ""},
+            metadata={"is_group": chat_type == "group", "sender_name": "", "chat_name": msg_data.get("chatname", "")},
         )
 
         self._log_message(unified)

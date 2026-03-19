@@ -35,6 +35,7 @@ type IMSession = {
   chatId: string | null;
   userId: string | null;
   chatType?: string;
+  chatName?: string;
   displayName?: string;
   state: string;
   lastActive: string;
@@ -317,7 +318,14 @@ function MessagesTab({ serviceRunning, apiBase }: { serviceRunning: boolean; api
                 >
                   <div className="imSessionLeft">
                     {s.chatType === "group" ? <IconUsers size={13} /> : <IconUser size={13} />}
-                    <span className="imSessionName">{s.displayName || s.userId || s.chatId || s.sessionId.slice(0, 12)}</span>
+                    <span className="imSessionName">
+                      {s.chatType === "group"
+                        ? (s.chatName || s.displayName || s.chatId || s.sessionId.slice(0, 12))
+                        : (s.displayName || s.userId || s.chatId || s.sessionId.slice(0, 12))}
+                    </span>
+                    {s.chatType === "group" && s.chatName && s.displayName && (
+                      <span className="text-xs opacity-50 ml-1">({s.displayName})</span>
+                    )}
                   </div>
                   <div className="imSessionRight">
                     <span className="imSessionCount">{s.messageCount}</span>

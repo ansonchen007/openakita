@@ -13,7 +13,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Loader2, RefreshCw, Plus, Trash2, Pencil, Power, PowerOff, Zap, Search, CalendarX2, SearchX, Info, AlertTriangle } from "lucide-react";
@@ -48,6 +48,9 @@ type IMChannel = {
   chat_id: string;
   user_id: string | null;
   last_active: string;
+  chat_name?: string;
+  chat_type?: string;
+  display_name?: string;
 };
 
 // Frontend-only schedule mode; maps to backend trigger_type (once/interval/cron)
@@ -102,20 +105,61 @@ function pad2(n: number): string { return n.toString().padStart(2, "0"); }
 
 const CHANNEL_LABELS: Record<string, string> = {
   telegram: "Telegram",
+  dingtalk: "钉钉",
+  feishu: "飞书",
+  wework: "企业微信",
+  wework_ws: "企业微信",
+  wework_bot: "企业微信",
+  qqbot: "QQ",
+  onebot: "QQ(OneBot)",
+  onebot_reverse: "QQ(OneBot)",
   wechat: "微信",
   discord: "Discord",
   slack: "Slack",
-  dingtalk: "钉钉",
-  feishu: "飞书",
   whatsapp: "WhatsApp",
   web: "Web",
 };
 
-function formatChannelLabel(channelId: string, chatId: string): string {
-  const platform = CHANNEL_LABELS[channelId.toLowerCase()] || channelId;
+function extractPlatformBase(channelId: string): string {
+  return channelId.split(":")[0];
+}
+
+function extractPlatformLabel(channelId: string): string {
+  const base = extractPlatformBase(channelId);
+  return CHANNEL_LABELS[base.toLowerCase()] || base;
+}
+
+function extractBotName(channelId: string): string {
+  const parts = channelId.split(":");
+  return parts.length > 1 ? parts.slice(1).join(":") : "";
+}
+
+function shortChatId(chatId: string): string {
+  if (!chatId) return "";
+  return chatId.length > 16 ? chatId.slice(0, 8) + "…" + chatId.slice(-6) : chatId;
+}
+
+function formatChannelLabel(channelId: string, chatId: string, ch?: IMChannel): string {
+  if (ch) {
+    const typeIcon = ch.chat_type === "group" ? "👥 " : "💬 ";
+    const name = ch.chat_name || shortChatId(ch.chat_id);
+    return typeIcon + name;
+  }
+  const platform = extractPlatformLabel(channelId);
   if (!chatId) return platform;
-  const shortChat = chatId.length > 16 ? chatId.slice(0, 8) + "…" + chatId.slice(-6) : chatId;
-  return `${platform} · ${shortChat}`;
+  return `${platform} · ${shortChatId(chatId)}`;
+}
+
+function groupChannelsByPlatform(channels: IMChannel[]): Record<string, IMChannel[]> {
+  const groups: Record<string, IMChannel[]> = {};
+  for (const ch of channels) {
+    const platform = extractPlatformLabel(ch.channel_id);
+    const botName = extractBotName(ch.channel_id);
+    const key = botName ? `${platform} · ${botName}` : platform;
+    if (!groups[key]) groups[key] = [];
+    groups[key].push(ch);
+  }
+  return groups;
 }
 
 function safeInt(s: string, fallback: number): number {
@@ -863,11 +907,19 @@ export function SchedulerView({ serviceRunning, apiBaseUrl = "" }: { serviceRunn
                       <SelectItem value="__none__">
                         {t("scheduler.channelNone", "不推送通知")}
                       </SelectItem>
-                      {channels.map(ch => (
-                        <SelectItem key={`${ch.channel_id}|${ch.chat_id}`} value={`${ch.channel_id}|${ch.chat_id}`}>
-                          {formatChannelLabel(ch.channel_id, ch.chat_id)}
-                        </SelectItem>
-                      ))}
+                      {(() => {
+                        const grouped = groupChannelsByPlatform(channels);
+                        return Object.entries(grouped).map(([platform, items]) => (
+                          <SelectGroup key={platform}>
+                            <SelectLabel className="text-xs font-semibold text-muted-foreground px-2">{platform}</SelectLabel>
+                            {items.map(ch => (
+                              <SelectItem key={`${ch.channel_id}|${ch.chat_id}`} value={`${ch.channel_id}|${ch.chat_id}`}>
+                                {formatChannelLabel(ch.channel_id, ch.chat_id, ch)}
+                              </SelectItem>
+                            ))}
+                          </SelectGroup>
+                        ));
+                      })()}
                       {isStale && (
                         <SelectItem value={currentKey}>
                           ⚠ {formatChannelLabel(form.channel_id, form.chat_id)}
