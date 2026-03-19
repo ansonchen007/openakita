@@ -701,6 +701,7 @@ class ReasoningEngine:
 
         # Mode-based tool filtering (same as reason_stream)
         tools = _filter_tools_by_mode(tools, mode)
+        _allowed_tool_names = {t.get("name", "") for t in tools} if mode != "agent" else None
 
         # ==================== 主循环 ====================
         logger.info(f"[ReAct] === Loop started (max_iterations={max_iterations}, model={current_model}) ===")
@@ -1030,6 +1031,43 @@ class ReasoningEngine:
 
             elif decision.type == DecisionType.TOOL_CALLS:
                 # ==================== ACT 阶段 ====================
+
+                # Runtime mode guard: block tools not in the filtered set (defense-in-depth)
+                _mode_blocked_results: list[dict] = []
+                if _allowed_tool_names is not None:
+                    _guarded_calls = []
+                    for tc in decision.tool_calls:
+                        _tc_name = tc.get("name", "")
+                        _tc_id = tc.get("id", "")
+                        if _tc_name not in _allowed_tool_names:
+                            logger.warning(
+                                f"[ModeGuard] Blocked '{_tc_name}' in {mode} mode "
+                                f"(not in allowed set of {len(_allowed_tool_names)} tools)"
+                            )
+                            _mode_blocked_results.append({
+                                "type": "tool_result",
+                                "tool_use_id": _tc_id,
+                                "content": (
+                                    f"错误：{_tc_name} 在当前 {mode} 模式下不可用。"
+                                    "请使用已提供的工具列表中的工具，或建议用户切换到 agent 模式。"
+                                ),
+                                "is_error": True,
+                            })
+                        else:
+                            _guarded_calls.append(tc)
+                    if not _guarded_calls:
+                        working_messages.append({
+                            "role": "assistant",
+                            "content": decision.assistant_content,
+                            "reasoning_content": decision.thinking_content or None,
+                        })
+                        working_messages.append({
+                            "role": "user",
+                            "content": _mode_blocked_results,
+                        })
+                        continue
+                    decision.tool_calls = _guarded_calls
+
                 tool_names = [tc.get("name", "?") for tc in decision.tool_calls]
                 logger.info(f"[ReAct] Iter {iteration+1} — ACT: {tool_names}")
                 await broadcast_event("pet-status-update", {"status": "tool_execution", "tool_name": ", ".join(tool_names)})
@@ -1078,6 +1116,8 @@ class ReasoningEngine:
                             self._last_delivery_receipts = other_receipts
                         # 保留其他工具的 tool_result 内容
                         other_tool_results = other_results if other_results else []
+                    if _mode_blocked_results:
+                        other_tool_results.extend(_mode_blocked_results)
 
                     # 提取 ask_user 的问题文本（兼容 input/arguments + JSON 字符串参数）
                     ask_raw = ask_user_calls[0].get("input")
@@ -1260,6 +1300,9 @@ class ReasoningEngine:
                 if receipts:
                     delivery_receipts = receipts
                     self._last_delivery_receipts = receipts
+
+                if _mode_blocked_results:
+                    tool_results.extend(_mode_blocked_results)
 
                 # ==================== OBSERVE 阶段 ====================
                 logger.info(
@@ -1580,6 +1623,9 @@ class ReasoningEngine:
 
             # Tool filtering by mode — restrict available tools based on current mode
             tools = _filter_tools_by_mode(tools, _effective_mode)
+            _allowed_tool_names = (
+                {t.get("name", "") for t in tools} if _effective_mode != "agent" else None
+            )
 
             # === 端点覆盖 ===
             _endpoint_switched = False
@@ -2030,6 +2076,27 @@ class ReasoningEngine:
                             t_name = tc.get("name", "unknown")
                             t_args = tc.get("input", tc.get("arguments", {}))
                             t_id = tc.get("id", str(uuid.uuid4()))
+                            # Runtime mode guard
+                            if _allowed_tool_names is not None and t_name not in _allowed_tool_names:
+                                logger.warning(
+                                    f"[ModeGuard] Blocked '{t_name}' in {_effective_mode} mode "
+                                    f"(not in allowed set of {len(_allowed_tool_names)} tools)"
+                                )
+                                _blocked_msg = (
+                                    f"错误：{t_name} 在当前 {_effective_mode} 模式下不可用。"
+                                    "请使用已提供的工具列表中的工具，或建议用户切换到 agent 模式。"
+                                )
+                                yield {"type": "tool_call_start", "tool": t_name, "args": t_args, "id": t_id}
+                                yield {
+                                    "type": "tool_call_end", "tool": t_name,
+                                    "result": _blocked_msg[:_SSE_RESULT_PREVIEW_CHARS],
+                                    "id": t_id, "is_error": True,
+                                }
+                                tool_results_for_msg.append({
+                                    "type": "tool_result", "tool_use_id": t_id,
+                                    "content": _blocked_msg, "is_error": True,
+                                })
+                                continue
                             # chain_text: 工具描述
                             yield {"type": "chain_text", "content": self._describe_tool_call(t_name, t_args)}
                             yield {"type": "tool_call_start", "tool": t_name, "args": t_args, "id": t_id}
@@ -2142,6 +2209,28 @@ class ReasoningEngine:
                         tool_name = tc.get("name", "unknown")
                         tool_args = tc.get("input", tc.get("arguments", {}))
                         tool_id = tc.get("id", str(uuid.uuid4()))
+
+                        # Runtime mode guard
+                        if _allowed_tool_names is not None and tool_name not in _allowed_tool_names:
+                            logger.warning(
+                                f"[ModeGuard] Blocked '{tool_name}' in {_effective_mode} mode "
+                                f"(not in allowed set of {len(_allowed_tool_names)} tools)"
+                            )
+                            _blocked_msg = (
+                                f"错误：{tool_name} 在当前 {_effective_mode} 模式下不可用。"
+                                "请使用已提供的工具列表中的工具，或建议用户切换到 agent 模式。"
+                            )
+                            yield {"type": "tool_call_start", "tool": tool_name, "args": tool_args, "id": tool_id}
+                            yield {
+                                "type": "tool_call_end", "tool": tool_name,
+                                "result": _blocked_msg[:_SSE_RESULT_PREVIEW_CHARS],
+                                "id": tool_id, "is_error": True,
+                            }
+                            tool_results_for_msg.append({
+                                "type": "tool_result", "tool_use_id": tool_id,
+                                "content": _blocked_msg, "is_error": True,
+                            })
+                            continue
 
                         _tool_desc = self._describe_tool_call(tool_name, tool_args)
                         yield {"type": "chain_text", "content": _tool_desc}

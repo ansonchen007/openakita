@@ -3493,15 +3493,31 @@ create_agent(name="名称", description="描述", skills=["技能"], custom_prom
                 and self._current_intent
                 and getattr(self._current_intent, "suggest_plan", False)
             ):
-                _score = getattr(getattr(self._current_intent, "complexity", None), "score", 0)
+                _score = getattr(
+                    getattr(self._current_intent, "complexity", None), "score", 0
+                )
                 system_prompt += (
-                    "\n\n<system-reminder>"
-                    f"\n⚠️ 复杂任务检测（评分: {_score}/10）：此任务涉及多文件修改、跨模块或破坏性操作。"
-                    "\n在开始执行前，你必须先使用 ask_user 工具询问用户是否要切换到 Plan 模式进行详细规划。"
-                    "\n建议选项：1) 切换到 Plan 模式（推荐） 2) 直接执行"
+                    "\n\n<system-reminder context='MANDATORY'>"
+                    f"\n⚠️ 复杂任务检测（评分: {_score}/10）"
+                    "\n"
+                    "\n此任务涉及多文件修改、跨模块调整或破坏性操作。"
+                    "\n"
+                    "\n## 强制要求"
+                    "\n你的第一个动作必须是调用 ask_user 工具，询问用户如何继续："
+                    '\n```json'
+                    '\n{"question": "⚠️ 检测到复杂任务（复杂度评分: '
+                    + str(_score)
+                    + '/10），此任务涉及多文件修改和破坏性操作。'
+                    '建议先规划再执行。如何继续？",'
+                    '\n "options": [{"id": "plan", "label": "切换到 Plan 模式详细规划（推荐）"}'
+                    ', {"id": "execute", "label": "直接执行"}]}'
+                    "\n```"
+                    "\n在用户回复前，禁止调用任何其他工具。这不是建议，是系统级强制要求。"
                     "\n</system-reminder>"
                 )
-                logger.info(f"[ComplexityDetection] Injected plan suggestion (score={_score})")
+                logger.info(
+                    f"[ComplexityDetection] Injected mandatory plan suggestion (score={_score})"
+                )
 
             async for event in self.reasoning_engine.reason_stream(
                 messages=messages,
