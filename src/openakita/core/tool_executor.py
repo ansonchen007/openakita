@@ -686,15 +686,19 @@ class ToolExecutor:
 
     def _check_plan_required(self, tool_name: str, session_id: str | None) -> str | None:
         """
-        检查是否需要先创建 Plan。
+        检查是否需要先创建 Plan（仅 Agent 模式下的 todo 跟踪）。
 
         如果当前 session 被标记为需要 Plan（compound 任务），
         但还没有创建 Plan，则拒绝执行其他工具。
 
+        Plan/Ask 模式下跳过此检查（由模式提示词和工具过滤控制）。
+
         Returns:
             阻止消息字符串，或 None（允许执行）
         """
-        if tool_name == "create_plan":
+        # Plan/Ask 模式有自己的工作流控制，不使用此强制机制
+        if tool_name in ("create_plan", "create_plan_file", "exit_plan_mode",
+                         "get_plan_status", "ask_user"):
             return None
 
         try:
@@ -702,7 +706,7 @@ class ToolExecutor:
 
             if session_id and is_plan_required(session_id) and not has_active_plan(session_id):
                 return (
-                    "⚠️ **这是一个多步骤任务，必须先创建计划！**\n\n"
+                    "⚠️ **这是一个多步骤任务，建议先创建计划！**\n\n"
                     "请先调用 `create_plan` 工具创建任务计划，然后再执行具体操作。\n\n"
                     "示例：\n"
                     "```\n"

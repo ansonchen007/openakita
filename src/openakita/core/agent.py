@@ -2471,6 +2471,7 @@ create_agent(name="名称", description="描述", skills=["技能"], custom_prom
         conversation_id: str,
         *,
         attachments: list | None = None,
+        mode: str = "agent",
     ) -> tuple[list[dict], str, "TaskMonitor", str, Any]:
         """
         会话流水线 - 共享准备阶段。
@@ -2631,8 +2632,8 @@ create_agent(name="名称", description="描述", skills=["技能"], custom_prom
             f"memory_keywords: {intent_result.memory_keywords}"
         )
 
-        # 8. Plan mode detection
-        if intent_result.plan_required:
+        # 8. Plan mode detection (仅 Agent 模式 — Plan/Ask 模式由提示词和工具过滤控制)
+        if intent_result.plan_required and mode == "agent":
             from ..tools.handlers.plan import require_plan_for_session, should_require_plan
             has_multi_actions = should_require_plan(message)
             if intent_result.plan_required or has_multi_actions:
@@ -3385,6 +3386,7 @@ create_agent(name="名称", description="描述", skills=["技能"], custom_prom
                     gateway=gateway,
                     conversation_id=conversation_id,
                     attachments=attachments,
+                    mode=mode,
                 )
             )
 
@@ -5757,17 +5759,18 @@ NEXT: 建议的下一步（如有）"""
         logger.info(f"Executing tool: {tool_name} with {tool_input}")
 
         # ============================================
-        # Plan 模式强制检查
+        # Plan 强制检查（仅 Agent 模式下的 todo 跟踪）
         # ============================================
-        # 如果当前 session 被标记为需要 Plan（compound 任务），
-        # 但还没有创建 Plan，则拒绝执行其他工具
-        if tool_name != "create_plan":
+        # Plan/Ask 模式的控制工具始终放行，避免死锁
+        _plan_exempt = ("create_plan", "create_plan_file", "exit_plan_mode",
+                        "get_plan_status", "ask_user")
+        if tool_name not in _plan_exempt:
             from ..tools.handlers.plan import has_active_plan, is_plan_required
 
             session_id = getattr(self, "_current_session_id", None)
             if session_id and is_plan_required(session_id) and not has_active_plan(session_id):
                 return (
-                    "⚠️ **这是一个多步骤任务，必须先创建计划！**\n\n"
+                    "⚠️ **这是一个多步骤任务，建议先创建计划！**\n\n"
                     "请先调用 `create_plan` 工具创建任务计划，然后再执行具体操作。\n\n"
                     "示例：\n"
                     "```\n"
