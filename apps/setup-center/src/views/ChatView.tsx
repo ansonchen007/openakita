@@ -1876,7 +1876,8 @@ export function ChatView({
   const inputTextRef = useRef("");
   const [hasInputText, setHasInputText] = useState(false);
   const [selectedEndpoint, setSelectedEndpoint] = useState("auto");
-  const [planMode, setPlanMode] = useState(false);
+  const [chatMode, setChatMode] = useState<"agent" | "plan" | "ask">("agent");
+  const planMode = chatMode === "plan";
   const [streamingTick, setStreamingTick] = useState(0);
   const [sidebarOpen, setSidebarOpen] = useState(() => typeof window !== "undefined" && window.innerWidth > 768);
   const [sidebarPinned, setSidebarPinned] = useState(() => {
@@ -1923,6 +1924,9 @@ export function ChatView({
   const [isRecording, setIsRecording] = useState(false);
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
   const modelMenuRef = useRef<HTMLDivElement | null>(null);
+
+  const [modeMenuOpen, setModeMenuOpen] = useState(false);
+  const modeMenuRef = useRef<HTMLDivElement | null>(null);
 
   const [agentProfiles, setAgentProfiles] = useState<{id:string;name:string;description:string;icon:string;color:string;name_i18n?:Record<string,string>;description_i18n?:Record<string,string>;preferred_endpoint?:string|null}[]>([]);
   const [selectedAgent, setSelectedAgent] = useState("default");
@@ -2643,6 +2647,18 @@ export function ChatView({
     return () => document.removeEventListener("mousedown", handler);
   }, [thinkingMenuOpen]);
 
+  // ── 点击外部关闭模式菜单 ──
+  useEffect(() => {
+    if (!modeMenuOpen) return;
+    const handler = (e: MouseEvent) => {
+      if (modeMenuRef.current && !modeMenuRef.current.contains(e.target as Node)) {
+        setModeMenuOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [modeMenuOpen]);
+
   // ── 斜杠命令定义 ──
   const slashCommands: SlashCommand[] = useMemo(() => [
     { id: "model", label: "切换模型", description: "选择使用的 LLM 端点", action: (args) => {
@@ -3157,7 +3173,8 @@ export function ChatView({
       const body: Record<string, unknown> = {
         message: text,
         conversation_id: convId,
-        plan_mode: planMode,
+        mode: chatMode,
+        plan_mode: chatMode === "plan",
         endpoint: selectedEndpoint === "auto" ? null : selectedEndpoint,
         thinking_mode: thinkingMode !== "auto" ? thinkingMode : null,
         thinking_depth: thinkingMode !== "off" ? thinkingDepth : null,
@@ -3934,7 +3951,7 @@ export function ChatView({
         return updated;
       });
     }
-  }, [pendingAttachments, isCurrentConvStreaming, activeConvId, planMode, selectedEndpoint, apiBase, slashCommands, thinkingMode, thinkingDepth, t, setInputValue]);
+  }, [pendingAttachments, isCurrentConvStreaming, activeConvId, chatMode, selectedEndpoint, apiBase, slashCommands, thinkingMode, thinkingDepth, t, setInputValue]);
 
   // ── 处理用户回答 (ask_user) ──
   const handleAskAnswer = useCallback((msgId: string, answer: string) => {
@@ -4778,7 +4795,7 @@ export function ChatView({
             );
           })()}
 
-          <div className={`chatInputBox ${planMode ? "chatInputBoxPlan" : ""}`}>
+          <div className={`chatInputBox ${chatMode !== "agent" ? "chatInputBoxPlan" : ""}`}>
             {/* Top row: compact model picker */}
             <div className="chatInputTop" ref={modelMenuRef} style={{ position: "relative" }}>
               <button
@@ -4950,7 +4967,7 @@ export function ChatView({
               onChange={handleInputChange}
               onKeyDown={handleInputKeyDown}
               onPaste={handlePaste}
-              placeholder={orgCommandPending ? "组织正在处理中..." : orgMode ? (selectedOrgNodeId ? `输入指令发送给 ${selectedOrgNodeId}...` : "输入指令发送给组织...") : isCurrentConvStreaming ? t("chat.queueHint") : planMode ? `Plan ${t("chat.planMode")}` : t("chat.placeholder")}
+              placeholder={orgCommandPending ? "组织正在处理中..." : orgMode ? (selectedOrgNodeId ? `输入指令发送给 ${selectedOrgNodeId}...` : "输入指令发送给组织...") : isCurrentConvStreaming ? t("chat.queueHint") : chatMode === "plan" ? `Plan ${t("chat.planMode")}` : chatMode === "ask" ? "Ask Mode - read only" : t("chat.placeholder")}
               rows={1}
               className="chatInputTextarea"
               onInput={(e) => {
@@ -4972,10 +4989,42 @@ export function ChatView({
                   {isRecording ? <IconStopCircle size={16} /> : <IconMic size={16} />}
                 </button>
 
-                <button data-slot="toolbar" onClick={() => setPlanMode((v) => !v)} className={`chatInputIconBtn ${planMode ? "chatInputIconBtnActive" : ""}`} title={t("chat.planMode")}>
-                  <IconPlan size={16} />
-                  <span style={{ fontSize: 11, marginLeft: 2 }}>Plan</span>
-                </button>
+                <div ref={modeMenuRef} style={{ position: "relative", display: "inline-flex" }}>
+                  <button
+                    data-slot="toolbar"
+                    onClick={() => setModeMenuOpen((v) => !v)}
+                    className={`chatInputIconBtn ${chatMode !== "agent" ? "chatInputIconBtnActive" : ""}`}
+                    title={chatMode === "agent" ? "Agent Mode" : chatMode === "plan" ? "Plan Mode" : "Ask Mode"}
+                  >
+                    {{ agent: <IconBot size={16} />, plan: <IconPlan size={16} />, ask: <IconSearch size={16} /> }[chatMode]}
+                    <span style={{ fontSize: 11, marginLeft: 2 }}>
+                      {chatMode === "agent" ? "Agent" : chatMode === "plan" ? "Plan" : "Ask"}
+                    </span>
+                    <IconChevronDown size={10} style={{ marginLeft: 2, opacity: 0.5 }} />
+                  </button>
+                  {modeMenuOpen && (
+                    <div className="chatModeMenu">
+                      <div className="chatModeMenuSection">执行模式</div>
+                      {([
+                        { key: "agent" as const, icon: "🤖", label: "Agent", desc: "直接执行任务" },
+                        { key: "plan" as const, icon: "📋", label: "Plan", desc: "先规划再执行" },
+                        { key: "ask" as const, icon: "💬", label: "Ask", desc: "只读分析模式" },
+                      ]).map((m) => (
+                        <div
+                          key={m.key}
+                          className={`chatModeMenuItem ${chatMode === m.key ? "chatModeMenuItemActive" : ""}`}
+                          onClick={() => { setChatMode(m.key); setModeMenuOpen(false); }}
+                        >
+                          <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                            <span>{m.icon}</span>
+                            <span style={{ fontWeight: 600 }}>{m.label}</span>
+                          </span>
+                          <span style={{ fontSize: 10, opacity: 0.5 }}>{m.desc}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
 
                 {/* 深度思考按钮 + 下拉菜单 */}
                 <div ref={thinkingMenuRef} style={{ position: "relative", display: "inline-flex" }}>

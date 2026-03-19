@@ -3343,6 +3343,52 @@ button.btnApplyRestart:hover {
   margin: 4px 8px;
 }
 
+/* 模式选择下拉菜单 */
+.chatModeMenu {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  min-width: 200px;
+  background: var(--bg-card, #fff);
+  border-radius: 10px;
+  box-shadow: 0 4px 24px rgba(0,0,0,0.13), 0 1px 4px rgba(0,0,0,0.08);
+  padding: 6px 0;
+  z-index: 200;
+  animation: thinkingMenuIn 0.15s ease;
+}
+
+.chatModeMenuSection {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 6px 14px 2px;
+  opacity: 0.6;
+}
+
+.chatModeMenuItem {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 14px;
+  font-size: 13px;
+  cursor: pointer;
+  border-radius: 6px;
+  margin: 0 4px;
+  transition: background 0.12s;
+}
+
+.chatModeMenuItem:hover {
+  background: rgba(37, 99, 235, 0.12);
+}
+
+.chatModeMenuItemActive {
+  background: rgba(124, 58, 237, 0.15) !important;
+  color: rgba(124, 58, 237, 0.95);
+  font-weight: 600;
+}
+
 /* 思维链 & 模式切换 按钮 */
 .chainToggleBtn,
 .modeToggleBtn {
