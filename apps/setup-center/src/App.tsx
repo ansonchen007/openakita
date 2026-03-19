@@ -33,7 +33,7 @@ import {
   DotGreen, DotGray, DotYellow, DotRed,
   IM_LOGO_MAP,
 } from "./icons";
-import { ChevronDownIcon, ChevronRight, XIcon, Loader2, RefreshCw, Play, Square, RotateCcw, Power, PowerOff, FolderOpen, Activity, ArrowRight, Server, Download, Zap, Inbox, AlertTriangle, CheckCircle2 } from "lucide-react";
+import { ChevronRight, XIcon, Loader2, RefreshCw, Play, Square, RotateCcw, Power, PowerOff, FolderOpen, Activity, ArrowRight, Server, Download, Zap, Inbox, AlertTriangle, CheckCircle2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -4538,7 +4538,7 @@ export function App() {
               {/* Advanced (collapsed) */}
               <details className="group rounded-lg border border-border">
                 <summary className="cursor-pointer flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium text-muted-foreground select-none list-none [&::-webkit-details-marker]:hidden hover:text-foreground transition-colors">
-                  <ChevronDownIcon className="size-4 shrink-0 transition-transform group-open:rotate-180" />
+                  <ChevronRight className="size-4 shrink-0 transition-transform group-open:rotate-90" />
                   {t("llm.advancedParams") || t("llm.advanced") || "高级参数"}
                 </summary>
                 <div className="border-t border-border px-4 py-3 space-y-3">
@@ -4732,7 +4732,7 @@ export function App() {
               {/* Advanced (collapsed) */}
               <details className="group rounded-lg border border-border">
                 <summary className="cursor-pointer flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium text-muted-foreground select-none list-none [&::-webkit-details-marker]:hidden hover:text-foreground transition-colors">
-                  <ChevronDownIcon className="size-4 shrink-0 transition-transform group-open:rotate-180" />
+                  <ChevronRight className="size-4 shrink-0 transition-transform group-open:rotate-90" />
                   {t("llm.advancedParams") || t("llm.advanced") || "高级参数"}
                 </summary>
                 <div className="border-t border-border px-4 py-3 space-y-3">
@@ -4785,7 +4785,7 @@ export function App() {
               {/* 阶梯定价配置 */}
               <details className="group rounded-lg border border-border">
                 <summary className="cursor-pointer flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium text-muted-foreground select-none list-none [&::-webkit-details-marker]:hidden hover:text-foreground transition-colors">
-                  <ChevronDownIcon className="size-4 shrink-0 transition-transform group-open:rotate-180" />
+                  <ChevronRight className="size-4 shrink-0 transition-transform group-open:rotate-90" />
                   定价配置 <span className="text-[11px] font-normal text-muted-foreground/70">（可选，用于费用估算）</span>
                 </summary>
                 <div className="border-t border-border px-4 py-3 space-y-2.5">
@@ -5265,7 +5265,7 @@ export function App() {
           <details className="group rounded-lg border border-border">
             <summary className="cursor-pointer flex items-center justify-between px-4 py-2.5 text-sm font-medium select-none list-none [&::-webkit-details-marker]:hidden hover:bg-accent/50 transition-colors">
               <span className="flex items-center gap-1.5">
-                <ChevronDownIcon className="size-4 shrink-0 transition-transform group-open:rotate-180 text-muted-foreground" />
+                <ChevronRight className="size-4 shrink-0 transition-transform group-open:rotate-90 text-muted-foreground" />
                 {t("config.toolsMCP")}
               </span>
               <label className="inline-flex items-center gap-2 text-xs text-muted-foreground cursor-pointer select-none" onClick={(e) => e.stopPropagation()}>
@@ -5313,7 +5313,7 @@ export function App() {
           <details className="group/skills rounded-lg border border-border mt-2">
             <summary className="cursor-pointer flex items-center justify-between px-4 py-2.5 text-sm font-medium select-none list-none [&::-webkit-details-marker]:hidden hover:bg-accent/50 transition-colors">
               <span className="flex items-center gap-1.5">
-                <ChevronDownIcon className="size-4 shrink-0 transition-transform group-open/skills:rotate-180 text-muted-foreground" />
+                <ChevronRight className="size-4 shrink-0 transition-transform group-open/skills:rotate-90 text-muted-foreground" />
                 Skills 技能集成
               </span>
               <label className="inline-flex items-center gap-2 text-xs text-muted-foreground cursor-pointer select-none" onClick={(e) => e.stopPropagation()}>
@@ -5368,7 +5368,7 @@ export function App() {
           <details className="group/desktop rounded-lg border border-border mt-2">
             <summary className="cursor-pointer flex items-center justify-between px-4 py-2.5 text-sm font-medium select-none list-none [&::-webkit-details-marker]:hidden hover:bg-accent/50 transition-colors">
               <span className="flex items-center gap-1.5">
-                <ChevronDownIcon className="size-4 shrink-0 transition-transform group-open/desktop:rotate-180 text-muted-foreground" />
+                <ChevronRight className="size-4 shrink-0 transition-transform group-open/desktop:rotate-90 text-muted-foreground" />
                 {t("config.toolsDesktop")}
               </span>
               <label className="inline-flex items-center gap-2 text-xs text-muted-foreground cursor-pointer select-none" onClick={(e) => e.stopPropagation()}>
@@ -5396,7 +5396,7 @@ export function App() {
               </div>
               <details className="group/deskadv rounded-lg border border-border">
                 <summary className="cursor-pointer flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium select-none list-none [&::-webkit-details-marker]:hidden hover:bg-accent/50 transition-colors text-muted-foreground">
-                  <ChevronDownIcon className="size-4 shrink-0 transition-transform group-open/deskadv:rotate-180" />
+                  <ChevronRight className="size-4 shrink-0 transition-transform group-open/deskadv:rotate-90" />
                   {t("config.toolsDesktopAdvanced")}
                 </summary>
                 <div className="flex flex-col gap-2.5 px-4 py-3 border-t border-border">
@@ -5421,7 +5421,7 @@ export function App() {
           {/* ── Network & Proxy ── */}
           <details className="group/net rounded-lg border border-border mt-2">
             <summary className="cursor-pointer flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium select-none list-none [&::-webkit-details-marker]:hidden hover:bg-accent/50 transition-colors">
-              <ChevronDownIcon className="size-4 shrink-0 transition-transform group-open/net:rotate-180 text-muted-foreground" />
+              <ChevronRight className="size-4 shrink-0 transition-transform group-open/net:rotate-90 text-muted-foreground" />
               {t("config.toolsNetwork")}
             </summary>
             <div className="flex flex-col gap-2.5 px-4 py-3 border-t border-border">
@@ -5440,7 +5440,7 @@ export function App() {
           {/* ── Other ── */}
           <details className="group/other rounded-lg border border-border mt-2">
             <summary className="cursor-pointer flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium select-none list-none [&::-webkit-details-marker]:hidden hover:bg-accent/50 transition-colors">
-              <ChevronDownIcon className="size-4 shrink-0 transition-transform group-open/other:rotate-180 text-muted-foreground" />
+              <ChevronRight className="size-4 shrink-0 transition-transform group-open/other:rotate-90 text-muted-foreground" />
               {t("config.toolsOther")}
             </summary>
             <div className="flex flex-col gap-2.5 px-4 py-3 border-t border-border">
