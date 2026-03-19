@@ -2836,7 +2836,7 @@ export function App() {
     if (stepId !== "llm") return;
     loadSavedEndpoints().catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [stepId, currentWorkspaceId, dataMode]);
+  }, [stepId, currentWorkspaceId, dataMode, serviceStatus?.running]);
 
   async function doSaveEndpoint(): Promise<boolean> {
     if (!currentWorkspaceId) {
