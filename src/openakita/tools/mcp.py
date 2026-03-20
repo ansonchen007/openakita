@@ -12,12 +12,9 @@ MCP (Model Context Protocol) 客户端
 
 import asyncio
 import contextlib
-import functools
 import json
 import logging
 import os
-import shutil
-import subprocess
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -66,36 +63,6 @@ try:
     MCP_SSE_AVAILABLE = True
 except ImportError:
     pass
-
-
-@functools.lru_cache(maxsize=1)
-def _resolve_macos_shell_path() -> str | None:
-    """macOS GUI 应用不继承用户 shell 的 PATH，通过 login shell 获取真实 PATH。
-
-    Finder/Dock 启动的 .app 只拿到 /usr/bin:/bin:/usr/sbin:/sbin，
-    不含 Homebrew、NVM、Volta 等工具管理器注入的路径，导致 npx/node 等命令找不到。
-    此函数运行一次用户的 login shell 并提取完整 PATH，结果由 lru_cache 缓存。
-    """
-    if sys.platform != "darwin":
-        return None
-    shell = os.environ.get("SHELL", "/bin/zsh")
-    try:
-        proc = subprocess.run(
-            [shell, "-l", "-c",
-             'printf "\\n__AKITA_PATH__\\n%s\\n__AKITA_PATH__\\n" "$PATH"'],
-            capture_output=True, text=True, timeout=5,
-            stdin=subprocess.DEVNULL,
-        )
-        if proc.returncode == 0:
-            parts = proc.stdout.split("__AKITA_PATH__")
-            if len(parts) >= 3:
-                path = parts[1].strip()
-                if path:
-                    logger.debug("[MCP] Resolved macOS shell PATH: %s", path)
-                    return path
-    except Exception as e:
-        logger.debug("[MCP] Failed to resolve macOS shell PATH: %s", e)
-    return None
 
 
 @dataclass
@@ -286,6 +253,8 @@ class MCPClient:
     @staticmethod
     def _resolve_command(config: MCPServerConfig) -> str | None:
         """在子进程实际使用的 PATH / cwd 下查找命令，避免误判 'not found'。"""
+        from ..utils.path_helper import which_command
+
         cmd = config.command
 
         # 1) 相对路径 + cwd：直接在目标 cwd 下判断文件是否存在
@@ -294,22 +263,14 @@ class MCPClient:
             if candidate.is_file():
                 return str(candidate.resolve())
 
-        # 2) 用子进程的 env.PATH 查找（用户可能通过 env 配置了自定义 PATH）
+        # 2) 用子进程的 env.PATH 查找（含 macOS login shell PATH 回退）
         search_path = None
         if config.env:
             search_path = config.env.get("PATH") or config.env.get("Path")
 
-        found = shutil.which(cmd, path=search_path)
+        found = which_command(cmd, extra_path=search_path)
         if found:
             return found
-
-        # 2.5) macOS GUI 应用的 PATH 不含用户工具路径，用 login shell PATH 再查一次
-        if not found and sys.platform == "darwin" and not search_path:
-            shell_path = _resolve_macos_shell_path()
-            if shell_path:
-                found = shutil.which(cmd, path=shell_path)
-                if found:
-                    return found
 
         # 3) 如果有 cwd，也在 cwd 下做一次绝对搜索
         if config.cwd:
@@ -379,14 +340,9 @@ class MCPClient:
 
         # macOS GUI 应用的 PATH 不含 Homebrew/NVM/Volta 等用户工具路径，
         # 需要通过 login shell 获取完整 PATH 传递给 MCP 子进程
+        from ..utils.path_helper import get_macos_enriched_env
         subprocess_env: dict | None = dict(config.env) if config.env else None
-        if sys.platform == "darwin":
-            shell_path = _resolve_macos_shell_path()
-            if shell_path:
-                if subprocess_env is None:
-                    subprocess_env = {**os.environ, "PATH": shell_path}
-                elif "PATH" not in subprocess_env and "Path" not in subprocess_env:
-                    subprocess_env["PATH"] = shell_path
+        subprocess_env = get_macos_enriched_env(subprocess_env)
 
         # Windows PyInstaller: _internal/ 目录下的 python.exe 是裸解释器,
         # 会影响外部脚本的 python 命令解析 — 从 PATH 中移除
