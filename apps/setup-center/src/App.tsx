@@ -5051,7 +5051,7 @@ export function App() {
             await startLocalServiceWithConflictCheck(effectiveWsId);
           }}
           onRefreshAll={async () => { await refreshAll(); try { await refreshStatus(undefined, undefined, true); } catch {} }}
-          onSetTheme={(theme) => { setThemePref(theme); notifySuccess(`${t("topbar.themeLabel")}: ${t(THEME_I18N_KEYS[theme])}`); }}
+          onSetTheme={(theme) => setThemePref(theme)}
           themePrefState={themePrefState}
           isWeb={IS_WEB || IS_CAPACITOR}
           onLogout={(IS_WEB || IS_CAPACITOR) ? async () => {
