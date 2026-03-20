@@ -2680,6 +2680,7 @@ export function App() {
         writeWorkspaceFile={writeWorkspaceFile}
         venvDir={venvDir}
         ensureEnvLoaded={ensureEnvLoaded}
+        serviceRunning={!!serviceStatus?.running}
       />
     );
   }
