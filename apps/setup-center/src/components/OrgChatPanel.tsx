@@ -256,6 +256,7 @@ export function OrgChatPanel({ orgId, nodeId, apiBaseUrl, compact, showHeader, t
   }, [input, sending, orgId, nodeId, apiBaseUrl, persistMessages]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.nativeEvent.isComposing || e.keyCode === 229) return;
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       handleSend();
