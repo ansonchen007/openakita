@@ -148,7 +148,8 @@ def detect_chrome_devtools_mcp() -> dict:
         "suggestion": "",
     }
 
-    npx_path = shutil.which("npx")
+    from ...utils.path_helper import which_command
+    npx_path = which_command("npx")
     result["npx_available"] = npx_path is not None
 
     chrome_path, _ = detect_chrome_installation()
