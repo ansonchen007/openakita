@@ -351,7 +351,7 @@ export function Sidebar({
                 onMouseLeave={(e) => { const s = e.currentTarget.querySelector<HTMLElement>(".feedbackText"); if (s) s.style.textDecoration = "none"; }}
               >
                 <IconBug size={12} />
-                <span className="feedbackText" style={{ fontSize: 11 }}>反馈</span>
+                <span className="feedbackText" style={{ fontSize: 11 }}>{t("feedback.trigger")}</span>
               </span>
             )}
             <span
