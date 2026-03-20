@@ -2592,6 +2592,8 @@ export function ChatView({
       setStreamingTick(t => t + 1);
     }
 
+    setBusyConversations((prev) => { const m = new Map(prev); m.delete(convId); return m; });
+
     if (serviceRunning) {
       safeFetch(`${apiBaseUrl}/api/sessions/${encodeURIComponent(convId)}`, {
         method: "DELETE",

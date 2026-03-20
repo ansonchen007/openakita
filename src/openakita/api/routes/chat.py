@@ -12,7 +12,6 @@ import json
 import logging
 import time
 from collections.abc import AsyncIterator
-from dataclasses import dataclass, field
 
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -20,51 +19,11 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from openakita.core.engine_bridge import engine_stream, is_dual_loop, to_engine
 
 from ..schemas import ChatAnswerRequest, ChatControlRequest, ChatRequest
+from .conversation_lifecycle import get_lifecycle_manager
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
-
-# ── Conversation busy-lock ────────────────────────────────────────────────
-BUSY_TIMEOUT_SECONDS = 600  # 10 min auto-release
-
-
-@dataclass
-class BusyInfo:
-    client_id: str
-    start_time: float = field(default_factory=time.time)
-
-
-_busy_conversations: dict[str, BusyInfo] = {}
-_busy_lock = asyncio.Lock()
-_busy_thread_lock = __import__("threading").Lock()
-
-
-async def _mark_busy(conversation_id: str, client_id: str) -> BusyInfo | None:
-    """Mark a conversation as busy. Returns existing BusyInfo if already busy
-    from a *different* client, or None on success."""
-    async with _busy_lock:
-        _expire_stale_locks()
-        existing = _busy_conversations.get(conversation_id)
-        if existing and existing.client_id != client_id:
-            return existing
-        _busy_conversations[conversation_id] = BusyInfo(client_id=client_id)
-        return None
-
-
-async def _clear_busy(conversation_id: str) -> None:
-    # Use thread-safe lock to support cross-loop calls (engine → API)
-    with _busy_thread_lock:
-        _busy_conversations.pop(conversation_id, None)
-
-
-def _expire_stale_locks() -> None:
-    """Remove busy entries older than BUSY_TIMEOUT_SECONDS. Must be called under _busy_lock."""
-    now = time.time()
-    stale = [k for k, v in _busy_conversations.items() if now - v.start_time > BUSY_TIMEOUT_SECONDS]
-    for k in stale:
-        logger.info("[Chat API] Auto-releasing stale busy lock: conv=%s", k)
-        del _busy_conversations[k]
 
 
 async def _broadcast_chat_event(event: str, data: dict) -> None:
@@ -180,6 +139,7 @@ async def _stream_chat(
     agent: object,
     session_manager: object | None = None,
     http_request: Request | None = None,
+    busy_generation: int = 0,
 ) -> AsyncIterator[str]:
     """Generate SSE events via Agent.chat_with_session_stream().
 
@@ -630,23 +590,16 @@ async def _stream_chat(
             except (asyncio.CancelledError, Exception):
                 pass
 
-        # ── Release busy lock & broadcast idle/message_update ──
+        # ── Release busy lock (via lifecycle manager) & broadcast message update ──
         _conv_id = chat_request.conversation_id or ""
-        _client_id = chat_request.client_id or ""
-        if _client_id and _conv_id:
-            await _clear_busy(_conv_id)
-            try:
-                from .websocket import broadcast_event
-
-                await broadcast_event("chat:idle", {"conversation_id": _conv_id})
-                if _full_reply:
-                    await broadcast_event("chat:message_update", {
-                        "conversation_id": _conv_id,
-                        "last_message_preview": _full_reply[:100],
-                        "timestamp": time.time(),
-                    })
-            except Exception:
-                pass
+        if _conv_id:
+            await get_lifecycle_manager().finish(_conv_id, generation=busy_generation)
+            if _full_reply:
+                await _broadcast_chat_event("chat:message_update", {
+                    "conversation_id": _conv_id,
+                    "last_message_preview": _full_reply[:100],
+                    "timestamp": time.time(),
+                })
 
 
 @router.post("/api/chat")
@@ -675,9 +628,11 @@ async def chat(request: Request, body: ChatRequest):
     conversation_id = body.conversation_id or f"api_{_uuid.uuid4().hex[:12]}"
     client_id = body.client_id or ""
 
-    # ── Busy-lock check ──
+    # ── Busy-lock check (via lifecycle manager) ──
+    lifecycle = get_lifecycle_manager()
+    busy_gen = 0
     if client_id:
-        conflict = await _mark_busy(conversation_id, client_id)
+        conflict, busy_gen = await lifecycle.start(conversation_id, client_id)
         if conflict is not None:
             return JSONResponse(
                 status_code=409,
@@ -695,7 +650,7 @@ async def chat(request: Request, body: ChatRequest):
         session_manager = getattr(request.app.state, "session_manager", None)
     except Exception:
         if client_id:
-            await _clear_busy(conversation_id)
+            await lifecycle.finish(conversation_id, generation=busy_gen)
         raise
 
     msg_preview = (body.message or "")[:100]
@@ -714,14 +669,7 @@ async def chat(request: Request, body: ChatRequest):
     # Pass pre-resolved conversation_id so _stream_chat doesn't generate a new one
     body.conversation_id = conversation_id
 
-    # Broadcast busy event
-    if client_id:
-        await _broadcast_chat_event("chat:busy", {
-            "conversation_id": conversation_id,
-            "client_id": client_id,
-        })
-
-    sse_gen = _stream_chat(body, agent, session_manager, http_request=request)
+    sse_gen = _stream_chat(body, agent, session_manager, http_request=request, busy_generation=busy_gen)
     if is_dual_loop():
         sse_gen = engine_stream(sse_gen)
 
@@ -741,28 +689,7 @@ async def chat_busy(
     conversation_id: str = Query("", description="Filter by conversation ID (empty = all)"),
 ):
     """Return currently busy conversations."""
-    async with _busy_lock:
-        _expire_stale_locks()
-        if conversation_id:
-            info = _busy_conversations.get(conversation_id)
-            if info:
-                return {
-                    "busy": True,
-                    "conversation_id": conversation_id,
-                    "client_id": info.client_id,
-                    "since": info.start_time,
-                }
-            return {"busy": False, "conversation_id": conversation_id}
-        return {
-            "busy_conversations": [
-                {
-                    "conversation_id": cid,
-                    "client_id": info.client_id,
-                    "since": info.start_time,
-                }
-                for cid, info in _busy_conversations.items()
-            ],
-        }
+    return await get_lifecycle_manager().get_busy_status(conversation_id)
 
 
 @router.post("/api/chat/answer")
@@ -790,6 +717,13 @@ async def chat_cancel(request: Request, body: ChatControlRequest):
     _conv_id = conv_id or getattr(actual_agent, "_current_conversation_id", None)
     logger.info(f"[Chat API] Cancel 接收到请求: reason={reason!r}, conv_id={_conv_id!r}")
     actual_agent.cancel_current_task(reason, session_id=_conv_id)
+
+    # Immediately release busy-lock so the UI reflects the cancellation.
+    # _stream_chat's finally block will also call finish() with a generation
+    # guard, which will be a safe no-op since the lock is already released.
+    if _conv_id:
+        await get_lifecycle_manager().finish(_conv_id)
+
     logger.info(f"[Chat API] Cancel 执行完成: reason={reason!r}")
     return {"status": "ok", "action": "cancel", "reason": reason}
 
