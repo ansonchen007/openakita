@@ -445,6 +445,21 @@ class OrgToolHandler:
                 avail = ", ".join(f"{n.id}({n.role_title})" for n in org.nodes)
                 return f"节点 '{to_node}' 不存在。可用节点: {avail}"
 
+            # Validate hierarchy: only direct children can receive delegated tasks
+            children = org.get_children(node_id)
+            child_ids = {c.id for c in children}
+            if to_node not in child_ids:
+                if to_node == node_id:
+                    hint = "不能给自己委派任务。"
+                else:
+                    target_node = org.get_node(to_node)
+                    target_label = f"'{target_node.role_title}'" if target_node else f"'{to_node}'"
+                    hint = f"{target_label} 不是你的直属下级，无法委派。"
+                if children:
+                    child_list = ", ".join(f"{c.role_title}(`{c.id}`)" for c in children)
+                    return f"{hint}你的直属下级: {child_list}"
+                return f"{hint}你没有直属下级，无法使用 org_delegate_task。请自行完成任务，或用 org_send_message 与同事协作。"
+
         await messenger.send_task(
             from_node=node_id,
             to_node=to_node,

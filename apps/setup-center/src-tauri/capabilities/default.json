@@ -1,7 +1,7 @@
 {
   "identifier": "default",
   "description": "Default capabilities for the main window",
-  "windows": ["main"],
+  "windows": ["main", "org-editor-popup"],
   "permissions": [
     "core:default",
     "core:event:default",
@@ -10,11 +10,14 @@
     "core:webview:default",
     "core:webview:allow-webview-position",
     "core:webview:allow-webview-size",
+    "core:webview:allow-create-webview-window",
     "core:window:default",
     "core:window:allow-close",
     "core:window:allow-set-size",
     "core:window:allow-set-position",
     "core:window:allow-set-theme",
+    "core:window:allow-set-focus",
+    "core:window:allow-create",
     "core:app:default",
     "core:app:allow-version",
     "autostart:default",
