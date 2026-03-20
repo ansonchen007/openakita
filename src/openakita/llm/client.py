@@ -335,7 +335,8 @@ class LLMClient:
                 messages=messages, system=system, tools=tools,
                 max_tokens=max_tokens, temperature=temperature,
                 enable_thinking=enable_thinking, thinking_depth=thinking_depth,
-                conversation_id=conversation_id, **kwargs,
+                conversation_id=conversation_id,
+                cancel_event=cancel_event, **kwargs,
             )
 
     async def _chat_inner(
@@ -348,6 +349,7 @@ class LLMClient:
         enable_thinking: bool = False,
         thinking_depth: str | None = None,
         conversation_id: str | None = None,
+        cancel_event: asyncio.Event | None = None,
         **kwargs,
     ) -> LLMResponse:
         """chat() 的内部实现（已在 semaphore 保护下运行）。"""
@@ -357,7 +359,8 @@ class LLMClient:
                 messages=messages, system=system, tools=tools,
                 max_tokens=max_tokens, temperature=temperature,
                 enable_thinking=enable_thinking, thinking_depth=thinking_depth,
-                conversation_id=conversation_id, **kwargs,
+                conversation_id=conversation_id,
+                cancel_event=cancel_event, **kwargs,
             )
         finally:
             LLMClient._global_inflight -= 1
@@ -372,6 +375,7 @@ class LLMClient:
         enable_thinking: bool = False,
         thinking_depth: str | None = None,
         conversation_id: str | None = None,
+        cancel_event: asyncio.Event | None = None,
         **kwargs,
     ) -> LLMResponse:
         request = LLMRequest(

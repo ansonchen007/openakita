@@ -620,6 +620,34 @@ class Agent:
 
         return tools
 
+    def _derive_tool_hints_from_profile(self) -> list[str]:
+        """Derive tool category hints from the agent profile's skills list.
+
+        Maps profile skill names to tool names via normalization (hyphens to
+        underscores, strip source prefix), then uses infer_category() to resolve
+        built-in tool categories.  Only produces hints for skills that correspond
+        to built-in categories (e.g. browser-click -> Browser).  External skills
+        (openakita/skills@xxx) that don't match any category are silently skipped.
+
+        Returns empty list when no profile or no category-mapped skills — this
+        causes _effective_tools to skip intent filtering, keeping all tools.
+        """
+        profile = getattr(self, "_agent_profile", None)
+        if not profile or not profile.skills:
+            return []
+
+        from ..tools.definitions.base import infer_category
+
+        categories: set[str] = set()
+        for skill_name in profile.skills:
+            short = skill_name.split("@", 1)[1] if "@" in skill_name else skill_name
+            tool_name = short.replace("-", "_")
+            cat = infer_category(tool_name)
+            if cat:
+                categories.add(cat)
+
+        return sorted(categories)
+
     def _get_tool_handler_name(self, tool_name: str) -> str | None:
         """获取工具对应的 handler 名称（用于互斥/并发策略）"""
         try:
@@ -2442,17 +2470,21 @@ create_agent(name="名称", description="描述", skills=["技能"], custom_prom
         from .intent_analyzer import IntentAnalyzer, IntentResult, IntentType
 
         if self._is_sub_agent_call:
+            _profile_hints = self._derive_tool_hints_from_profile()
             intent_result = IntentResult(
                 intent=IntentType.TASK,
                 confidence=1.0,
                 task_definition=message[:600],
                 task_type="action",
-                tool_hints=[],
+                tool_hints=_profile_hints,
                 memory_keywords=[],
                 force_tool=True,
                 todo_required=False,
             )
-            logger.info(f"[Session:{session_id}] Sub-agent: skipping IntentAnalyzer, forced TASK intent")
+            logger.info(
+                f"[Session:{session_id}] Sub-agent: skipping IntentAnalyzer, "
+                f"forced TASK intent, profile_tool_hints={_profile_hints}"
+            )
         else:
             if not hasattr(self, "_intent_analyzer"):
                 self._intent_analyzer = IntentAnalyzer(self.brain)
