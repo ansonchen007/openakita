@@ -222,12 +222,6 @@ async def write_env(body: EnvUpdateRequest):
     existing = ""
     if env_path.exists():
         existing = env_path.read_bytes().decode("utf-8", errors="replace")
-    import re as _re
-    _env_key_pattern = _re.compile(r'^[A-Za-z_][A-Za-z0-9_]*$')
-    for key in body.entries:
-        if not _env_key_pattern.match(key):
-            from fastapi import HTTPException as _HE
-            raise _HE(status_code=400, detail=f"Invalid env key: {key}")
     new_content = _update_env_content(
         existing, body.entries, delete_keys=set(body.delete_keys)
     )
