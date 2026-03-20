@@ -240,6 +240,10 @@ async def _stream_chat(
         return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
     _disconnect_watcher_task: asyncio.Task | None = None
+    _agent_task: asyncio.Task | None = None
+    _agent_done = asyncio.Event()
+    _agent_queue: asyncio.Queue = asyncio.Queue()
+    _save_done = False
 
     try:
         actual_agent = _resolve_agent(agent)
@@ -286,7 +290,31 @@ async def _stream_chat(
             except Exception as e:
                 logger.warning(f"[Chat API] Session management error: {e}")
 
-        # --- 后台断连检测：定期检查客户端是否断开，主动触发 cancel ---
+        # ── Background agent task: decoupled from SSE lifecycle ──
+        async def _agent_runner():
+            try:
+                async for ev in actual_agent.chat_with_session_stream(
+                    message=chat_request.message or "",
+                    session_messages=session_messages_history,
+                    session_id=conversation_id,
+                    session=session,
+                    gateway=None,
+                    plan_mode=chat_request.plan_mode,
+                    endpoint_override=chat_request.endpoint,
+                    attachments=chat_request.attachments,
+                    thinking_mode=chat_request.thinking_mode,
+                    thinking_depth=chat_request.thinking_depth,
+                ):
+                    await _agent_queue.put(ev)
+            except Exception as exc:
+                await _agent_queue.put({"type": "__agent_error__", "__exc_msg__": str(exc)[:500]})
+            finally:
+                await _agent_queue.put(None)
+                _agent_done.set()
+
+        _agent_task = asyncio.create_task(_agent_runner())
+
+        # --- 后台断连检测：宽限期机制 ---
         async def _disconnect_watcher():
             nonlocal _client_disconnected
             while True:
@@ -297,42 +325,40 @@ async def _stream_chat(
                     try:
                         if await http_request.is_disconnected():
                             _client_disconnected = True
-                            logger.info(
-                                "[Chat API] 断连检测器发现客户端断开，触发 cancel_current_task"
-                            )
+                            logger.info("[Chat API] 客户端断开，进入宽限期（60s）")
                             try:
-                                actual_agent.cancel_current_task(
-                                    "客户端断开连接", session_id=conversation_id
-                                )
-                            except Exception as e:
-                                logger.warning(f"[Chat API] 断连触发 cancel 失败: {e}")
+                                await asyncio.wait_for(_agent_done.wait(), timeout=60.0)
+                                logger.info("[Chat API] Agent task 在宽限期内完成")
+                            except asyncio.TimeoutError:
+                                logger.info("[Chat API] 宽限期超时，取消任务")
+                                try:
+                                    actual_agent.cancel_current_task(
+                                        "客户端断开连接（宽限期后）",
+                                        session_id=conversation_id,
+                                    )
+                                except Exception as e:
+                                    logger.warning(f"[Chat API] 断连 cancel 失败: {e}")
                             break
                     except Exception:
                         break
 
         _disconnect_watcher_task = asyncio.create_task(_disconnect_watcher())
 
-        # --- 委托给 Agent 统一流水线 ---
-        async for event in actual_agent.chat_with_session_stream(
-            message=chat_request.message or "",
-            session_messages=session_messages_history,
-            session_id=conversation_id,
-            session=session,
-            gateway=None,  # Desktop Chat 没有 IM gateway
-            plan_mode=chat_request.plan_mode,
-            endpoint_override=chat_request.endpoint,
-            attachments=chat_request.attachments,
-            thinking_mode=chat_request.thinking_mode,
-            thinking_depth=chat_request.thinking_depth,
-        ):
-            # Check if client disconnected
-            if await _check_disconnected():
-                actual_agent.cancel_current_task(
-                    "客户端断开连接", session_id=conversation_id
-                )
+        # --- 主 SSE 事件循环：从 queue 读取事件并转发 ---
+        _agent_errored = False
+        while True:
+            event = await _agent_queue.get()
+            if event is None:
                 break
 
             event_type = event.get("type", "")
+
+            if event_type == "__agent_error__":
+                _agent_errored = True
+                if not _client_disconnected:
+                    yield _sse("error", {"message": event.get("__exc_msg__", "Unknown error")})
+                    yield _sse("done")
+                break
 
             # 拦截 done 事件：不在此处转发，等 usage 收集完毕后统一发送
             if event_type == "done":
@@ -344,8 +370,16 @@ async def _stream_chat(
                 _ask_user_options = event.get("options", [])
                 _ask_user_questions = event.get("questions", [])
 
-            # Inject artifact events for deliver_artifacts results
-            yield _sse(event_type, {k: v for k, v in event.items() if k != "type"})
+            # Always call _sse to accumulate _full_reply regardless of connection
+            event_data = {k: v for k, v in event.items() if k != "type"}
+            sse_line = _sse(event_type, event_data)
+
+            # Client disconnected — text is accumulated by _sse above, skip SSE output
+            _is_connected = not _client_disconnected
+            if _is_connected and not await _check_disconnected():
+                yield sse_line
+            else:
+                continue
 
             # deliver_artifacts / send_sticker 都可能返回带 receipts 的 JSON
             _artifact_tools = ("deliver_artifacts", "send_sticker")
@@ -436,6 +470,7 @@ async def _stream_chat(
                     pass
 
         # --- Save assistant response to session ---
+        _save_done = True
         # ask_user 场景：_ask_user_question 已包含 LLM 文本 + 问题（由 reason_stream 拼接），
         # 优先使用它作为保存文本，确保下一轮 LLM 能看到完整的确认问题上下文。
         if _ask_user_question:
@@ -534,18 +569,64 @@ async def _stream_chat(
         except Exception:
             pass
 
-        yield _sse("done", {"usage": _usage_data})
+        if not _client_disconnected and not _agent_errored:
+            yield _sse("done", {"usage": _usage_data})
 
     except Exception as e:
         logger.error(f"Chat stream error: {e}", exc_info=True)
-        yield _sse("error", {"message": str(e)[:500]})
-        yield _sse("done")
+        if not _client_disconnected:
+            yield _sse("error", {"message": str(e)[:500]})
+            yield _sse("done")
     finally:
+        # ── Wait for agent task to finish (deferred save if SSE gen was interrupted) ──
+        if _agent_task is not None and not _agent_done.is_set():
+            try:
+                await asyncio.wait_for(_agent_done.wait(), timeout=65.0)
+            except (asyncio.TimeoutError, asyncio.CancelledError, Exception):
+                if _agent_task and not _agent_task.done():
+                    _agent_task.cancel()
+
+        # Drain remaining queue events to accumulate _full_reply for deferred save
+        if not _save_done:
+            try:
+                while not _agent_queue.empty():
+                    ev = _agent_queue.get_nowait()
+                    if ev is None or ev.get("type") == "__agent_error__":
+                        break
+                    et = ev.get("type", "")
+                    if et != "done":
+                        _sse(et, {k: v for k, v in ev.items() if k != "type"})
+            except Exception:
+                pass
+            # Deferred session save
+            if session and _full_reply:
+                try:
+                    _deferred_meta: dict = {}
+                    if _collected_artifacts:
+                        _deferred_meta["artifacts"] = _collected_artifacts
+                    session.add_message("assistant", _full_reply, **_deferred_meta)
+                    if session_manager:
+                        session_manager.mark_dirty()
+                    logger.info(
+                        f"[Chat API] Deferred save: {len(_full_reply)} chars "
+                        f"(client_disconnected={_client_disconnected})"
+                    )
+                except Exception as e:
+                    logger.warning(f"[Chat API] Deferred save failed: {e}")
+
         # ── 清理断连检测任务 ──
         if _disconnect_watcher_task and not _disconnect_watcher_task.done():
             _disconnect_watcher_task.cancel()
             try:
                 await _disconnect_watcher_task
+            except (asyncio.CancelledError, Exception):
+                pass
+
+        # ── 清理 agent task ──
+        if _agent_task and not _agent_task.done():
+            _agent_task.cancel()
+            try:
+                await _agent_task
             except (asyncio.CancelledError, Exception):
                 pass
 
