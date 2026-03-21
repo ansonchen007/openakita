@@ -12,7 +12,6 @@ import json
 import logging
 import time
 from collections.abc import AsyncIterator
-from dataclasses import dataclass, field
 
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -20,51 +19,11 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from openakita.core.engine_bridge import engine_stream, is_dual_loop, to_engine
 
 from ..schemas import ChatAnswerRequest, ChatControlRequest, ChatRequest
+from .conversation_lifecycle import get_lifecycle_manager
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
-
-# ── Conversation busy-lock ────────────────────────────────────────────────
-BUSY_TIMEOUT_SECONDS = 600  # 10 min auto-release
-
-
-@dataclass
-class BusyInfo:
-    client_id: str
-    start_time: float = field(default_factory=time.time)
-
-
-_busy_conversations: dict[str, BusyInfo] = {}
-_busy_lock = asyncio.Lock()
-_busy_thread_lock = __import__("threading").Lock()
-
-
-async def _mark_busy(conversation_id: str, client_id: str) -> BusyInfo | None:
-    """Mark a conversation as busy. Returns existing BusyInfo if already busy
-    from a *different* client, or None on success."""
-    async with _busy_lock:
-        _expire_stale_locks()
-        existing = _busy_conversations.get(conversation_id)
-        if existing and existing.client_id != client_id:
-            return existing
-        _busy_conversations[conversation_id] = BusyInfo(client_id=client_id)
-        return None
-
-
-async def _clear_busy(conversation_id: str) -> None:
-    # Use thread-safe lock to support cross-loop calls (engine → API)
-    with _busy_thread_lock:
-        _busy_conversations.pop(conversation_id, None)
-
-
-def _expire_stale_locks() -> None:
-    """Remove busy entries older than BUSY_TIMEOUT_SECONDS. Must be called under _busy_lock."""
-    now = time.time()
-    stale = [k for k, v in _busy_conversations.items() if now - v.start_time > BUSY_TIMEOUT_SECONDS]
-    for k in stale:
-        logger.info("[Chat API] Auto-releasing stale busy lock: conv=%s", k)
-        del _busy_conversations[k]
 
 
 async def _broadcast_chat_event(event: str, data: dict) -> None:
@@ -93,8 +52,7 @@ def _is_multi_agent_enabled() -> bool:
 def _resolve_profile(agent_profile_id: str | None):
     """Resolve an AgentProfile by id, falling back to 'default'."""
     from openakita.agents.presets import SYSTEM_PRESETS
-    from openakita.agents.profile import AgentProfile, ProfileStore
-    from openakita.config import settings
+    from openakita.agents.profile import AgentProfile, get_profile_store
 
     pid = agent_profile_id or "default"
 
@@ -103,7 +61,7 @@ def _resolve_profile(agent_profile_id: str | None):
             return p
 
     try:
-        store = ProfileStore(settings.data_dir / "agents")
+        store = get_profile_store()
         profile = store.get(pid)
         if profile:
             return profile
@@ -153,12 +111,11 @@ def _apply_agent_profile(session: object, new_profile_id: str) -> bool:
     # Validate that profile exists
     try:
         from openakita.agents.presets import SYSTEM_PRESETS
-        from openakita.agents.profile import ProfileStore
-        from openakita.config import settings
+        from openakita.agents.profile import get_profile_store
 
         known_ids = {p.id for p in SYSTEM_PRESETS}
         if new_profile_id not in known_ids:
-            store = ProfileStore(settings.data_dir / "agents")
+            store = get_profile_store()
             if store.get(new_profile_id) is None:
                 logger.warning(f"[Chat API] Unknown agent profile: {new_profile_id!r}")
                 return False
@@ -182,6 +139,7 @@ async def _stream_chat(
     agent: object,
     session_manager: object | None = None,
     http_request: Request | None = None,
+    busy_generation: int = 0,
 ) -> AsyncIterator[str]:
     """Generate SSE events via Agent.chat_with_session_stream().
 
@@ -242,6 +200,10 @@ async def _stream_chat(
         return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
     _disconnect_watcher_task: asyncio.Task | None = None
+    _agent_task: asyncio.Task | None = None
+    _agent_done = asyncio.Event()
+    _agent_queue: asyncio.Queue = asyncio.Queue()
+    _save_done = False
 
     try:
         actual_agent = _resolve_agent(agent)
@@ -288,7 +250,31 @@ async def _stream_chat(
             except Exception as e:
                 logger.warning(f"[Chat API] Session management error: {e}")
 
-        # --- 后台断连检测：定期检查客户端是否断开，主动触发 cancel ---
+        # ── Background agent task: decoupled from SSE lifecycle ──
+        async def _agent_runner():
+            try:
+                async for ev in actual_agent.chat_with_session_stream(
+                    message=chat_request.message or "",
+                    session_messages=session_messages_history,
+                    session_id=conversation_id,
+                    session=session,
+                    gateway=None,
+                    plan_mode=chat_request.plan_mode,
+                    endpoint_override=chat_request.endpoint,
+                    attachments=chat_request.attachments,
+                    thinking_mode=chat_request.thinking_mode,
+                    thinking_depth=chat_request.thinking_depth,
+                ):
+                    await _agent_queue.put(ev)
+            except Exception as exc:
+                await _agent_queue.put({"type": "__agent_error__", "__exc_msg__": str(exc)[:500]})
+            finally:
+                await _agent_queue.put(None)
+                _agent_done.set()
+
+        _agent_task = asyncio.create_task(_agent_runner())
+
+        # --- 后台断连检测：宽限期机制 ---
         async def _disconnect_watcher():
             nonlocal _client_disconnected
             while True:
@@ -299,48 +285,40 @@ async def _stream_chat(
                     try:
                         if await http_request.is_disconnected():
                             _client_disconnected = True
-                            logger.info(
-                                "[Chat API] 断连检测器发现客户端断开，触发 cancel_current_task"
-                            )
+                            logger.info("[Chat API] 客户端断开，进入宽限期（60s）")
                             try:
-                                actual_agent.cancel_current_task(
-                                    "客户端断开连接", session_id=conversation_id
-                                )
-                            except Exception as e:
-                                logger.warning(f"[Chat API] 断连触发 cancel 失败: {e}")
+                                await asyncio.wait_for(_agent_done.wait(), timeout=60.0)
+                                logger.info("[Chat API] Agent task 在宽限期内完成")
+                            except asyncio.TimeoutError:
+                                logger.info("[Chat API] 宽限期超时，取消任务")
+                                try:
+                                    actual_agent.cancel_current_task(
+                                        "客户端断开连接（宽限期后）",
+                                        session_id=conversation_id,
+                                    )
+                                except Exception as e:
+                                    logger.warning(f"[Chat API] 断连 cancel 失败: {e}")
                             break
                     except Exception:
                         break
 
         _disconnect_watcher_task = asyncio.create_task(_disconnect_watcher())
 
-        # --- 委托给 Agent 统一流水线 ---
-        # Resolve effective mode (backward compat)
-        _effective_mode = chat_request.mode
-        if chat_request.plan_mode and _effective_mode == "agent":
-            _effective_mode = "plan"
-
-        async for event in actual_agent.chat_with_session_stream(
-            message=chat_request.message or "",
-            session_messages=session_messages_history,
-            session_id=conversation_id,
-            session=session,
-            gateway=None,
-            plan_mode=_effective_mode == "plan",
-            mode=_effective_mode,
-            endpoint_override=chat_request.endpoint,
-            attachments=chat_request.attachments,
-            thinking_mode=chat_request.thinking_mode,
-            thinking_depth=chat_request.thinking_depth,
-        ):
-            # Check if client disconnected
-            if await _check_disconnected():
-                actual_agent.cancel_current_task(
-                    "客户端断开连接", session_id=conversation_id
-                )
+        # --- 主 SSE 事件循环：从 queue 读取事件并转发 ---
+        _agent_errored = False
+        while True:
+            event = await _agent_queue.get()
+            if event is None:
                 break
 
             event_type = event.get("type", "")
+
+            if event_type == "__agent_error__":
+                _agent_errored = True
+                if not _client_disconnected:
+                    yield _sse("error", {"message": event.get("__exc_msg__", "Unknown error")})
+                    yield _sse("done")
+                break
 
             # 拦截 done 事件：不在此处转发，等 usage 收集完毕后统一发送
             if event_type == "done":
@@ -352,8 +330,16 @@ async def _stream_chat(
                 _ask_user_options = event.get("options", [])
                 _ask_user_questions = event.get("questions", [])
 
-            # Inject artifact events for deliver_artifacts results
-            yield _sse(event_type, {k: v for k, v in event.items() if k != "type"})
+            # Always call _sse to accumulate _full_reply regardless of connection
+            event_data = {k: v for k, v in event.items() if k != "type"}
+            sse_line = _sse(event_type, event_data)
+
+            # Client disconnected — text is accumulated by _sse above, skip SSE output
+            _is_connected = not _client_disconnected
+            if _is_connected and not await _check_disconnected():
+                yield sse_line
+            else:
+                continue
 
             # deliver_artifacts / send_sticker 都可能返回带 receipts 的 JSON
             _artifact_tools = ("deliver_artifacts", "send_sticker")
@@ -444,6 +430,7 @@ async def _stream_chat(
                     pass
 
         # --- Save assistant response to session ---
+        _save_done = True
         # ask_user 场景：_ask_user_question 已包含 LLM 文本 + 问题（由 reason_stream 拼接），
         # 优先使用它作为保存文本，确保下一轮 LLM 能看到完整的确认问题上下文。
         if _ask_user_question:
@@ -542,13 +529,51 @@ async def _stream_chat(
         except Exception:
             pass
 
-        yield _sse("done", {"usage": _usage_data})
+        if not _client_disconnected and not _agent_errored:
+            yield _sse("done", {"usage": _usage_data})
 
     except Exception as e:
         logger.error(f"Chat stream error: {e}", exc_info=True)
-        yield _sse("error", {"message": str(e)[:500]})
-        yield _sse("done")
+        if not _client_disconnected:
+            yield _sse("error", {"message": str(e)[:500]})
+            yield _sse("done")
     finally:
+        # ── Wait for agent task to finish (deferred save if SSE gen was interrupted) ──
+        if _agent_task is not None and not _agent_done.is_set():
+            try:
+                await asyncio.wait_for(_agent_done.wait(), timeout=65.0)
+            except (asyncio.TimeoutError, asyncio.CancelledError, Exception):
+                if _agent_task and not _agent_task.done():
+                    _agent_task.cancel()
+
+        # Drain remaining queue events to accumulate _full_reply for deferred save
+        if not _save_done:
+            try:
+                while not _agent_queue.empty():
+                    ev = _agent_queue.get_nowait()
+                    if ev is None or ev.get("type") == "__agent_error__":
+                        break
+                    et = ev.get("type", "")
+                    if et != "done":
+                        _sse(et, {k: v for k, v in ev.items() if k != "type"})
+            except Exception:
+                pass
+            # Deferred session save
+            if session and _full_reply:
+                try:
+                    _deferred_meta: dict = {}
+                    if _collected_artifacts:
+                        _deferred_meta["artifacts"] = _collected_artifacts
+                    session.add_message("assistant", _full_reply, **_deferred_meta)
+                    if session_manager:
+                        session_manager.mark_dirty()
+                    logger.info(
+                        f"[Chat API] Deferred save: {len(_full_reply)} chars "
+                        f"(client_disconnected={_client_disconnected})"
+                    )
+                except Exception as e:
+                    logger.warning(f"[Chat API] Deferred save failed: {e}")
+
         # ── 清理断连检测任务 ──
         if _disconnect_watcher_task and not _disconnect_watcher_task.done():
             _disconnect_watcher_task.cancel()
@@ -557,23 +582,24 @@ async def _stream_chat(
             except (asyncio.CancelledError, Exception):
                 pass
 
-        # ── Release busy lock & broadcast idle/message_update ──
-        _conv_id = chat_request.conversation_id or ""
-        _client_id = chat_request.client_id or ""
-        if _client_id and _conv_id:
-            await _clear_busy(_conv_id)
+        # ── 清理 agent task ──
+        if _agent_task and not _agent_task.done():
+            _agent_task.cancel()
             try:
-                from .websocket import broadcast_event
-
-                await broadcast_event("chat:idle", {"conversation_id": _conv_id})
-                if _full_reply:
-                    await broadcast_event("chat:message_update", {
-                        "conversation_id": _conv_id,
-                        "last_message_preview": _full_reply[:100],
-                        "timestamp": time.time(),
-                    })
-            except Exception:
+                await _agent_task
+            except (asyncio.CancelledError, Exception):
                 pass
+
+        # ── Release busy lock (via lifecycle manager) & broadcast message update ──
+        _conv_id = chat_request.conversation_id or ""
+        if _conv_id:
+            await get_lifecycle_manager().finish(_conv_id, generation=busy_generation)
+            if _full_reply:
+                await _broadcast_chat_event("chat:message_update", {
+                    "conversation_id": _conv_id,
+                    "last_message_preview": _full_reply[:100],
+                    "timestamp": time.time(),
+                })
 
 
 @router.post("/api/chat")
@@ -602,9 +628,11 @@ async def chat(request: Request, body: ChatRequest):
     conversation_id = body.conversation_id or f"api_{_uuid.uuid4().hex[:12]}"
     client_id = body.client_id or ""
 
-    # ── Busy-lock check ──
+    # ── Busy-lock check (via lifecycle manager) ──
+    lifecycle = get_lifecycle_manager()
+    busy_gen = 0
     if client_id:
-        conflict = await _mark_busy(conversation_id, client_id)
+        conflict, busy_gen = await lifecycle.start(conversation_id, client_id)
         if conflict is not None:
             return JSONResponse(
                 status_code=409,
@@ -622,7 +650,7 @@ async def chat(request: Request, body: ChatRequest):
         session_manager = getattr(request.app.state, "session_manager", None)
     except Exception:
         if client_id:
-            await _clear_busy(conversation_id)
+            await lifecycle.finish(conversation_id, generation=busy_gen)
         raise
 
     # Resolve effective mode: backward compat plan_mode=true -> mode="plan"
@@ -646,14 +674,7 @@ async def chat(request: Request, body: ChatRequest):
     # Pass pre-resolved conversation_id so _stream_chat doesn't generate a new one
     body.conversation_id = conversation_id
 
-    # Broadcast busy event
-    if client_id:
-        await _broadcast_chat_event("chat:busy", {
-            "conversation_id": conversation_id,
-            "client_id": client_id,
-        })
-
-    sse_gen = _stream_chat(body, agent, session_manager, http_request=request)
+    sse_gen = _stream_chat(body, agent, session_manager, http_request=request, busy_generation=busy_gen)
     if is_dual_loop():
         sse_gen = engine_stream(sse_gen)
 
@@ -673,28 +694,7 @@ async def chat_busy(
     conversation_id: str = Query("", description="Filter by conversation ID (empty = all)"),
 ):
     """Return currently busy conversations."""
-    async with _busy_lock:
-        _expire_stale_locks()
-        if conversation_id:
-            info = _busy_conversations.get(conversation_id)
-            if info:
-                return {
-                    "busy": True,
-                    "conversation_id": conversation_id,
-                    "client_id": info.client_id,
-                    "since": info.start_time,
-                }
-            return {"busy": False, "conversation_id": conversation_id}
-        return {
-            "busy_conversations": [
-                {
-                    "conversation_id": cid,
-                    "client_id": info.client_id,
-                    "since": info.start_time,
-                }
-                for cid, info in _busy_conversations.items()
-            ],
-        }
+    return await get_lifecycle_manager().get_busy_status(conversation_id)
 
 
 @router.post("/api/chat/answer")
@@ -722,6 +722,13 @@ async def chat_cancel(request: Request, body: ChatControlRequest):
     _conv_id = conv_id or getattr(actual_agent, "_current_conversation_id", None)
     logger.info(f"[Chat API] Cancel 接收到请求: reason={reason!r}, conv_id={_conv_id!r}")
     actual_agent.cancel_current_task(reason, session_id=_conv_id)
+
+    # Immediately release busy-lock so the UI reflects the cancellation.
+    # _stream_chat's finally block will also call finish() with a generation
+    # guard, which will be a safe no-op since the lock is already released.
+    if _conv_id:
+        await get_lifecycle_manager().finish(_conv_id)
+
     logger.info(f"[Chat API] Cancel 执行完成: reason={reason!r}")
     return {"status": "ok", "action": "cancel", "reason": reason}
 

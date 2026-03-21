@@ -844,7 +844,7 @@ function AskQuestionItem({
               onChange={(e) => onOtherText(e.target.value)}
               placeholder={t("chat.askPlaceholder")}
               style={{ fontSize: 13, padding: "7px 12px", borderRadius: 8, border: "1px solid rgba(124,58,237,0.25)", outline: "none" }}
-              onKeyDown={(e) => { if (e.key === "Escape") onToggleOther(); if (e.key === "Enter" && otherText.trim()) onSubmit?.(); }}
+              onKeyDown={(e) => { if (e.nativeEvent.isComposing || e.keyCode === 229) return; if (e.key === "Escape") onToggleOther(); if (e.key === "Enter" && otherText.trim()) onSubmit?.(); }}
             />
           )}
         </div>
@@ -855,7 +855,7 @@ function AskQuestionItem({
           onChange={(e) => onOtherText(e.target.value)}
           placeholder={t("chat.askPlaceholder")}
           style={{ width: "100%", fontSize: 13, padding: "7px 12px", borderRadius: 8, border: "1px solid rgba(124,58,237,0.25)", outline: "none", boxSizing: "border-box" }}
-          onKeyDown={(e) => { if (e.key === "Enter" && otherText.trim()) onSubmit?.(); }}
+          onKeyDown={(e) => { if (e.nativeEvent.isComposing || e.keyCode === 229) return; if (e.key === "Enter" && otherText.trim()) onSubmit?.(); }}
         />
       )}
     </div>
@@ -2704,6 +2704,8 @@ export function ChatView({
       setStreamingTick(t => t + 1);
     }
 
+    setBusyConversations((prev) => { const m = new Map(prev); m.delete(convId); return m; });
+
     if (serviceRunning) {
       safeFetch(`${apiBaseUrl}/api/sessions/${encodeURIComponent(convId)}`, {
         method: "DELETE",
@@ -3079,6 +3081,74 @@ export function ChatView({
         const c = streamContexts.current.get(thisConvId);
         c?.reader?.cancel().catch(() => {});
       }, IDLE_TIMEOUT_MS);
+    };
+
+    // ── SSE 断连恢复：轮询 session history 补全被中断的回复 ──
+    // 当 SSE 流因 app 后台恢复、浏览器断连等原因中断时，后端 task 可能仍在运行。
+    // 通过轮询 session history 获取后端已保存的（部分或完整）回复来恢复对话。
+    const attemptRecovery = (initialDelay: number) => {
+      if (!convId) return;
+      const _recoverMsgId = assistantMsg.id;
+      const _recoverUserTs = userMsg.timestamp;
+      const _recoverKey = STORAGE_KEY_MSGS_PREFIX + thisConvId;
+      let attempts = 0;
+      const maxAttempts = 10;
+      const pollInterval = 3000;
+      let lastContentLen = 0;
+
+      const poll = () => {
+        attempts++;
+        safeFetch(`${apiBase}/api/sessions/${encodeURIComponent(convId)}/history`)
+          .then((r) => r.ok ? r.json() : null)
+          .then((data) => {
+            if (!data) {
+              if (attempts < maxAttempts) setTimeout(poll, pollInterval);
+              return;
+            }
+            const rows = Array.isArray(data?.messages) ? data.messages : [];
+            const candidates = rows.filter(
+              (m: { role?: string; content?: string }) =>
+                m?.role === "assistant" && typeof m?.content === "string",
+            );
+            const newerThanUser = candidates.filter(
+              (m: { timestamp?: number }) =>
+                typeof m?.timestamp === "number" && m.timestamp >= _recoverUserTs,
+            );
+            const lastAssistant = (newerThanUser.length > 0 ? newerThanUser : candidates).slice(-1)[0];
+            if (!lastAssistant?.content) {
+              if (attempts < maxAttempts) setTimeout(poll, pollInterval);
+              return;
+            }
+            const contentLen = (lastAssistant.content as string).length;
+            const contentGrowing = contentLen > lastContentLen;
+            lastContentLen = contentLen;
+            setMessages((prev) => {
+              const updated = prev.map((m) => {
+                if (m.id !== _recoverMsgId) return m;
+                if (m.content && m.content.length >= contentLen) return m;
+                const patched: ChatMessage = { ...m, content: lastAssistant.content };
+                if (
+                  (!m.thinkingChain || m.thinkingChain.length === 0) &&
+                  Array.isArray(lastAssistant.chain_summary) &&
+                  lastAssistant.chain_summary.length > 0
+                ) {
+                  patched.thinkingChain = buildChainFromSummary(lastAssistant.chain_summary);
+                }
+                return patched;
+              });
+              try { saveMessagesToStorage(_recoverKey, updated); } catch { /* quota */ }
+              return updated;
+            });
+            if (contentGrowing && attempts < maxAttempts) {
+              setTimeout(poll, pollInterval);
+            }
+          })
+          .catch(() => {
+            if (attempts < maxAttempts) setTimeout(poll, pollInterval);
+            else logger.warn("Chat", "SSE recovery polling exhausted", { convId });
+          });
+      };
+      setTimeout(poll, initialDelay);
     };
 
     try {
@@ -3655,11 +3725,20 @@ export function ChatView({
 
       // ── 循环结束后：判断是正常完成还是被用户中止 ──
       if (abort.signal.aborted) {
-        updateMessages((prev) => prev.map((m) =>
-          m.id === assistantMsg.id
-            ? { ...m, content: m.content || "（已中止）", streaming: false }
-            : m
-        ));
+        const isAppResume = abort.signal.reason === "app_resumed";
+        if (isAppResume) {
+          // App returned from background — preserve content, attempt recovery
+          updateMessages((prev) => prev.map((m) =>
+            m.id === assistantMsg.id ? { ...m, streaming: false } : m
+          ));
+          attemptRecovery(4000);
+        } else {
+          updateMessages((prev) => prev.map((m) =>
+            m.id === assistantMsg.id
+              ? { ...m, content: m.content || "（已中止）", streaming: false }
+              : m
+          ));
+        }
       } else {
         updateMessages((prev) => prev.map((m) =>
           m.id === assistantMsg.id
@@ -3743,51 +3822,7 @@ export function ChatView({
           }
         }
 
-        // Fire-and-forget: try to recover the (possibly completed) response
-        // from backend session history.  The backend may have finished the
-        // LLM call even though the frontend stream was interrupted.
-        if (convId) {
-          const _recoverMsgId = assistantMsg.id;
-          const _recoverUserTs = userMsg.timestamp;
-          const _recoverKey = STORAGE_KEY_MSGS_PREFIX + thisConvId;
-          const _recoverDelay = isAppResumeAbort ? 4000 : 3000;
-          setTimeout(() => {
-            safeFetch(`${apiBase}/api/sessions/${encodeURIComponent(convId)}/history`)
-              .then((r) => r.ok ? r.json() : null)
-              .then((data) => {
-                if (!data) return;
-                const rows = Array.isArray(data?.messages) ? data.messages : [];
-                const candidates = rows.filter(
-                  (m: { role?: string; content?: string }) =>
-                    m?.role === "assistant" && typeof m?.content === "string",
-                );
-                const newerThanUser = candidates.filter(
-                  (m: { timestamp?: number }) =>
-                    typeof m?.timestamp === "number" && m.timestamp >= _recoverUserTs,
-                );
-                const lastAssistant = (newerThanUser.length > 0 ? newerThanUser : candidates).slice(-1)[0];
-                if (!lastAssistant?.content) return;
-                setMessages((prev) => {
-                  const updated = prev.map((m) => {
-                    if (m.id !== _recoverMsgId) return m;
-                    if (m.content && m.content.length >= (lastAssistant.content as string).length) return m;
-                    const patched: ChatMessage = { ...m, content: lastAssistant.content };
-                    if (
-                      (!m.thinkingChain || m.thinkingChain.length === 0) &&
-                      Array.isArray(lastAssistant.chain_summary) &&
-                      lastAssistant.chain_summary.length > 0
-                    ) {
-                      patched.thinkingChain = buildChainFromSummary(lastAssistant.chain_summary);
-                    }
-                    return patched;
-                  });
-                  try { saveMessagesToStorage(_recoverKey, updated); } catch { /* quota */ }
-                  return updated;
-                });
-              })
-              .catch(() => {});
-          }, _recoverDelay);
-        }
+        attemptRecovery(isAppResumeAbort ? 4000 : 3000);
       }
     } finally {
       if (idleTimer) clearTimeout(idleTimer);
@@ -4370,6 +4405,7 @@ export function ChatView({
               value={renameText}
               onChange={(e) => setRenameText(e.target.value)}
               onKeyDown={(e) => {
+                if (e.nativeEvent.isComposing || e.keyCode === 229) return;
                 if (e.key === "Enter") confirmRename(conv.id, renameText);
                 if (e.key === "Escape") { setRenamingId(null); setRenameText(""); }
               }}

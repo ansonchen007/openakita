@@ -514,6 +514,18 @@ class OrgSetupHandler:
         if not org_id:
             return "❌ delete_org 需要提供 org_id"
 
+        from ...orgs.runtime import get_runtime
+        rt = get_runtime()
+        if rt is not None:
+            try:
+                await rt.delete_org(org_id)
+                return f"✅ 组织({org_id}) 已永久删除。"
+            except ValueError:
+                return f"❌ 组织 '{org_id}' 不存在"
+            except Exception as e:
+                logger.error(f"[OrgSetup] Failed to delete org: {e}", exc_info=True)
+                return f"❌ 删除失败: {e}"
+
         manager = self._get_org_manager()
         if manager is None:
             return "❌ 组织管理器未初始化"

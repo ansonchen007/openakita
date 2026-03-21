@@ -341,14 +341,20 @@ export async function openPopupWindow(
   const title = opts?.title ?? label;
 
   if (IS_CAPACITOR) {
-    // Mobile: popup windows not supported, navigate in-place or no-op
     return;
   }
 
   if (IS_TAURI) {
     try {
       const { WebviewWindow } = await import("@tauri-apps/api/webviewWindow");
-      new WebviewWindow(label, {
+
+      const existing = await WebviewWindow.getByLabel(label);
+      if (existing) {
+        try { await existing.setFocus(); } catch { /* best-effort */ }
+        return;
+      }
+
+      const wv = new WebviewWindow(label, {
         url: path,
         title,
         width,
@@ -357,18 +363,23 @@ export async function openPopupWindow(
         decorations: true,
         resizable: true,
       });
+      wv.once("tauri://error", (e) => {
+        console.error(`[openPopupWindow] failed to create "${label}":`, e);
+      });
     } catch (e) {
+      console.warn("[openPopupWindow] Tauri API unavailable, falling back to window.open:", e);
       window.open(path, label, `width=${width},height=${height}`);
     }
-  } else {
-    const left = (screen.width - width) / 2;
-    const top = (screen.height - height) / 2;
-    window.open(
-      path,
-      label,
-      `width=${width},height=${height},left=${left},top=${top},resizable=yes`,
-    );
+    return;
   }
+
+  const left = (screen.width - width) / 2;
+  const top = (screen.height - height) / 2;
+  window.open(
+    path,
+    label,
+    `width=${width},height=${height},left=${left},top=${top},resizable=yes`,
+  );
 }
 
 /** Whether popup windows are available on the current platform. */

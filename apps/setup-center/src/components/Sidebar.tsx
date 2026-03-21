@@ -1,4 +1,4 @@
-import { Fragment, useState, useCallback } from "react";
+import { Fragment, useState, useCallback, useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import type { StepId, Step, ViewId } from "../types";
 import {
@@ -111,15 +111,24 @@ export function Sidebar({
   const maViews: ViewId[] = ["dashboard", "org_editor", "agent_manager"];
   const stViews: ViewId[] = ["agent_store", "skill_store"];
 
-  const capActive = capViews.includes(view);
-  const monActive = monViews.includes(view);
-  const maActive = maViews.includes(view);
-  const stActive = stViews.includes(view);
+  const prevViewRef = useRef(view);
+  useEffect(() => {
+    if (prevViewRef.current === view) return;
+    prevViewRef.current = view;
+    const groupOf = (v: ViewId): NavGroupId | null =>
+      capViews.includes(v) ? "capabilities"
+        : monViews.includes(v) ? "monitor"
+        : maViews.includes(v) ? "multiAgent"
+        : stViews.includes(v) ? "store"
+        : null;
+    const g = groupOf(view);
+    if (g) setExpandedGroups(prev => ({ ...prev, [g]: true }));
+  }, [view]);
 
-  const capExpanded = expandedGroups.capabilities || capActive;
-  const monExpanded = expandedGroups.monitor || monActive;
-  const maExpanded = expandedGroups.multiAgent || maActive;
-  const stExpanded = expandedGroups.store || stActive;
+  const capExpanded = expandedGroups.capabilities;
+  const monExpanded = expandedGroups.monitor;
+  const maExpanded = expandedGroups.multiAgent;
+  const stExpanded = expandedGroups.store;
 
   return (
     <aside className={`sidebar ${collapsed ? "sidebarCollapsed" : ""}${mobileOpen ? " sidebarOpen" : ""}`}>

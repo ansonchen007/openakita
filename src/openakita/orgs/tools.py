@@ -42,11 +42,11 @@ ORG_NODE_TOOLS: list[dict] = [
     },
     {
         "name": "org_delegate_task",
-        "description": "向下级分配任务。只能分配给直属下级。",
+        "description": "向直属下级分配任务。只能分配给你的直接下属，不能委派给平级同事或自己。与平级协作请用 org_send_message。",
         "input_schema": {
             "type": "object",
             "properties": {
-                "to_node": {"type": "string", "description": "目标下级节点 ID"},
+                "to_node": {"type": "string", "description": "目标直属下级的节点 ID（必须是你的直接下属）"},
                 "task": {"type": "string", "description": "任务描述"},
                 "deadline": {"type": "string", "description": "截止时间（ISO 格式，可选）。AI 节点通常在分钟内完成任务，建议设置 5-30 分钟的 deadline"},
                 "priority": {"type": "integer", "default": 0},
@@ -321,16 +321,16 @@ ORG_NODE_TOOLS: list[dict] = [
     # ── 任务交付与验收 ──
     {
         "name": "org_submit_deliverable",
-        "description": "提交任务交付物给委派人，等待验收。附上工作成果说明。",
+        "description": "提交任务交付物给委派人，等待验收。to_node 可省略，系统将自动提交给你的直属上级。",
         "input_schema": {
             "type": "object",
             "properties": {
-                "to_node": {"type": "string", "description": "委派人节点 ID（即给你分配任务的人）"},
+                "to_node": {"type": "string", "description": "委派人节点 ID（可省略，系统自动提交给直属上级）"},
                 "task_chain_id": {"type": "string", "description": "任务链 ID（从收到的任务消息中获取）"},
                 "deliverable": {"type": "string", "description": "交付内容/成果说明"},
                 "summary": {"type": "string", "description": "工作过程简述"},
             },
-            "required": ["to_node", "deliverable"],
+            "required": ["deliverable"],
         },
     },
     {

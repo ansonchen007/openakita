@@ -164,6 +164,11 @@ async def delete_session(
     if session is not None:
         _cancel_tasks_for_session(request, conversation_id, session.id)
 
+    # Release busy-lock unconditionally — the conversation is being deleted,
+    # so any in-progress state is no longer relevant.
+    from .conversation_lifecycle import get_lifecycle_manager
+    await get_lifecycle_manager().finish(conversation_id)
+
     session_key = f"{channel}:{conversation_id}:{user_id}"
     removed = session_manager.close_session(session_key)
     if removed:

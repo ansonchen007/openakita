@@ -12,7 +12,6 @@ import json
 from typing import Any
 import logging
 import os
-import re
 from pathlib import Path
 
 from fastapi import APIRouter, Request
@@ -36,11 +35,10 @@ def _project_root() -> Path:
 
 
 def _endpoints_config_path() -> Path:
-    """Return the llm_endpoints.json path using the same resolution logic as LLMClient.
+    """Return the canonical llm_endpoints.json path.
 
-    This ensures the Config API reads/writes the SAME file that the LLM client
-    actually loads at startup, avoiding discrepancies when project_root differs
-    from the path discovered by get_default_config_path().
+    Uses the same resolution logic as LLMClient so the Config API
+    reads/writes the SAME file that the LLM runtime actually loads.
     """
     try:
         from openakita.llm.config import get_default_config_path
@@ -234,21 +232,13 @@ async def workspace_info():
 
 @router.get("/api/config/env")
 async def read_env():
-    """Read .env file content as key-value pairs."""
+    """Read .env file content as key-value pairs (plaintext)."""
     env_path = _project_root() / ".env"
     if not env_path.exists():
         return {"env": {}, "raw": ""}
     content = env_path.read_bytes().decode("utf-8", errors="replace")
     env = _parse_env(content)
-    # Mask sensitive values for display (keys containing TOKEN, SECRET, PASSWORD, KEY)
-    masked = {}
-    sensitive_pattern = re.compile(r"(TOKEN|SECRET|PASSWORD|KEY|APIKEY)", re.IGNORECASE)
-    for k, v in env.items():
-        if sensitive_pattern.search(k) and v:
-            masked[k] = v[:4] + "***" + v[-2:] if len(v) > 6 else "***"
-        else:
-            masked[k] = v
-    return {"env": masked, "masked": masked, "raw": ""}
+    return {"env": env, "raw": content}
 
 
 @router.post("/api/config/env")
@@ -263,13 +253,6 @@ async def write_env(body: EnvUpdateRequest):
     existing = ""
     if env_path.exists():
         existing = env_path.read_bytes().decode("utf-8", errors="replace")
-    import re as _re
-    _env_key_pattern = _re.compile(r'^[A-Za-z_][A-Za-z0-9_]*$')
-    for key in body.entries:
-        if not _env_key_pattern.match(key):
-            from fastapi import HTTPException as _HE
-            raise _HE(status_code=400, detail=f"Invalid env key: {key}")
-
     new_content = _update_env_content(
         existing, body.entries, delete_keys=set(body.delete_keys)
     )

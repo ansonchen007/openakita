@@ -299,7 +299,7 @@ export function Topbar({
 
           <Tooltip>
             <TooltipTrigger asChild>
-              <Button variant="ghost" size="icon-sm" onClick={onRefreshAll} disabled={!!busy}>
+              <Button variant="ghost" size="icon-sm" onClick={() => onRefreshAll()} disabled={!!busy}>
                 <IconRefresh size={16} />
               </Button>
             </TooltipTrigger>
@@ -309,11 +309,24 @@ export function Topbar({
           <div className="h-4 w-px bg-border" />
 
           <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="icon-sm" title={t("topbar.themeLabel", "主题")}>
-                {themePrefState === "system" ? <IconLaptop size={16} /> : themePrefState === "dark" ? <IconMoon size={16} /> : <IconSun size={16} />}
-              </Button>
-            </DropdownMenuTrigger>
+            {/* span 作为 Tooltip 触发层，避免 TooltipTrigger+DropdownMenuTrigger 双层 asChild 导致悬停/ ref 失效 */}
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className="inline-flex shrink-0">
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      className="focus-visible:ring-0"
+                      title={t("topbar.themeLabel", "主题")}
+                    >
+                      {themePrefState === "system" ? <IconLaptop size={16} /> : themePrefState === "dark" ? <IconMoon size={16} /> : <IconSun size={16} />}
+                    </Button>
+                  </DropdownMenuTrigger>
+                </span>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">{t("topbar.themeLabel", "主题")}</TooltipContent>
+            </Tooltip>
             <DropdownMenuContent align="end" className="min-w-[140px]">
               <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">{t("topbar.themeLabel", "主题")}</DropdownMenuLabel>
               <DropdownMenuSeparator />
@@ -337,11 +350,23 @@ export function Topbar({
           <div className="h-4 w-px bg-border" />
 
           <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="icon-sm" title={t("topbar.langLabel", "语言")}>
-                <IconGlobe size={16} />
-              </Button>
-            </DropdownMenuTrigger>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className="inline-flex shrink-0">
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      className="focus-visible:ring-0"
+                      title={t("topbar.langLabel", "语言")}
+                    >
+                      <IconGlobe size={16} />
+                    </Button>
+                  </DropdownMenuTrigger>
+                </span>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">{t("topbar.langLabel", "语言")}</TooltipContent>
+            </Tooltip>
             <DropdownMenuContent align="end" className="min-w-[140px]">
               <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">{t("topbar.langLabel", "语言")}</DropdownMenuLabel>
               <DropdownMenuSeparator />

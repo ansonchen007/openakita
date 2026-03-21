@@ -46,6 +46,13 @@ logger = logging.getLogger(__name__)
 AGENT_CACHE_MAX = 10
 AGENT_CACHE_TTL = 600
 
+_runtime_instance: OrgRuntime | None = None
+
+
+def get_runtime() -> OrgRuntime | None:
+    """Return the active OrgRuntime singleton (set during __init__)."""
+    return _runtime_instance
+
 
 class _CachedAgent:
     """Wrapper for a cached Agent instance with TTL tracking."""
@@ -112,6 +119,9 @@ class OrgRuntime:
         self._save_locks: dict[str, asyncio.Lock] = {}
 
         self._started = False
+
+        global _runtime_instance
+        _runtime_instance = self
 
     def _get_org_semaphore(self, org_id: str) -> asyncio.Semaphore:
         """获取组织级并发信号量（限制同时激活的节点数）。"""
@@ -304,6 +314,56 @@ class OrgRuntime:
         })
 
         return org
+
+    async def delete_org(self, org_id: str) -> None:
+        """Permanently delete an organization: stop runtime, clean all state, remove disk data."""
+        org = self._active_orgs.get(org_id) or self._manager.get(org_id)
+        if not org:
+            raise ValueError(f"Organization not found: {org_id}")
+
+        # 1. Graceful stop (best-effort)
+        if org.status in (OrgStatus.ACTIVE, OrgStatus.RUNNING, OrgStatus.PAUSED):
+            try:
+                await self.stop_org(org_id)
+            except Exception as e:
+                logger.warning(f"[OrgRuntime] stop_org before delete failed for {org_id}: {e}")
+
+        # 2. Force-stop all background tasks regardless of stop_org result.
+        #    Each call is idempotent — safe even if stop_org already cleaned them.
+        try:
+            await self._heartbeat.stop_for_org(org_id)
+        except Exception:
+            pass
+        try:
+            await self._scheduler.stop_for_org(org_id)
+        except Exception:
+            pass
+
+        org_tasks = self._running_tasks.pop(org_id, {})
+        for task in org_tasks.values():
+            if not task.done():
+                task.cancel()
+
+        idle_task = self._idle_tasks.pop(org_id, None)
+        if idle_task and not idle_task.done():
+            idle_task.cancel()
+
+        watchdog_task = self._watchdog_tasks.pop(org_id, None)
+        if watchdog_task and not watchdog_task.done():
+            watchdog_task.cancel()
+
+        # 3. Remove in-memory references
+        await self._deactivate_org(org_id)
+        self._org_semaphores.pop(org_id, None)
+        self._save_locks.pop(org_id, None)
+
+        # 4. Delete disk data
+        self._manager.delete(org_id)
+
+        await self._broadcast_ws("org:status_change", {
+            "org_id": org_id, "status": "deleted"
+        })
+        logger.info(f"[OrgRuntime] Deleted org: {org_id} ({org.name})")
 
     async def reset_org(self, org_id: str) -> Organization:
         """Reset an organization: stop it, clear all runtime state, and restart fresh."""
@@ -533,6 +593,9 @@ class OrgRuntime:
         self._set_node_status(org, node, NodeStatus.BUSY, "task_started")
         await self._save_org(org)
 
+        if org.id not in self._active_orgs:
+            return {"node_id": node.id, "error": "org deleted during activation"}
+
         self.get_event_store(org.id).emit(
             "node_activated", node.id, {"prompt": prompt[:200]},
         )
@@ -551,10 +614,16 @@ class OrgRuntime:
                 agent, prompt, session_id, org, node,
             )
 
+            if org.id not in self._active_orgs:
+                return {"node_id": node.id, "result": result_text}
+
             self._set_node_status(org, node, NodeStatus.IDLE, "task_completed")
             org.total_tasks_completed += 1
             await self._save_org(org)
             self._heartbeat.record_activity(org.id)
+
+            if org.id not in self._active_orgs:
+                return {"node_id": node.id, "result": result_text}
 
             self.get_event_store(org.id).emit(
                 "task_completed", node.id,
@@ -575,15 +644,27 @@ class OrgRuntime:
 
         except Exception as e:
             logger.error(f"[OrgRuntime] Task error on {node.id}: {e}")
-            self._set_node_status(org, node, NodeStatus.ERROR, str(e)[:200])
-            await self._save_org(org)
-            self.get_event_store(org.id).emit(
-                "task_failed", node.id, {"error": str(e)[:200]},
-            )
-            await self._broadcast_ws("org:node_status", {
-                "org_id": org.id, "node_id": node.id, "status": "error",
-                "current_task": "",
-            })
+            try:
+                self._set_node_status(org, node, NodeStatus.ERROR, str(e)[:200])
+            except Exception:
+                node.status = NodeStatus.ERROR
+            try:
+                await self._save_org(org)
+            except Exception as save_err:
+                logger.warning(f"[OrgRuntime] Failed to save error state for {node.id}: {save_err}")
+            try:
+                es = self.get_event_store(org.id)
+                if es:
+                    es.emit("task_failed", node.id, {"error": str(e)[:200]})
+            except Exception:
+                pass
+            try:
+                await self._broadcast_ws("org:node_status", {
+                    "org_id": org.id, "node_id": node.id, "status": "error",
+                    "current_task": "",
+                })
+            except Exception:
+                pass
             return {"node_id": node.id, "error": str(e)}
 
         finally:
@@ -904,9 +985,8 @@ class OrgRuntime:
         except (ImportError, AttributeError):
             pass
         try:
-            from openakita.agents.profile import ProfileStore
-            from openakita.config import settings
-            store = ProfileStore(settings.data_dir / "agents")
+            from openakita.agents.profile import get_profile_store
+            store = get_profile_store()
             return store.get(profile_id)
         except Exception:
             pass
@@ -1214,7 +1294,17 @@ class OrgRuntime:
     async def _save_org(self, org: Organization) -> None:
         async with self._get_save_lock(org.id):
             org.updated_at = _now_iso()
-            self._manager.update(org.id, org.to_dict())
+            try:
+                if not self._manager.save_direct(org):
+                    logger.warning(
+                        f"[OrgRuntime] _save_org skipped — org {org.id} no longer on disk"
+                    )
+                    self._active_orgs.pop(org.id, None)
+            except FileNotFoundError:
+                logger.warning(
+                    f"[OrgRuntime] _save_org race — org {org.id} disappeared mid-write"
+                )
+                self._active_orgs.pop(org.id, None)
 
     def _save_state(self, org_id: str) -> None:
         org = self._active_orgs.get(org_id)
@@ -1357,11 +1447,18 @@ class OrgRuntime:
                 if not org or org.status not in (OrgStatus.ACTIVE, OrgStatus.RUNNING):
                     break
 
+                recovered_nodes = []
                 for node in org.nodes:
                     if node.status == NodeStatus.ERROR:
                         self._set_node_status(org, node, NodeStatus.IDLE, "health_check_recovery")
                         self._agent_cache.pop(f"{org_id}:{node.id}", None)
+                        recovered_nodes.append(node)
                 await self._save_org(org)
+                for node in recovered_nodes:
+                    await self._broadcast_ws("org:node_status", {
+                        "org_id": org_id, "node_id": node.id,
+                        "status": "idle", "current_task": "",
+                    })
 
             except asyncio.CancelledError:
                 break
@@ -1402,11 +1499,17 @@ class OrgRuntime:
         while True:
             try:
                 org = self.get_org(org_id)
+                if not org:
+                    logger.info(f"[OrgRuntime] Org {org_id} no longer exists, stopping watchdog")
+                    break
                 interval = getattr(org, "watchdog_interval_s", 30) or 30
                 await asyncio.sleep(interval)
 
                 org = self.get_org(org_id)
-                if not org or org.status not in (OrgStatus.ACTIVE, OrgStatus.RUNNING):
+                if not org:
+                    logger.info(f"[OrgRuntime] Org {org_id} no longer exists, stopping watchdog")
+                    break
+                if org.status not in (OrgStatus.ACTIVE, OrgStatus.RUNNING):
                     continue
                 if not getattr(org, "watchdog_enabled", False):
                     break
@@ -1441,6 +1544,14 @@ class OrgRuntime:
                                 {"reason": "stuck_busy", "stuck_secs": stuck_secs},
                             )
                             await self._save_org(org)
+                            await self._broadcast_ws("org:node_status", {
+                                "org_id": org_id, "node_id": node.id,
+                                "status": "idle", "current_task": "",
+                            })
+                            await self._broadcast_ws("org:watchdog_recovery", {
+                                "org_id": org_id, "node_id": node.id,
+                                "reason": "stuck_busy", "stuck_secs": stuck_secs,
+                            })
                             await self._watchdog_notify_delegator(
                                 org, node, "stuck_busy", stuck_secs,
                             )
@@ -1456,6 +1567,14 @@ class OrgRuntime:
                             "watchdog_recovery", node.id, {"reason": "error_not_recovering"},
                         )
                         await self._save_org(org)
+                        await self._broadcast_ws("org:node_status", {
+                            "org_id": org_id, "node_id": node.id,
+                            "status": "idle", "current_task": "",
+                        })
+                        await self._broadcast_ws("org:watchdog_recovery", {
+                            "org_id": org_id, "node_id": node.id,
+                            "reason": "error_not_recovering",
+                        })
                         await self._watchdog_notify_delegator(
                             org, node, "error_not_recovering", 0,
                         )

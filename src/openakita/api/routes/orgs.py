@@ -231,9 +231,12 @@ async def update_org(request: Request, org_id: str):
 
 @router.delete("/{org_id}")
 async def delete_org(request: Request, org_id: str):
-    mgr = _get_manager(request)
-    if not mgr.delete(org_id):
+    rt = _get_runtime(request)
+    try:
+        await to_engine(rt.delete_org(org_id))
+    except ValueError:
         raise HTTPException(404, f"Organization not found: {org_id}")
+    _project_stores.pop(org_id, None)
     return {"ok": True}
 
 

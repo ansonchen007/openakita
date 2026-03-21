@@ -55,6 +55,7 @@ export interface LLMViewProps {
   writeWorkspaceFile: (path: string, content: string) => Promise<void>;
   venvDir: string;
   ensureEnvLoaded: (wsId: string) => Promise<EnvMap>;
+  serviceRunning?: boolean;
 }
 
 export function LLMView(props: LLMViewProps) {
@@ -67,7 +68,7 @@ export function LLMView(props: LLMViewProps) {
     shouldUseHttpApi, httpApiBase, askConfirm,
     providers, doLoadProviders, loadSavedEndpoints,
     readWorkspaceFile, writeWorkspaceFile,
-    venvDir, ensureEnvLoaded,
+    venvDir, ensureEnvLoaded, serviceRunning,
   } = props;
 
   const { t } = useTranslation();
@@ -220,7 +221,7 @@ export function LLMView(props: LLMViewProps) {
   useEffect(() => {
     loadSavedEndpoints().catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentWorkspaceId, dataMode]);
+  }, [currentWorkspaceId, dataMode, serviceRunning]);
 
   useEffect(() => {
     if (!selectedProvider) return;
@@ -971,12 +972,13 @@ export function LLMView(props: LLMViewProps) {
             { method: "DELETE" },
           );
         }
+        const keyToSave = editDraft.apiKeyValue.trim() || null;
         const res = await safeFetch(`${httpApiBase()}/api/config/save-endpoint`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             endpoint,
-            api_key: editDraft.apiKeyValue.trim() || null,
+            api_key: keyToSave,
             endpoint_type: "endpoints",
           }),
         });
@@ -985,8 +987,8 @@ export function LLMView(props: LLMViewProps) {
           notifyError(data.error || "保存失败");
           return;
         }
-        if (editDraft.apiKeyValue.trim() && data.endpoint?.api_key_env) {
-          setEnvDraft((e) => envSet(e, data.endpoint.api_key_env, editDraft.apiKeyValue.trim()));
+        if (keyToSave && data.endpoint?.api_key_env) {
+          setEnvDraft((e) => envSet(e, data.endpoint.api_key_env, keyToSave));
         }
       } else {
         if (nameChanged) {

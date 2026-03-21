@@ -1123,6 +1123,7 @@ export function OrgEditorView({
         conflict_detected: "org:deadlock",
         heartbeat_decision: "org:heartbeat_done",
         tools_granted: "org:node_status",
+        watchdog_recovery: "org:watchdog_recovery",
       };
       const mapped: ActivityEvent[] = events
         .filter(e => e.event_type && evtTypeMap[e.event_type])
@@ -1234,6 +1235,8 @@ export function OrgEditorView({
           } else if (ev === "org:task_complete") {
             pushActivity(ev, d);
           } else if (ev === "org:meeting_started" || ev === "org:meeting_round" || ev === "org:meeting_speak" || ev === "org:meeting_completed") {
+            pushActivity(ev, d);
+          } else if (ev === "org:watchdog_recovery") {
             pushActivity(ev, d);
           }
         } catch { /* ignore parse errors */ }

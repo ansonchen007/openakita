@@ -93,11 +93,11 @@ class OrgIdentity:
                 if e.source == node.id:
                     peer = org.get_node(e.target)
                     if peer:
-                        connected_peers.append(f"{peer.role_title}({peer.department})")
+                        connected_peers.append(f"**{peer.role_title}** (id: `{peer.id}`)")
                 elif e.target == node.id:
                     peer = org.get_node(e.source)
                     if peer:
-                        connected_peers.append(f"{peer.role_title}({peer.department})")
+                        connected_peers.append(f"**{peer.role_title}** (id: `{peer.id}`)")
 
         org_chart = self._build_brief_org_chart(org)
 
@@ -159,7 +159,7 @@ class OrgIdentity:
         rel_parts = []
         persona = org.user_persona
         if parent:
-            rel_parts.append(f"- 直属上级：{parent.role_title}({parent.department})")
+            rel_parts.append(f"- 直属上级：**{parent.role_title}** (id: `{parent.id}`)")
         elif persona and persona.label:
             desc = f"（{persona.description}）" if persona.description else "（用户）"
             rel_parts.append(f"- 直属上级：{persona.label}{desc}")
@@ -172,6 +172,12 @@ class OrgIdentity:
             rel_parts.append(
                 "\n**重要：你是管理者。收到复杂任务时，首先拆解并用 org_delegate_task 委派给合适的下属，"
                 "而非自己动手执行。只有简单协调沟通才自己处理。**"
+            )
+        else:
+            rel_parts.append(
+                "\n你是执行者（没有下属）。收到任务后**自己完成**，"
+                "完成后用 org_submit_deliverable 提交交付物。"
+                "需要同事协助时，用 org_send_message 与他们沟通（不要用 org_delegate_task，那是给有下属的管理者用的）。"
             )
         if connected_peers:
             rel_parts.append(f"- 协作伙伴：{', '.join(connected_peers)}")
@@ -197,6 +203,16 @@ class OrgIdentity:
         if policy_index:
             parts.append(f"制度索引：\n{policy_index}")
 
+        delivery_flow = (
+            "任务交付流程：\n"
+            "1. 收到任务后开始工作\n"
+            "2. 完成后用 **org_submit_deliverable** 提交交付物（to_node 可省略，系统自动提交给直属上级）\n"
+            "3. 委派人用 org_accept_deliverable（通过）或 org_reject_deliverable（打回）验收\n"
+            "4. 被打回时根据反馈修改后重新提交\n"
+            "5. 验收通过后任务完结\n\n"
+            "缺少工具时，用 org_request_tools 向上级申请。"
+        )
+
         has_external = bool(node.external_tools)
         if has_external:
             from .tool_categories import expand_tool_categories, TOOL_CATEGORIES
@@ -212,13 +228,7 @@ class OrgIdentity:
                 "- 优先通过直接连线关系沟通（上下级、协作伙伴）\n"
                 "- 非必要不跨级沟通\n"
                 "- 回复要简洁，1-3 句话概括行动和结果即可\n\n"
-                "任务交付流程：\n"
-                "1. 收到任务（org_delegate_task）后开始工作\n"
-                "2. 完成后用 **org_submit_deliverable** 提交交付物给委派人\n"
-                "3. 委派人用 org_accept_deliverable（通过）或 org_reject_deliverable（打回）验收\n"
-                "4. 被打回时根据反馈修改后重新提交\n"
-                "5. 验收通过后任务完结\n\n"
-                "缺少工具时，用 org_request_tools 向上级申请。"
+                + delivery_flow
             )
         else:
             parts.append(
@@ -230,13 +240,7 @@ class OrgIdentity:
                 "- 非必要不跨级沟通\n"
                 "- 重要决策和方案写入 org_write_blackboard，写之前先 org_read_blackboard 检查避免重复\n"
                 "- 回复要简洁，1-3 句话概括行动和结果即可\n\n"
-                "任务交付流程：\n"
-                "1. 收到任务（org_delegate_task）后开始工作\n"
-                "2. 完成后用 **org_submit_deliverable** 提交交付物给委派人\n"
-                "3. 委派人用 org_accept_deliverable（通过）或 org_reject_deliverable（打回）验收\n"
-                "4. 被打回时根据反馈修改后重新提交\n"
-                "5. 验收通过后任务完结\n\n"
-                "缺少工具时，用 org_request_tools 向上级申请。"
+                + delivery_flow
             )
 
         if getattr(org, "operation_mode", "") == "command" and not project_tasks_summary:
@@ -271,7 +275,10 @@ class OrgIdentity:
     # ------------------------------------------------------------------
 
     def _build_brief_org_chart(self, org: Organization) -> str:
-        """Build a compact org chart for prompt injection (~200-400 tokens)."""
+        """Build a compact org chart for prompt injection (~200-500 tokens).
+
+        Format includes node IDs so agents can reference colleagues directly.
+        """
         departments: dict[str, list[OrgNode]] = {}
         roots: list[OrgNode] = []
         root_ids: set[str] = set()
@@ -284,14 +291,15 @@ class OrgIdentity:
 
         lines: list[str] = []
         for root in roots:
-            lines.append(f"- {root.role_title} -- {root.role_goal[:30] if root.role_goal else ''}")
+            goal = f" -- {root.role_goal[:30]}" if root.role_goal else ""
+            lines.append(f"- {root.role_title}(`{root.id}`){goal}")
 
         for dept_name, members in sorted(departments.items()):
             dept_members = [m for m in members if m.id not in root_ids]
             if not dept_members:
                 continue
             member_str = ", ".join(
-                f"{m.role_title}" for m in dept_members[:6]
+                f"{m.role_title}(`{m.id}`)" for m in dept_members[:6]
             )
             if len(dept_members) > 6:
                 member_str += f" 等{len(dept_members)}人"
@@ -321,9 +329,8 @@ class OrgIdentity:
         except (ImportError, AttributeError):
             pass
         try:
-            from openakita.agents.profile import ProfileStore
-            from openakita.config import settings
-            store = ProfileStore(settings.data_dir / "agents")
+            from openakita.agents.profile import get_profile_store
+            store = get_profile_store()
             profile = store.get(profile_id)
             return profile.custom_prompt if profile else None
         except Exception:

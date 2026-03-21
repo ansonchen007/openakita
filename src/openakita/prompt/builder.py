@@ -648,8 +648,9 @@ def _build_runtime_section() -> str:
 
     path_tools = []
     _python_in_path_ok = False
+    from ..utils.path_helper import which_command
     for cmd in ("git", "python", "node", "pip", "npm", "docker", "curl"):
-        found = _shutil.which(cmd)
+        found = which_command(cmd)
         if not found:
             continue
         if cmd == "python" and _sys.platform == "win32":
