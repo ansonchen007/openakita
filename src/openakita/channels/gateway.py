@@ -3064,20 +3064,35 @@ class MessageGateway:
             )
 
             streamed_ok = False
+            _has_orchestrator = (
+                _cfg.multi_agent_enabled
+                and getattr(self, "_orchestrator_ref", None) is not None
+            )
             if use_streaming:
                 response, streamed_ok = await self._call_agent_streaming(
                     session, input_text, message, adapter,
                 )
+            elif _has_orchestrator:
+                # Orchestrator 自带 idle_timeout + hard_timeout 进度监控，
+                # 不再套 wait_for 墙钟超时，避免活跃任务被误杀
+                response = await self.agent_handler(session, input_text)
             else:
-                _AGENT_TIMEOUT = float(os.environ.get("AGENT_HANDLER_TIMEOUT", "300"))
+                _AGENT_TIMEOUT = float(
+                    os.environ.get("AGENT_HANDLER_TIMEOUT", "1200")
+                )
                 try:
                     response = await asyncio.wait_for(
                         self.agent_handler(session, input_text),
                         timeout=_AGENT_TIMEOUT,
                     )
                 except TimeoutError:
-                    logger.error(f"[Gateway] Agent handler timed out after {_AGENT_TIMEOUT}s")
-                    response = f"⚠️ 处理超时（{int(_AGENT_TIMEOUT)}秒），请稍后重试或简化您的问题。"
+                    logger.error(
+                        f"[Gateway] Agent handler timed out after {_AGENT_TIMEOUT}s"
+                    )
+                    response = (
+                        f"⚠️ 处理超时（{int(_AGENT_TIMEOUT)}秒），"
+                        f"请稍后重试或简化您的问题。"
+                    )
 
             return (response, streamed_ok)
 
@@ -3118,7 +3133,7 @@ class MessageGateway:
             _sk = adapter._make_session_key(message.chat_id, message.thread_id)
             adapter._streaming_buffers.setdefault(_sk, "")
 
-        _STREAM_TIMEOUT = float(os.environ.get("AGENT_HANDLER_TIMEOUT", "300"))
+        _STREAM_TIMEOUT = float(os.environ.get("AGENT_HANDLER_TIMEOUT", "1200"))
 
         async def _consume_stream():
             nonlocal reply_text, _thinking_buf
