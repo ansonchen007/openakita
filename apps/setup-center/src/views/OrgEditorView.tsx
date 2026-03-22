@@ -1287,11 +1287,10 @@ export function OrgEditorView({
           filters: [{ name: "JSON", extensions: ["json"] }],
         });
         if (!savePath) return;
-        await safeFetch(`${apiBaseUrl}/api/orgs/${currentOrg.id}/export`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ output_path: savePath }),
-        });
+        const res = await safeFetch(`${apiBaseUrl}/api/orgs/${currentOrg.id}/export`, { method: "POST" });
+        const data = await res.json();
+        const { writeTextFile } = await import("@tauri-apps/plugin-fs");
+        await writeTextFile(savePath, JSON.stringify(data, null, 2));
         showToast(`组织已导出到: ${savePath}`);
       } else {
         const res = await safeFetch(`${apiBaseUrl}/api/orgs/${currentOrg.id}/export`, { method: "POST" });

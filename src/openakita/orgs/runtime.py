@@ -1333,7 +1333,7 @@ class OrgRuntime:
         self._manager.save_state(org_id, state)
 
     async def _recover_pending_tasks(self, org: Organization) -> None:
-        """Reset stale node statuses after a restart.
+        """Reset stale node statuses and orphan tasks after a restart.
 
         After a process restart, in-memory agents are gone. Any node still
         marked busy/waiting/error in the persisted org.json is stale and must
@@ -1341,19 +1341,71 @@ class OrgRuntime:
         org object (loaded from org.json) rather than only the state.json
         snapshot, because state.json is only written during graceful shutdown
         and may be missing or outdated after a crash.
+
+        We also reset any ``in_progress`` tasks assigned to recovered nodes
+        back to ``todo`` so the orchestrator can re-dispatch them.
         """
         recovered_count = 0
         stale_statuses = {NodeStatus.BUSY, NodeStatus.WAITING, NodeStatus.ERROR}
+        recovered_node_ids: set[str] = set()
 
         for node in org.nodes:
             if node.status in stale_statuses:
                 self._set_node_status(org, node, NodeStatus.IDLE, "restart_cleanup")
                 self._agent_cache.pop(f"{org.id}:{node.id}", None)
+                recovered_node_ids.add(node.id)
                 recovered_count += 1
 
         if recovered_count > 0:
             await self._save_org(org)
             logger.info(f"[OrgRuntime] Recovered {recovered_count} stale nodes for {org.name}")
+
+        self._recover_orphan_tasks(org, recovered_node_ids)
+
+    def _recover_orphan_tasks(
+        self, org: Organization, recovered_node_ids: set[str]
+    ) -> None:
+        """Reset in_progress tasks whose assignee nodes are now idle.
+
+        Called after node recovery to maintain task ↔ node consistency.
+        Tasks are reset to ``todo`` so they can be re-dispatched.
+        """
+        from openakita.orgs.models import TaskStatus
+        from openakita.orgs.project_store import ProjectStore
+
+        try:
+            org_dir = self._manager._org_dir(org.id)
+            store = ProjectStore(org_dir)
+        except Exception as exc:
+            logger.debug("[OrgRuntime] Cannot open ProjectStore for %s: %s", org.id, exc)
+            return
+
+        orphan_tasks = store.all_tasks(status="in_progress")
+        reset_count = 0
+        for task_dict in orphan_tasks:
+            assignee = task_dict.get("assignee_node_id", "")
+            if not assignee:
+                continue
+            node_is_idle = any(n.id == assignee and n.status == NodeStatus.IDLE for n in org.nodes)
+            if not node_is_idle:
+                continue
+            if recovered_node_ids and assignee not in recovered_node_ids:
+                continue
+            task_id = task_dict.get("id", "")
+            project_id = task_dict.get("project_id", "")
+            if not task_id or not project_id:
+                continue
+            store.update_task(project_id, task_id, {"status": TaskStatus.TODO})
+            reset_count += 1
+            logger.info(
+                "[OrgRuntime] Reset orphan task %s (assignee=%s) to todo in org %s",
+                task_id[:12], assignee, org.name,
+            )
+
+        if reset_count > 0:
+            logger.info(
+                "[OrgRuntime] Reset %d orphan tasks for org %s", reset_count, org.name
+            )
 
     def _evict_expired_agents(self) -> None:
         expired = [k for k, v in self._agent_cache.items() if v.expired]
