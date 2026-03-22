@@ -201,6 +201,23 @@ fn setup_logs_dir() -> PathBuf {
     openakita_root_dir().join("logs")
 }
 
+/// Append a diagnostic line to `~/.openakita/logs/autostart.log`.
+fn log_to_file(msg: &str) {
+    let log_dir = setup_logs_dir();
+    let _ = fs::create_dir_all(&log_dir);
+    let path = log_dir.join("autostart.log");
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let line = format!("[{}] {}\n", secs, msg);
+    let _ = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .and_then(|mut f| std::io::Write::write_all(&mut f, line.as_bytes()));
+}
+
 /// 开始写入安装配置日志，创建带日期的日志文件。返回完整路径供前端展示。
 #[tauri::command]
 fn start_onboarding_log(date_label: String) -> Result<String, String> {
@@ -2313,7 +2330,10 @@ fn startup_version_check(app_version: &str, port: u16) -> VersionCheckResult {
         .build()
     {
         Ok(c) => c,
-        Err(_) => return VersionCheckResult::NotRunning,
+        Err(e) => {
+            log_to_file(&format!("[version_check] client build failed: {e}"));
+            return VersionCheckResult::NotRunning;
+        }
     };
 
     let resp = match client
@@ -2321,7 +2341,14 @@ fn startup_version_check(app_version: &str, port: u16) -> VersionCheckResult {
         .send()
     {
         Ok(r) if r.status().is_success() => r,
-        _ => return VersionCheckResult::NotRunning,
+        Ok(r) => {
+            log_to_file(&format!("[version_check] health check non-success: {}", r.status()));
+            return VersionCheckResult::NotRunning;
+        }
+        Err(e) => {
+            log_to_file(&format!("[version_check] health check failed: {e}"));
+            return VersionCheckResult::NotRunning;
+        }
     };
 
     let json: serde_json::Value = match resp.json() {
@@ -2648,9 +2675,8 @@ fn main() {
                 }
             }
 
-            // ── 自动拉起后端（仅 release 模式生效） ──
+            // ── 自动拉起后端 ──
             // 如果有已配置的工作区且后端未在运行，则自动启动后端。
-            // dev 模式（cargo tauri dev）跳过，避免与手动启动的开发后端冲突。
             // 前端通过 is_backend_auto_starting 查询此状态，
             // 在启动期间显示提示并禁用启动/重启按钮。
             //
@@ -2659,22 +2685,36 @@ fn main() {
             //   - RunningOk   → 后端在运行且版本可接受
             //   - Upgraded    → 旧版后端已被终止，需要启动新版
             let app_version = app.package_info().version.to_string();
-                let state = read_state_file();
-                if let Some(ref ws_id) = state.current_workspace_id {
-                    let port = read_workspace_api_port(ws_id).unwrap_or(18900);
-                let need_start = !matches!(
-                    startup_version_check(&app_version, port),
-                    VersionCheckResult::RunningOk
-                );
+            let state = read_state_file();
+            if let Some(ref ws_id) = state.current_workspace_id {
+                let port = read_workspace_api_port(ws_id).unwrap_or(18900);
+                let check_result = startup_version_check(&app_version, port);
+                let need_start = !matches!(check_result, VersionCheckResult::RunningOk);
+                log_to_file(&format!(
+                    "[auto-start] app_version={}, ws_id={}, port={}, need_start={}",
+                    app_version, ws_id, port, need_start
+                ));
                 if need_start {
                     AUTO_START_IN_PROGRESS.store(true, Ordering::SeqCst);
-                        let venv_dir = openakita_root_dir().join("venv").to_string_lossy().to_string();
-                        let ws_clone = ws_id.clone();
-                        std::thread::spawn(move || {
-                            let _ = openakita_service_start(venv_dir, ws_clone);
+                    let venv_dir = openakita_root_dir().join("venv").to_string_lossy().to_string();
+                    let ws_clone = ws_id.clone();
+                    std::thread::spawn(move || {
+                        match openakita_service_start(venv_dir.clone(), ws_clone.clone()) {
+                            Ok(status) => {
+                                log_to_file(&format!(
+                                    "[auto-start] success: running={}, pid={:?}",
+                                    status.running, status.pid
+                                ));
+                            }
+                            Err(e) => {
+                                log_to_file(&format!("[auto-start] FAILED: {}", e));
+                            }
+                        }
                         AUTO_START_IN_PROGRESS.store(false, Ordering::SeqCst);
-                        });
+                    });
                 }
+            } else {
+                log_to_file("[auto-start] skipped: no current_workspace_id in state");
             }
             Ok(())
             })();
@@ -3187,7 +3227,12 @@ fn read_env_kv(path: &Path) -> Vec<(String, String)> {
 
 #[tauri::command]
 fn openakita_service_start(venv_dir: String, workspace_id: String) -> Result<ServiceStatus, String> {
-    fs::create_dir_all(run_dir()).map_err(|e| format!("create run dir failed: {e}"))?;
+    log_to_file(&format!("[service_start] called: ws={}, venv={}", workspace_id, venv_dir));
+    fs::create_dir_all(run_dir()).map_err(|e| {
+        let msg = format!("create run dir failed: {e}");
+        log_to_file(&format!("[service_start] FAIL: {}", msg));
+        msg
+    })?;
     let pid_file = service_pid_file(&workspace_id);
     let pf = pid_file.to_string_lossy().to_string();
 
@@ -3257,6 +3302,7 @@ fn openakita_service_start(venv_dir: String, workspace_id: String) -> Result<Ser
 
     // 优先使用内嵌 PyInstaller 后端，降级到 venv python
     let (backend_exe, backend_args) = get_backend_executable(&venv_dir);
+    log_to_file(&format!("[service_start] exe={}, exists={}", backend_exe.display(), backend_exe.exists()));
     if !backend_exe.exists() {
         let bundled_dir = bundled_backend_dir();
         let bundled_name = if cfg!(windows) { "openakita-server.exe" } else { "openakita-server" };
@@ -3333,8 +3379,13 @@ fn openakita_service_start(venv_dir: String, workspace_id: String) -> Result<Ser
         cmd.creation_flags(0x00000008u32 | 0x00000200u32 | 0x0800_0000u32); // DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW
     }
 
-    let child = cmd.spawn().map_err(|e| format!("spawn openakita serve failed: {e}"))?;
+    let child = cmd.spawn().map_err(|e| {
+        let msg = format!("spawn openakita serve failed: {e}");
+        log_to_file(&format!("[service_start] {}", msg));
+        msg
+    })?;
     let pid = child.id();
+    log_to_file(&format!("[service_start] spawned pid={}", pid));
     let started_at = now_epoch_secs();
 
     // ── 3. 写 JSON PID 文件 ──
