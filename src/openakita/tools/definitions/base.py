@@ -109,7 +109,7 @@ CATEGORY_PREFIXES = {
         "load_skill",
         "reload_skill",
     ),
-    "Memory": ("add_memory", "search_memory", "get_memory_stats"),
+    "Memory": ("add_memory", "search_memory", "get_memory_stats", "search_relational_memory"),
     "Scheduled": (
         "schedule_task",
         "list_scheduled_tasks",

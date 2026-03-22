@@ -128,6 +128,13 @@ class MemoryManager:
         # v2: Retrieval Engine (with brain for LLM query decomposition)
         self.retrieval_engine = RetrievalEngine(self.store, brain=brain)
 
+        # v3: Relational Memory (Mode 2) — initialized lazily on first use
+        self.relational_store = None
+        self.relational_encoder = None
+        self.relational_graph = None
+        self.relational_consolidator = None
+        self._relational_pending_nodes = []
+
         # v1 compat: in-memory cache
         self.memories_file = self.data_dir / "memories.json"
         self._memories: dict[str, Memory] = {}
@@ -572,6 +579,45 @@ class MemoryManager:
 
         self.store.update_semantic(existing.id, updates)
 
+    # ==================== Relational Memory (Mode 2) ====================
+
+    def _ensure_relational(self) -> bool:
+        """Lazily initialize relational memory components. Returns True if available."""
+        if self.relational_store is not None:
+            return True
+        try:
+            from .relational.consolidator import RelationalConsolidator
+            from .relational.encoder import MemoryEncoder
+            from .relational.entity_resolver import EntityResolver
+            from .relational.graph_engine import GraphEngine
+            from .relational.store import RelationalMemoryStore
+
+            conn = self.store.db._conn
+            if conn is None:
+                return False
+            self.relational_store = RelationalMemoryStore(conn)
+            self.relational_encoder = MemoryEncoder(
+                brain=self.brain, session_id=self._current_session_id or ""
+            )
+            self.relational_graph = GraphEngine(self.relational_store)
+            resolver = EntityResolver(self.relational_store, brain=self.brain)
+            self.relational_consolidator = RelationalConsolidator(
+                self.relational_store, entity_resolver=resolver
+            )
+            logger.info("[Memory] Relational memory (Mode 2) initialized")
+            return True
+        except Exception as e:
+            logger.debug(f"[Memory] Relational memory init skipped: {e}")
+            return False
+
+    def _get_memory_mode(self) -> str:
+        """Read memory_mode from config. Defaults to 'mode1'."""
+        try:
+            from openakita.config import settings
+            return getattr(settings, "memory_mode", "mode1")
+        except Exception:
+            return "mode1"
+
     def end_session(
         self, task_description: str = "", success: bool = True, errors: list | None = None
     ) -> None:
@@ -582,6 +628,9 @@ class MemoryManager:
         session_id = self._current_session_id
         turns = list(self._session_turns)
         cited = self._consume_cited_memories()
+
+        relational_pending_snapshot = list(self._relational_pending_nodes)
+        self._relational_pending_nodes.clear()
 
         try:
             loop = asyncio.get_running_loop()
@@ -647,7 +696,31 @@ class MemoryManager:
                     except Exception as e:
                         logger.warning(f"[Memory] Failed to back-fill episode links: {e}")
 
-                pass  # cleanup via done_callback below
+                # Relational memory (Mode 2) — batch encode at session end
+                mode = self._get_memory_mode()
+                if mode in ("mode2", "auto") and self._ensure_relational():
+                    try:
+                        turn_dicts = [
+                            {"role": t.role, "content": t.content,
+                             "tool_calls": t.tool_calls, "tool_results": t.tool_results}
+                            for t in turns
+                        ]
+                        existing = relational_pending_snapshot
+                        result = await self.relational_encoder.encode_session(
+                            turn_dicts, existing_nodes=existing or None,
+                            session_id=session_id,
+                        )
+                        if result.nodes:
+                            self.relational_store.save_nodes_batch(result.nodes)
+                        if result.edges:
+                            self.relational_store.save_edges_batch(result.edges)
+                        if result.nodes or result.edges:
+                            logger.info(
+                                f"[Memory] Relational encoding: "
+                                f"{len(result.nodes)} nodes, {len(result.edges)} edges"
+                            )
+                    except Exception as e:
+                        logger.warning(f"[Memory] Relational session encoding failed: {e}")
 
             task = loop.create_task(_finalize_session())
             self._pending_tasks.add(task)
@@ -760,6 +833,46 @@ class MemoryManager:
                         tool_calls=msg.get("tool_calls"),
                         tool_results=msg.get("tool_results"),
                     )
+
+        # Relational memory (Mode 2) — quick encode before messages are lost
+        mode = self._get_memory_mode()
+        if mode in ("mode2", "auto") and self._ensure_relational():
+            try:
+                result = self.relational_encoder.encode_quick(messages, self._current_session_id or "")
+                if result.nodes:
+                    self.relational_store.save_nodes_batch(result.nodes)
+                    self._relational_pending_nodes.extend(result.nodes)
+                if result.edges:
+                    self.relational_store.save_edges_batch(result.edges)
+                if result.nodes:
+                    logger.info(
+                        f"[Memory] Relational quick encode: "
+                        f"{len(result.nodes)} nodes, {len(result.edges)} edges"
+                    )
+            except Exception as e:
+                logger.warning(f"[Memory] Relational quick encode failed: {e}")
+
+    async def on_summary_generated(self, summary: str) -> None:
+        """Called after context compression generates a summary — Layer 2 backfill."""
+        mode = self._get_memory_mode()
+        if mode not in ("mode2", "auto") or not self._ensure_relational():
+            return
+        pending = list(self._relational_pending_nodes)
+        if not pending or not summary:
+            return
+        try:
+            result = self.relational_encoder.backfill_from_summary(summary, pending)
+            if result.nodes:
+                self.relational_store.save_nodes_batch(result.nodes)
+            if result.edges:
+                self.relational_store.save_edges_batch(result.edges)
+            if result.nodes or result.edges:
+                logger.info(
+                    f"[Memory] Relational backfill from summary: "
+                    f"{len(result.nodes)} nodes, {len(result.edges)} edges"
+                )
+        except Exception as e:
+            logger.warning(f"[Memory] Relational backfill failed: {e}")
 
     # ==================== Memory CRUD (v1 compat) ====================
 

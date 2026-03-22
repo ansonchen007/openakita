@@ -37,10 +37,12 @@ class MemoryHandler:
         "list_recent_tasks",
         "search_conversation_traces",
         "trace_memory",
+        "search_relational_memory",
     ]
 
     _SEARCH_TOOLS = frozenset({
-        "search_memory", "list_recent_tasks", "trace_memory", "search_conversation_traces",
+        "search_memory", "list_recent_tasks", "trace_memory",
+        "search_conversation_traces", "search_relational_memory",
     })
 
     _NAVIGATION_GUIDE = (
@@ -95,6 +97,8 @@ class MemoryHandler:
             result = self._search_conversation_traces(params)
         elif tool_name == "trace_memory":
             result = self._trace_memory(params)
+        elif tool_name == "search_relational_memory":
+            result = await self._search_relational_memory(params)
         else:
             return f"❌ Unknown memory tool: {tool_name}"
 
@@ -662,6 +666,46 @@ class MemoryHandler:
                         rc = str(tr.get("result_content", tr.get("result_preview", "")))
                         output += f"  结果: {rc[:300]}\n"
             output += "\n"
+        return output
+
+
+    async def _search_relational_memory(self, params: dict) -> str:
+        """Search the relational memory graph (Mode 2)."""
+        query = params.get("query", "")
+        max_results = params.get("max_results", 10)
+
+        if not query:
+            return "❌ 请提供搜索查询"
+
+        mm = self.agent.memory_manager
+        if not mm._ensure_relational():
+            return "⚠️ 关系型记忆（Mode 2）未启用。请在配置中设置 memory_mode 为 mode2 或 auto。"
+
+        try:
+            results = await mm.relational_graph.query(
+                query, limit=max_results, token_budget=2000,
+            )
+        except Exception as e:
+            return f"❌ 图搜索失败: {e}"
+
+        if not results:
+            return f"未找到与 \"{query}\" 相关的关系型记忆"
+
+        output = f"🔗 关系型记忆搜索结果（{len(results)} 条）\n\n"
+        for i, r in enumerate(results, 1):
+            node = r.node
+            dims = ", ".join(d.value for d in r.dimensions_matched)
+            ents = ", ".join(e.name for e in node.entities[:3])
+            time_str = node.occurred_at.strftime("%m-%d %H:%M") if node.occurred_at else ""
+            output += (
+                f"--- 结果 {i} ---\n"
+                f"类型: {node.node_type.value.upper()} | 分数: {r.score:.2f} | 维度: {dims}\n"
+            )
+            if ents:
+                output += f"实体: {ents}\n"
+            if time_str:
+                output += f"时间: {time_str}\n"
+            output += f"内容: {node.content[:300]}\n\n"
         return output
 
 
