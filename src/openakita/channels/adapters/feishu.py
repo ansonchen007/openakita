@@ -38,6 +38,38 @@ from ..types import (
 
 logger = logging.getLogger(__name__)
 
+
+def _drain_loop_tasks(loop: asyncio.AbstractEventLoop, timeout: float = 3.0) -> None:
+    """Cancel all pending tasks on *loop* and run them to completion.
+
+    Lark SDK spawns internal asyncio tasks (ExpiringCache cron, ping loop,
+    receive loop) that are never explicitly cancelled.  If we just close the
+    loop, Python emits "Task was destroyed but it is pending!" for each one,
+    and — more importantly — the thread may hang waiting for those tasks,
+    blocking process shutdown.
+
+    A *timeout* guard prevents indefinite blocking in case any task swallows
+    ``CancelledError`` and keeps running (as some third-party SDKs do).
+    """
+    try:
+        pending = asyncio.all_tasks(loop)
+    except RuntimeError:
+        return
+    if not pending:
+        return
+    for task in pending:
+        task.cancel()
+    try:
+        loop.run_until_complete(
+            asyncio.wait_for(
+                asyncio.gather(*pending, return_exceptions=True),
+                timeout=timeout,
+            )
+        )
+    except Exception:
+        pass
+
+
 # 延迟导入
 lark_oapi = None
 
@@ -267,7 +299,7 @@ class FeishuAdapter(ChannelAdapter):
                 try:
                     req = bot_v3.GetBotInfoRequest.builder().build()
                     resp = await asyncio.get_running_loop().run_in_executor(
-                        None, lambda: self._client.bot.v3.bot_info.get(req)
+                        None, lambda _r=req: self._client.bot.v3.bot_info.get(_r)
                     )
                     if resp.success() and resp.data and resp.data.bot:
                         self._bot_open_id = getattr(resp.data.bot, "open_id", None)
@@ -408,8 +440,8 @@ class FeishuAdapter(ChannelAdapter):
             return
 
         try:
-            import lark_oapi.api.im.v1 as im_v1
             import lark_oapi.api.contact.v3 as contact_v3
+            import lark_oapi.api.im.v1 as im_v1
         except ImportError:
             logger.warning("lark_oapi submodules not available for capability probing")
             return
@@ -529,6 +561,7 @@ class FeishuAdapter(ChannelAdapter):
                 if self._running:
                     logger.error(f"Feishu WebSocket error: {e}", exc_info=True)
             finally:
+                _drain_loop_tasks(new_loop)
                 self._ws_loop = None
                 with contextlib.suppress(Exception):
                     new_loop.close()
@@ -1468,13 +1501,21 @@ class FeishuAdapter(ChannelAdapter):
             self._ws_watchdog_task.cancel()
             self._ws_watchdog_task = None
 
-        # 1) 停止 WS 线程的事件循环 → SDK 的 ws_client.start() 会退出阻塞
+        # 1) 在 WS 线程的 loop 上调度 task 取消，然后 stop loop。
+        #    先取消 tasks 再 stop 可以让 _run_ws_in_thread 的 finally 块
+        #    里的 _drain_loop_tasks 更快完成（大部分 tasks 已经是 cancelled 状态）。
         ws_loop = self._ws_loop
         if ws_loop is not None:
             try:
-                ws_loop.call_soon_threadsafe(ws_loop.stop)
+                def _cancel_and_stop() -> None:
+                    for task in asyncio.all_tasks(ws_loop):
+                        task.cancel()
+                    ws_loop.stop()
+                ws_loop.call_soon_threadsafe(_cancel_and_stop)
             except Exception:
-                pass
+                # loop 可能已关闭
+                with contextlib.suppress(Exception):
+                    ws_loop.call_soon_threadsafe(ws_loop.stop)
 
         # 2) 等待 WS 线程退出（给 5 秒超时）
         ws_thread = self._ws_thread
@@ -2245,7 +2286,7 @@ class FeishuAdapter(ChannelAdapter):
                     .build()
                 )
                 response = await asyncio.get_running_loop().run_in_executor(
-                    None, lambda: self._client.im.v1.image.create(request)
+                    None, lambda _r=request: self._client.im.v1.image.create(_r)
                 )
 
             if response.success():
@@ -2682,7 +2723,7 @@ class FeishuAdapter(ChannelAdapter):
                     .build()
                 )
                 response = await asyncio.get_running_loop().run_in_executor(
-                    None, lambda: self._client.im.v1.file.create(request)
+                    None, lambda _r=request: self._client.im.v1.file.create(_r)
                 )
 
             if response.success():
