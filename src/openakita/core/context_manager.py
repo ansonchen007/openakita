@@ -365,6 +365,14 @@ class ContextManager:
         target_summary_tokens = max(int(early_tokens * _settings.context_compression_ratio), 200)
         summary = await self._summarize_messages_chunked(early_messages, target_summary_tokens)
 
+        if summary and memory_manager is not None:
+            try:
+                hook = getattr(memory_manager, "on_summary_generated", None)
+                if hook:
+                    await hook(summary)
+            except Exception as e:
+                logger.warning(f"[Compress] Relational backfill from summary failed: {e}")
+
         compressed = self._inject_summary_into_recent(summary, recent_messages)
 
         compressed_tokens = self.estimate_messages_tokens(compressed)

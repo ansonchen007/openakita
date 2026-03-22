@@ -1038,6 +1038,14 @@ def _build_memory_section(
         if retrieved:
             parts.append(f"## 相关记忆（自动检索）\n\n{retrieved}")
 
+    # Layer 5: Relational graph retrieval (Mode 2 / auto)
+    if memory_keywords:
+        relational = _retrieve_relational(
+            memory_manager, " ".join(memory_keywords), max_tokens=500
+        )
+        if relational:
+            parts.append(f"## 关系型记忆（图检索）\n\n{relational}")
+
     return "\n\n".join(parts)
 
 
@@ -1066,6 +1074,51 @@ def _retrieve_by_keywords(
         return result if result else ""
     except Exception as e:
         logger.debug(f"[MemoryRetrieval] Active retrieval failed: {e}")
+        return ""
+
+
+def _retrieve_relational(
+    memory_manager: Optional["MemoryManager"],
+    query: str,
+    max_tokens: int = 500,
+) -> str:
+    """Retrieve from the relational graph (Mode 2) if enabled.
+
+    Since prompt building is synchronous, we use the relational store's
+    FTS search directly instead of the async graph engine.
+    """
+    if not memory_manager or not query:
+        return ""
+
+    try:
+        mode = memory_manager._get_memory_mode()
+        if mode == "mode1":
+            return ""
+
+        if not memory_manager._ensure_relational():
+            return ""
+
+        store = memory_manager.relational_store
+        if store is None:
+            return ""
+
+        nodes = store.search_fts(query, limit=5)
+        if not nodes:
+            nodes = store.search_like(query, limit=5)
+        if not nodes:
+            return ""
+
+        parts: list[str] = []
+        for i, n in enumerate(nodes, 1):
+            ents = ", ".join(e.name for e in n.entities[:3])
+            header = f"[{n.node_type.value.upper()}]"
+            if ents:
+                header += f" ({ents})"
+            time_str = n.occurred_at.strftime("%m/%d %H:%M") if n.occurred_at else ""
+            parts.append(f"{i}. {header} {time_str}\n   {n.content[:200]}")
+        return "\n".join(parts)
+    except Exception as e:
+        logger.debug(f"[MemoryRetrieval] Relational retrieval failed: {e}")
         return ""
 
 

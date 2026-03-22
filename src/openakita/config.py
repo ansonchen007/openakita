@@ -248,6 +248,24 @@ class Settings(BaseSettings):
         description="适应期内记忆整理间隔（小时，默认 3 小时）",
     )
 
+    # === 多维关系型记忆 (Mode 2) ===
+    memory_mode: str = Field(
+        default="mode1",
+        description="记忆模式: mode1(碎片化) / mode2(关系型图) / auto(自动选择)",
+    )
+    mdrm_max_hops: int = Field(
+        default=3,
+        description="图遍历最大跳数",
+    )
+    mdrm_consolidation_enabled: bool = Field(
+        default=True,
+        description="是否启用关系型记忆整合",
+    )
+    mdrm_backfill_on_first_enable: bool = Field(
+        default=True,
+        description="首次启用 mode2/auto 时回填模式 1 历史数据",
+    )
+
     # === 群聊响应策略 ===
     group_response_mode: str = Field(
         default="mention_only",

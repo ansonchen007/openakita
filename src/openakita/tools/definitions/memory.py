@@ -206,4 +206,32 @@ MEMORY_TOOLS = [
             },
         },
     },
+    {
+        "name": "search_relational_memory",
+        "category": "Memory",
+        "description": "Search the relational memory graph (Mode 2) with multi-dimensional traversal. Finds causally linked, temporally connected, and entity-related memories across sessions. Use when user asks about reasons, history, timelines, or cross-session patterns.",
+        "detail": """搜索关系型记忆图（模式 2），支持多维度遍历。
+
+**适用场景**：
+- 用户问"为什么"、"什么原因" → 因果链遍历
+- 用户问"之前做过什么" → 时间线遍历
+- 用户问"关于XX的所有记录" → 实体追踪
+- 需要跨会话关联信息
+
+**与 search_memory 的区别**：
+- search_memory: 碎片化搜索（关键词匹配）
+- search_relational_memory: 图遍历（沿因果/时间/实体维度多跳搜索）""",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "搜索查询"},
+                "max_results": {
+                    "type": "integer",
+                    "description": "最大返回条数（默认 10）",
+                    "default": 10,
+                },
+            },
+            "required": ["query"],
+        },
+    },
 ]

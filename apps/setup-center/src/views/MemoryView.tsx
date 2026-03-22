@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback, useRef } from "react";
+import React, { useEffect, useState, useCallback, useRef, lazy, Suspense } from "react";
 import { IconBrain } from "../icons";
 import { safeFetch } from "../providers";
 import { toast } from "sonner";
@@ -12,8 +12,12 @@ import {
   AlertDialogContent, AlertDialogDescription, AlertDialogFooter,
   AlertDialogHeader, AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { Loader2, RefreshCw, Trash2, Pencil, Check, X, Search, Brain, Ban } from "lucide-react";
+import { Loader2, RefreshCw, Trash2, Pencil, Check, X, Search, Brain, Ban, List, Network } from "lucide-react";
 import { Table, TableHeader, TableBody, TableHead, TableRow, TableCell } from "@/components/ui/table";
+
+const MemoryGraph3D = lazy(() =>
+  import("../components/MemoryGraph3D").then((m) => ({ default: m.MemoryGraph3D }))
+);
 
 type MemoryItem = {
   id: string;
@@ -114,6 +118,7 @@ export function MemoryView({ serviceRunning, apiBaseUrl = "" }: Props) {
   const [showReviewConfirm, setShowReviewConfirm] = useState(false);
   const [confirmDialog, setConfirmDialog] = useState<{ message: string; onConfirm: () => void } | null>(null);
   const [isMobile, setIsMobile] = useState(() => typeof window !== "undefined" && window.innerWidth <= 768);
+  const [viewMode, setViewMode] = useState<"list" | "graph">("list");
 
   useEffect(() => {
     const onResize = () => setIsMobile(window.innerWidth <= 768);
@@ -136,7 +141,7 @@ export function MemoryView({ serviceRunning, apiBaseUrl = "" }: Props) {
     } finally {
       setLoading(false);
     }
-  }, [serviceRunning, searchQuery, filterType]);
+  }, [serviceRunning, searchQuery, filterType, API_BASE]);
 
   const loadStats = useCallback(async () => {
     if (!serviceRunning) return;
@@ -144,7 +149,7 @@ export function MemoryView({ serviceRunning, apiBaseUrl = "" }: Props) {
       const res = await safeFetch(`${API_BASE}/api/memories/stats`);
       setStats(await res.json());
     } catch { /* ignore */ }
-  }, [serviceRunning]);
+  }, [serviceRunning, API_BASE]);
 
   useEffect(() => {
     loadMemories();
@@ -338,8 +343,13 @@ export function MemoryView({ serviceRunning, apiBaseUrl = "" }: Props) {
     );
   }
 
+  const isGraph = viewMode === "graph";
+
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: isMobile ? 10 : 16 }}>
+    <div style={{
+      display: "flex", flexDirection: "column", gap: isMobile ? 10 : 16,
+      ...(isGraph ? { height: "100%", overflow: "hidden" } : {}),
+    }}>
       {/* Stats bar */}
       {stats && (
         <div style={{
@@ -426,6 +436,30 @@ export function MemoryView({ serviceRunning, apiBaseUrl = "" }: Props) {
             {isMobile ? "LLM 审查" : "LLM 智能审查"}
           </Button>
         )}
+
+        {/* View mode toggle */}
+        <div className="flex border rounded-md overflow-hidden ml-auto" style={{ height: 32 }}>
+          <button
+            onClick={() => setViewMode("list")}
+            className="flex items-center gap-1 px-3 text-xs transition-colors"
+            style={{
+              background: viewMode === "list" ? "var(--accent)" : "transparent",
+              color: viewMode === "list" ? "var(--accent-foreground)" : "var(--muted-foreground)",
+            }}
+          >
+            <List size={13} /> 列表
+          </button>
+          <button
+            onClick={() => setViewMode("graph")}
+            className="flex items-center gap-1 px-3 text-xs transition-colors"
+            style={{
+              background: viewMode === "graph" ? "var(--accent)" : "transparent",
+              color: viewMode === "graph" ? "var(--accent-foreground)" : "var(--muted-foreground)",
+            }}
+          >
+            <Network size={13} /> 图谱
+          </button>
+        </div>
       </div>
 
       {/* Review progress bar */}
@@ -507,8 +541,22 @@ export function MemoryView({ serviceRunning, apiBaseUrl = "" }: Props) {
         </AlertDialogContent>
       </AlertDialog>
 
+      {/* Graph view */}
+      {viewMode === "graph" ? (
+        <div style={{ flex: 1, minHeight: 300, overflow: "hidden" }}>
+          <Suspense fallback={
+            <div className="flex items-center justify-center h-full">
+              <Loader2 size={24} className="animate-spin text-indigo-500" />
+              <span className="ml-2 text-sm text-muted-foreground">加载图谱组件...</span>
+            </div>
+          }>
+            <MemoryGraph3D apiBaseUrl={API_BASE} searchQuery={searchQuery} />
+          </Suspense>
+        </div>
+      ) : null}
+
       {/* Memory list */}
-      {isMobile ? (
+      {viewMode !== "list" ? null : isMobile ? (
         /* ── Mobile: card-based layout ── */
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           {loading ? (
