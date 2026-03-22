@@ -50,6 +50,8 @@ from ..tools.handlers.agent import create_handler as create_agent_tool_handler
 from ..tools.handlers.agent_hub import create_handler as create_agent_hub_handler
 from ..tools.handlers.agent_package import create_handler as create_agent_package_handler
 from ..tools.handlers.browser import create_handler as create_browser_handler
+from ..tools.handlers.cli_anything import create_handler as create_cli_anything_handler
+from ..tools.handlers.cli_anything import is_available as cli_anything_available
 from ..tools.handlers.code_quality import create_handler as create_code_quality_handler
 from ..tools.handlers.config import create_handler as create_config_handler
 from ..tools.handlers.desktop import create_handler as create_desktop_handler
@@ -59,6 +61,8 @@ from ..tools.handlers.mcp import create_handler as create_mcp_handler
 from ..tools.handlers.memory import create_handler as create_memory_handler
 from ..tools.handlers.mode import create_handler as create_mode_handler
 from ..tools.handlers.notebook import create_handler as create_notebook_handler
+from ..tools.handlers.opencli import create_handler as create_opencli_handler
+from ..tools.handlers.opencli import is_available as opencli_available
 from ..tools.handlers.persona import create_handler as create_persona_handler
 from ..tools.handlers.plan import create_todo_handler
 from ..tools.handlers.profile import create_handler as create_profile_handler
@@ -385,6 +389,12 @@ class Agent:
             from ..tools.definitions.org_setup import ORG_SETUP_TOOLS
             _all_tools.extend(AGENT_TOOLS)
             _all_tools.extend(ORG_SETUP_TOOLS)
+        if opencli_available():
+            from ..tools.definitions.opencli import OPENCLI_TOOLS as _OC
+            _all_tools.extend(_OC)
+        if cli_anything_available():
+            from ..tools.definitions.cli_anything import CLI_ANYTHING_TOOLS as _CA
+            _all_tools.extend(_CA)
         self.tool_catalog = ToolCatalog(_all_tools)
 
         # 定时任务调度器
@@ -452,6 +462,18 @@ class Agent:
             from ..tools.desktop import DESKTOP_TOOLS as _DT2
             self._tools.extend(_DT2)
             logger.info(f"Desktop automation tools enabled ({len(_DT2)} tools)")
+
+        # OpenCLI tools (only when opencli is installed)
+        if opencli_available():
+            from ..tools.definitions.opencli import OPENCLI_TOOLS
+            self._tools.extend(OPENCLI_TOOLS)
+            logger.info(f"OpenCLI tools enabled ({len(OPENCLI_TOOLS)} tools)")
+
+        # CLI-Anything tools (only when cli-anything-* are installed)
+        if cli_anything_available():
+            from ..tools.definitions.cli_anything import CLI_ANYTHING_TOOLS
+            self._tools.extend(CLI_ANYTHING_TOOLS)
+            logger.info(f"CLI-Anything tools enabled ({len(CLI_ANYTHING_TOOLS)} tools)")
 
         # Multi-agent tools (only when enabled)
         if settings.multi_agent_enabled:
@@ -1016,6 +1038,14 @@ class Agent:
                 "browser_screenshot",
                 "browser_close",
                 "view_image",
+                "browser_click",
+                "browser_type",
+                "browser_scroll",
+                "browser_wait",
+                "browser_execute_js",
+                "browser_list_tabs",
+                "browser_switch_tab",
+                "browser_new_tab",
             ],
         )
 
@@ -1202,6 +1232,24 @@ class Agent:
                     "desktop_inspect",
                 ],
             )
+
+        # OpenCLI（网站操作，仅在 opencli 已安装时注册）
+        if opencli_available():
+            self.handler_registry.register(
+                "opencli",
+                create_opencli_handler(self),
+                ["opencli_list", "opencli_run", "opencli_doctor"],
+            )
+            logger.info("OpenCLI handler registered (opencli detected on PATH)")
+
+        # CLI-Anything（桌面软件控制，仅在有 cli-anything-* 工具时注册）
+        if cli_anything_available():
+            self.handler_registry.register(
+                "cli_anything",
+                create_cli_anything_handler(self),
+                ["cli_anything_discover", "cli_anything_run", "cli_anything_help"],
+            )
+            logger.info("CLI-Anything handler registered (cli-anything-* tools detected)")
 
         # Multi-agent tools (only when multi_agent_enabled)
         if settings.multi_agent_enabled:

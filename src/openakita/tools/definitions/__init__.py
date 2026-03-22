@@ -47,6 +47,7 @@ from .base import (
     validate_tool_name,
 )
 from .browser import BROWSER_TOOLS
+from .cli_anything import CLI_ANYTHING_TOOLS
 from .code_quality import CODE_QUALITY_TOOLS
 
 # 工具定义
@@ -57,6 +58,7 @@ from .mcp import MCP_TOOLS
 from .memory import MEMORY_TOOLS
 from .mode import MODE_TOOLS
 from .notebook import NOTEBOOK_TOOLS
+from .opencli import OPENCLI_TOOLS
 from .org_setup import ORG_SETUP_TOOLS
 from .persona import PERSONA_TOOLS
 from .plan import PLAN_TOOLS
@@ -139,4 +141,6 @@ __all__ = [
     "PERSONA_TOOLS",
     "STICKER_TOOLS",
     "CONFIG_TOOLS",
+    "OPENCLI_TOOLS",
+    "CLI_ANYTHING_TOOLS",
 ]

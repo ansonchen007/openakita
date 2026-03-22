@@ -196,6 +196,55 @@ class SkillLoader:
         for skill_dir in directories:
             loaded += self.load_from_directory(skill_dir)
 
+        loaded += self._load_cli_anything_skills()
+
+        return loaded
+
+    def _load_cli_anything_skills(self) -> int:
+        """Discover and load SKILL.md files from pip-installed cli-anything-* packages.
+
+        CLI-Anything generates SKILL.md alongside each CLI harness. When installed
+        via pip, these live under the package's site-packages directory (e.g.
+        ``cli_anything/gimp/SKILL.md``). This method scans for them so that
+        ``pip install cli-anything-gimp`` makes the skill auto-discoverable.
+        """
+        loaded = 0
+        try:
+            import importlib.metadata as importlib_metadata
+        except ImportError:
+            return 0
+
+        try:
+            distributions = list(importlib_metadata.distributions())
+        except Exception:
+            return 0
+
+        for dist in distributions:
+            name = (dist.metadata.get("Name") or "").lower()
+            if not name.startswith("cli-anything-"):
+                continue
+
+            dist_files = dist.files
+            if not dist_files:
+                continue
+
+            for rel_path in dist_files:
+                if rel_path.name.upper() == "SKILL.MD":
+                    try:
+                        full_path = rel_path.locate()
+                        if isinstance(full_path, Path) and full_path.exists():
+                            skill_dir = full_path.parent
+                            skill = self.load_skill(skill_dir)
+                            if skill:
+                                loaded += 1
+                                logger.info(
+                                    f"Loaded cli-anything skill from pip package: {name} ({skill_dir})"
+                                )
+                    except Exception as e:
+                        logger.debug(f"Failed to load cli-anything skill from {name}: {e}")
+
+        if loaded:
+            logger.info(f"Loaded {loaded} cli-anything skills from pip packages")
         return loaded
 
     def load_from_directory(self, directory: Path) -> int:

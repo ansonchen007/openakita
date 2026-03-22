@@ -15,7 +15,8 @@ CONFIG_TOOLS = [
             "(2) add/remove/test LLM endpoints, "
             "(3) switch UI theme or language, "
             "(4) discover what settings are available, "
-            "(5) manage LLM providers (add/update/remove custom providers). "
+            "(5) manage LLM providers (add/update/remove custom providers), "
+            "(6) check external extension modules (opencli, cli-anything) status and install/upgrade commands. "
             "IMPORTANT: Before calling action=set, action=add_endpoint, or action=manage_provider with add/update/remove, "
             "ALWAYS use ask_user first to confirm the changes with the user. "
             "If unsure which config key to use, call action=discover first."
@@ -67,6 +68,12 @@ API Key 存入 .env，JSON 中只引用环境变量名。
 - default_base_url: 必须以 http:// 或 https:// 开头
 - registry_class: 不填则根据 api_type 自动选择 OpenAIRegistry 或 AnthropicRegistry
 
+### extensions -- 外部扩展模块管理
+查看可选外部 CLI 工具的安装状态、安装/升级命令和致谢信息。
+这些模块无需内嵌打包，由高级用户自行安装，安装后 OpenAkita 自动检测并启用。
+- operation=status: 查看所有外部模块的安装状态和命令
+- operation=credits: 查看致谢信息
+
 ## 使用流程
 1. 不确定 key 名 → 先 discover
 2. 查看当前值 → get
@@ -87,6 +94,7 @@ API Key 存入 .env，JSON 中只引用环境变量名。
                         "test_endpoint",
                         "set_ui",
                         "manage_provider",
+                        "extensions",
                     ],
                     "description": "操作类型",
                 },
@@ -177,8 +185,11 @@ API Key 存入 .env，JSON 中只引用环境变量名。
                 },
                 "operation": {
                     "type": "string",
-                    "enum": ["list", "add", "update", "remove"],
-                    "description": "服务商操作类型（manage_provider 时必填）",
+                    "enum": ["list", "add", "update", "remove", "status", "credits"],
+                    "description": (
+                        "操作子类型。manage_provider 时: list/add/update/remove；"
+                        "extensions 时: status/credits"
+                    ),
                 },
                 "provider": {
                     "type": "object",
@@ -213,6 +224,8 @@ API Key 存入 .env，JSON 中只引用环境变量名。
             "User wants to add, remove, or test LLM endpoints",
             "User wants to switch theme or language",
             "User wants to add, modify, or remove LLM providers/服务商",
+            "User asks about external modules/extensions status, install, or upgrade",
+            "User asks about opencli or cli-anything",
         ],
         "examples": [
             {
@@ -260,6 +273,14 @@ API Key 存入 .env，JSON 中只引用环境变量名。
                         "api_key_env_suggestion": "MY_PROXY_API_KEY",
                     },
                 },
+            },
+            {
+                "scenario": "查看外部扩展模块状态",
+                "params": {"action": "extensions", "operation": "status"},
+            },
+            {
+                "scenario": "查看外部模块致谢",
+                "params": {"action": "extensions", "operation": "credits"},
             },
         ],
     },

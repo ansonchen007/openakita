@@ -172,6 +172,21 @@ def _update_env_content(existing: str, entries: dict[str, str]) -> str:
     return "\n".join(new_lines) + "\n"
 
 
+def _check_cli_anything_path() -> str | None:
+    """Return path of first cli-anything-* executable found, or None."""
+    path_dirs = os.environ.get("PATH", "").split(os.pathsep)
+    for d in path_dirs:
+        try:
+            if not os.path.isdir(d):
+                continue
+            for entry in os.listdir(d):
+                if entry.lower().startswith("cli-anything-"):
+                    return os.path.join(d, entry)
+        except OSError:
+            continue
+    return None
+
+
 class ConfigHandler:
     """系统配置处理器"""
 
@@ -199,8 +214,14 @@ class ConfigHandler:
                 return self._set_ui(params)
             elif action == "manage_provider":
                 return self._manage_provider(params)
+            elif action == "extensions":
+                return self._extensions(params)
             else:
-                return f"未知的 action: {action}。支持: discover, get, set, add_endpoint, remove_endpoint, test_endpoint, set_ui, manage_provider"
+                return (
+                    f"未知的 action: {action}。支持: discover, get, set, "
+                    "add_endpoint, remove_endpoint, test_endpoint, set_ui, "
+                    "manage_provider, extensions"
+                )
         except Exception as e:
             logger.error(f"[ConfigHandler] action={action} failed: {e}", exc_info=True)
             return f"配置操作失败: {type(e).__name__}: {e}"
@@ -964,6 +985,97 @@ class ConfigHandler:
         except Exception as e:
             logger.warning(f"[ConfigHandler] Failed to load provider registry: {e}")
         return None
+
+    # ------------------------------------------------------------------
+    # extensions: 外部扩展模块管理
+    # ------------------------------------------------------------------
+
+    _EXTENSIONS = [
+        {
+            "id": "opencli",
+            "name": "OpenCLI",
+            "description": "将网站和 Electron 应用转化为 CLI 命令，复用 Chrome 登录态",
+            "category": "Web",
+            "check": lambda: __import__("shutil").which("opencli"),
+            "install": "npm install -g opencli",
+            "upgrade": "npm update -g opencli",
+            "setup": "opencli setup",
+            "homepage": "https://github.com/anthropics/opencli",
+            "license": "MIT",
+            "thanks": "Anthropic / Jack Wener",
+        },
+        {
+            "id": "cli-anything",
+            "name": "CLI-Anything",
+            "description": "为桌面软件（GIMP、Blender、LibreOffice 等）自动生成 CLI 接口",
+            "category": "Desktop",
+            "check": lambda: _check_cli_anything_path(),
+            "install": "pip install cli-anything-gimp  # 按需替换为目标软件",
+            "upgrade": "pip install --upgrade cli-anything-<app>",
+            "setup": None,
+            "homepage": "https://github.com/HKUDS/CLI-Anything",
+            "license": "MIT",
+            "thanks": "HKU Data Science Lab (HKUDS)",
+        },
+    ]
+
+    def _extensions(self, params: dict) -> str:
+        operation = (params.get("operation") or "status").strip()
+
+        if operation == "status":
+            return self._ext_status()
+        elif operation == "credits":
+            return self._ext_credits()
+        else:
+            return (
+                "❌ extensions 支持的 operation:\n"
+                "- `status`: 查看所有外部扩展模块状态、安装/升级命令\n"
+                "- `credits`: 查看致谢信息"
+            )
+
+    def _ext_status(self) -> str:
+        lines = ["## 外部扩展模块\n"]
+        lines.append(
+            "以下模块为可选外部工具，安装后 OpenAkita 自动检测并启用。\n"
+            "无需重启，下次对话即生效。\n"
+        )
+
+        for ext in self._EXTENSIONS:
+            path = ext["check"]()
+            installed = path is not None
+            icon = "✅" if installed else "⬜"
+            lines.append(f"### {icon} {ext['name']} ({ext['category']})")
+            lines.append(f"{ext['description']}")
+            lines.append(f"- 状态: {'**已安装**' if installed else '未安装'}"
+                         + (f" (`{path}`)" if installed else ""))
+            lines.append(f"- 安装: `{ext['install']}`")
+            lines.append(f"- 升级: `{ext['upgrade']}`")
+            if ext.get("setup"):
+                lines.append(f"- 首次配置: `{ext['setup']}`")
+            lines.append(f"- 主页: {ext['homepage']}")
+            lines.append("")
+
+        lines.append("---")
+        lines.append("*安装后无需修改 OpenAkita 配置，系统启动时自动检测 PATH。*")
+        return "\n".join(lines)
+
+    def _ext_credits(self) -> str:
+        lines = ["## 致谢 — 外部扩展模块\n"]
+        lines.append("OpenAkita 的工具调用和浏览器访问能力得益于以下开源项目：\n")
+
+        for ext in self._EXTENSIONS:
+            lines.append(f"### {ext['name']}")
+            lines.append(f"- {ext['description']}")
+            lines.append(f"- 作者: **{ext['thanks']}**")
+            lines.append(f"- 许可: {ext['license']}")
+            lines.append(f"- 项目: {ext['homepage']}")
+            lines.append("")
+
+        lines.append(
+            "感谢这些项目的贡献者们，让 AI Agent 能够更可靠地与真实世界的"
+            "网站和桌面软件交互。"
+        )
+        return "\n".join(lines)
 
     def _reload_llm_client(self) -> str:
         """热重载 LLM client，返回结果描述"""

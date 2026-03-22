@@ -944,3 +944,60 @@ async def reset_death_switch():
         return {"status": "ok", "readonly_mode": False}
     except Exception as e:
         return {"status": "error", "message": str(e)}
+
+
+@router.get("/api/config/extensions")
+async def list_extensions():
+    """Return status of optional external CLI tool extensions."""
+    import os
+    import shutil
+
+    def _find_cli_anything() -> str | None:
+        for d in os.environ.get("PATH", "").split(os.pathsep):
+            try:
+                if not os.path.isdir(d):
+                    continue
+                for entry in os.listdir(d):
+                    if entry.lower().startswith("cli-anything-"):
+                        return os.path.join(d, entry)
+            except OSError:
+                continue
+        return None
+
+    oc_path = shutil.which("opencli")
+    ca_path = _find_cli_anything()
+
+    return {
+        "extensions": [
+            {
+                "id": "opencli",
+                "name": "OpenCLI",
+                "description": "Operate websites via CLI, reusing Chrome login sessions",
+                "description_zh": "将网站转化为 CLI 命令，复用 Chrome 登录态",
+                "category": "Web",
+                "installed": oc_path is not None,
+                "path": oc_path,
+                "install_cmd": "npm install -g opencli",
+                "upgrade_cmd": "npm update -g opencli",
+                "setup_cmd": "opencli setup",
+                "homepage": "https://github.com/anthropics/opencli",
+                "license": "MIT",
+                "author": "Anthropic / Jack Wener",
+            },
+            {
+                "id": "cli-anything",
+                "name": "CLI-Anything",
+                "description": "Control desktop software via auto-generated CLI interfaces",
+                "description_zh": "为桌面软件自动生成 CLI 接口（GIMP、Blender 等）",
+                "category": "Desktop",
+                "installed": ca_path is not None,
+                "path": ca_path,
+                "install_cmd": "pip install cli-anything-gimp",
+                "upgrade_cmd": "pip install --upgrade cli-anything-<app>",
+                "setup_cmd": None,
+                "homepage": "https://github.com/HKUDS/CLI-Anything",
+                "license": "MIT",
+                "author": "HKU Data Science Lab (HKUDS)",
+            },
+        ],
+    }

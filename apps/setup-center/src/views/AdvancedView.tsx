@@ -753,7 +753,10 @@ export function AdvancedView(props: AdvancedViewProps) {
         )}
       </div>
 
-      {/* ── Card 5: 系统信息与运维 ── */}
+      {/* ── Card 5: 外部扩展模块 ── */}
+      <ExtensionsCard shouldUseHttpApi={shouldUseHttpApi} httpApiBase={httpApiBase} />
+
+      {/* ── Card 6: 系统信息与运维 ── */}
       <div className="card" style={{ marginTop: 12 }}>
         <h3 style={{ fontWeight: 700, fontSize: 15, marginBottom: 10 }}>{t("adv.sysOpsTitle")}</h3>
 
@@ -869,5 +872,165 @@ export function AdvancedView(props: AdvancedViewProps) {
         </AlertDialog>
       </div>
     </>
+  );
+}
+
+
+// ── ExtensionsCard ──────────────────────────────────────────────────
+
+interface ExtInfo {
+  id: string;
+  name: string;
+  description: string;
+  description_zh: string;
+  category: string;
+  installed: boolean;
+  path: string | null;
+  install_cmd: string;
+  upgrade_cmd: string;
+  setup_cmd: string | null;
+  homepage: string;
+  license: string;
+  author: string;
+}
+
+function ExtensionsCard({
+  shouldUseHttpApi,
+  httpApiBase,
+}: {
+  shouldUseHttpApi: () => boolean;
+  httpApiBase: () => string;
+}) {
+  const { t, i18n } = useTranslation();
+  const [exts, setExts] = useState<ExtInfo[] | null>(null);
+  const [error, setError] = useState(false);
+  const loadedRef = useRef(false);
+
+  useEffect(() => {
+    if (loadedRef.current) return;
+    loadedRef.current = true;
+    if (!shouldUseHttpApi()) return;
+    safeFetch(`${httpApiBase()}/api/config/extensions`, { signal: AbortSignal.timeout(5_000) })
+      .then((r) => r.json())
+      .then((data) => setExts(data.extensions ?? []))
+      .catch(() => setError(true));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const isZh = i18n.language?.startsWith("zh");
+
+  function copyCmd(cmd: string) {
+    navigator.clipboard.writeText(cmd).then(() => {
+      notifySuccess(t("adv.extCopied"));
+    }).catch(() => {});
+  }
+
+  return (
+    <div className="card" style={{ marginTop: 12 }}>
+      <h3 style={{ fontWeight: 700, fontSize: 15, marginBottom: 4 }}>{t("adv.extTitle")}</h3>
+      <p className="text-xs text-muted-foreground" style={{ marginBottom: 12 }}>{t("adv.extHint")}</p>
+
+      {exts === null && !error && (
+        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+          <span className="spinner size-3.5" />
+          {t("adv.extLoading")}
+        </div>
+      )}
+
+      {error && (
+        <p className="text-xs text-muted-foreground">{t("adv.extLoadFailed")}</p>
+      )}
+
+      {exts && exts.map((ext) => (
+        <div
+          key={ext.id}
+          style={{
+            border: "1px solid var(--line)",
+            borderRadius: 8,
+            padding: "12px 14px",
+            marginBottom: 10,
+          }}
+        >
+          <div className="flex items-center justify-between" style={{ marginBottom: 6 }}>
+            <div className="flex items-center gap-2">
+              <span style={{ fontSize: 14, fontWeight: 600 }}>{ext.name}</span>
+              <span style={{
+                fontSize: 10, padding: "1px 6px", borderRadius: 4, fontWeight: 600,
+                background: ext.category === "Web" ? "var(--accent, #5B8DEF)" : "#8b5cf6",
+                color: "#fff",
+              }}>
+                {ext.category}
+              </span>
+            </div>
+            <span style={{
+              fontSize: 11, fontWeight: 600, padding: "2px 8px", borderRadius: 10,
+              background: ext.installed ? "var(--ok, #22c55e)" : "var(--line)",
+              color: ext.installed ? "#fff" : "var(--muted)",
+            }}>
+              {ext.installed ? `✓ ${t("adv.extInstalled")}` : t("adv.extNotInstalled")}
+            </span>
+          </div>
+
+          <p className="text-xs text-muted-foreground" style={{ marginBottom: 8 }}>
+            {isZh ? ext.description_zh : ext.description}
+          </p>
+
+          {ext.installed && ext.path && (
+            <p className="text-xs font-mono text-muted-foreground" style={{ marginBottom: 6, wordBreak: "break-all" }}>
+              {ext.path}
+            </p>
+          )}
+
+          <div style={{ display: "grid", gridTemplateColumns: "auto 1fr auto", gap: "4px 8px", alignItems: "center", fontSize: 12 }}>
+            <span className="text-muted-foreground">{t("adv.extInstall")}:</span>
+            <code className="text-xs font-mono" style={{ background: "var(--muted-bg, #f4f4f5)", padding: "1px 6px", borderRadius: 4 }}>
+              {ext.install_cmd}
+            </code>
+            <Button variant="ghost" size="xs" onClick={() => copyCmd(ext.install_cmd)} style={{ padding: "2px 6px", fontSize: 11 }}>
+              📋
+            </Button>
+
+            <span className="text-muted-foreground">{t("adv.extUpgrade")}:</span>
+            <code className="text-xs font-mono" style={{ background: "var(--muted-bg, #f4f4f5)", padding: "1px 6px", borderRadius: 4 }}>
+              {ext.upgrade_cmd}
+            </code>
+            <Button variant="ghost" size="xs" onClick={() => copyCmd(ext.upgrade_cmd)} style={{ padding: "2px 6px", fontSize: 11 }}>
+              📋
+            </Button>
+
+            {ext.setup_cmd && (
+              <>
+                <span className="text-muted-foreground">{t("adv.extSetup")}:</span>
+                <code className="text-xs font-mono" style={{ background: "var(--muted-bg, #f4f4f5)", padding: "1px 6px", borderRadius: 4 }}>
+                  {ext.setup_cmd}
+                </code>
+                <Button variant="ghost" size="xs" onClick={() => copyCmd(ext.setup_cmd!)} style={{ padding: "2px 6px", fontSize: 11 }}>
+                  📋
+                </Button>
+              </>
+            )}
+          </div>
+
+          <div className="flex items-center gap-3 text-xs text-muted-foreground" style={{ marginTop: 8 }}>
+            <a href={ext.homepage} style={{ color: "var(--accent, #5B8DEF)", textDecoration: "none" }}>
+              {t("adv.extHomepage")} ↗
+            </a>
+            <span>{t("adv.extAuthor")}: {ext.author}</span>
+            <span>{t("adv.extLicense")}: {ext.license}</span>
+          </div>
+        </div>
+      ))}
+
+      {exts && exts.length > 0 && (
+        <div style={{ marginTop: 8, padding: "8px 0", borderTop: "1px solid var(--line)" }}>
+          <p className="text-xs text-muted-foreground" style={{ marginBottom: 4 }}>
+            💡 {t("adv.extChatHint")}
+          </p>
+          <p className="text-xs text-muted-foreground" style={{ fontStyle: "italic" }}>
+            {t("adv.extCreditsHint")}
+          </p>
+        </div>
+      )}
+    </div>
   );
 }

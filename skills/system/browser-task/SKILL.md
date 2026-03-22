@@ -59,17 +59,21 @@ browser_task(task="打开 GitHub 首页，获取今日热门项目的名称")
 browser_task(task="打开百度搜索福建福州，截图保存")
 ```
 
-## 浏览器工具选用指引
+## 浏览器 & 网站操作工具选用指引
 
-系统提供三条浏览器链路，按场景选择：
+系统提供多条路径操作网站和浏览器，按场景选择最可靠的方案：
 
-| 场景 | 工具 | 说明 |
-|------|------|------|
-| Agent 自主执行多步任务 | `browser_task`（首选） | 搜索、填表、抓取等，自动规划步骤 |
-| 仅需单步操作 | `browser_navigate` / `browser_screenshot` 等 | task 失败时手动介入，或只做截图/导航 |
-| 操作用户已登录的 Chrome | `call_mcp_tool("chrome-devtools", ...)` | 保留登录态和 Cookie，需用户 Chrome 开启调试端口 |
+| 场景 | 推荐工具 | 说明 |
+|------|---------|------|
+| 目标网站有 opencli adapter | `opencli_run`（最可靠） | 确定性命令 + JSON 输出，复用 Chrome 登录态 |
+| 需要登录但无 adapter | `browser_task` → 手动组合 | 先尝试 browser_task，失败则用 click/type 手动操作 |
+| 仅需读取网页内容 | `web_fetch` | 最快最省资源，无需浏览器 |
+| 仅需搜索 | `web_search` | DuckDuckGo 直接搜索 |
+| 复杂多步浏览器交互 | `browser_task` | 适合登录、填表、筛选等 |
+| 单步浏览器操作 | `browser_navigate`/`browser_click` 等 | 精确控制单个操作 |
+| 操作用户已登录的 Chrome | `call_mcp_tool("chrome-devtools", ...)` | 需用户 Chrome 开启调试端口 |
 
-决策顺序：优先 `browser_task` → 单步退化到细粒度工具 → 需要登录态时用 chrome-devtools MCP。
+决策顺序：`opencli_run`（有 adapter 时）→ `web_fetch`/`web_search`（只读时）→ `browser_task` → 手动 browser_click/type 组合 → chrome-devtools MCP。
 
 ## 何时使用细粒度工具
 
