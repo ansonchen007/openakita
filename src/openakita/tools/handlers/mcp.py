@@ -239,6 +239,7 @@ class MCPHandler:
             description=params.get("description", name),
             instructions=params.get("instructions", ""),
             auto_connect=params.get("auto_connect", False),
+            headers=params.get("headers") or None,
             config_base_dir=settings.mcp_config_path,
             search_bases=[settings.project_root, Path.cwd()],
             client=self.agent.mcp_client,

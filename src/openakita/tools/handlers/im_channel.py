@@ -68,6 +68,35 @@ class IMChannelHandler:
         except ValueError:
             return False
 
+    @staticmethod
+    def _normalize_artifacts(raw: Any) -> list[dict]:
+        """Normalize ``artifacts`` param: handle str (JSON), list of dicts, etc.
+
+        Some LLM models pass artifacts as a JSON string instead of a list.
+        This helper ensures we always get ``list[dict]``.
+        """
+        if isinstance(raw, str):
+            raw = raw.strip()
+            if raw:
+                try:
+                    parsed = json.loads(raw)
+                    if isinstance(parsed, list):
+                        return [item for item in parsed if isinstance(item, dict)]
+                    if isinstance(parsed, dict):
+                        return [parsed]
+                except (json.JSONDecodeError, TypeError):
+                    pass
+            logger.warning(
+                "[deliver_artifacts] artifacts is a string but not valid JSON, ignoring: %s",
+                raw[:200],
+            )
+            return []
+        if isinstance(raw, list):
+            return [item for item in raw if isinstance(item, dict)]
+        if isinstance(raw, dict):
+            return [raw]
+        return []
+
     async def handle(self, tool_name: str, params: dict[str, Any]) -> str:
         """处理工具调用"""
         from ...core.im_context import get_im_session
@@ -327,7 +356,7 @@ class IMChannelHandler:
                 ensure_ascii=False,
             )
 
-        artifacts = params.get("artifacts") or []
+        artifacts = self._normalize_artifacts(params.get("artifacts"))
         receipts = []
 
         for idx, art in enumerate(artifacts):
@@ -429,7 +458,7 @@ class IMChannelHandler:
         import shutil
         import urllib.parse
 
-        artifacts = params.get("artifacts") or []
+        artifacts = self._normalize_artifacts(params.get("artifacts"))
         receipts = []
 
         workspace_root = self._get_workspace_root()
@@ -540,7 +569,7 @@ class IMChannelHandler:
                 ensure_ascii=False,
             )
 
-        artifacts = params.get("artifacts") or []
+        artifacts = self._normalize_artifacts(params.get("artifacts"))
         receipts = []
 
         # 会话内去重（仅运行时有效，不落盘）

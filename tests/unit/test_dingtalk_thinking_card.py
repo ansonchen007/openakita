@@ -9,9 +9,11 @@ Validates all paths identified in the plan:
 - Fast response: no card created
 - Media message: card updated to "处理完成", media sent normally
 - AI Card: upgrade path with fallback to StandardCard
+- Stream thinking / chain text / compose display / footer
 """
 
 import json
+import time
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -397,14 +399,14 @@ class TestTypingLifecycle:
 
 
 class TestPatchCardContent:
-    """Test _patch_card_content for thinking-to-card progress patching."""
+    """Test _patch_card_content for thinking-to-card progress patching (3-arg signature)."""
 
     @pytest.mark.asyncio
     async def test_standard_card_patch(self, adapter):
         card_state = _CardState(card_id="biz_patch_01", is_ai_card=False)
         adapter._http_client.put = AsyncMock(return_value=_mock_card_response())
 
-        result = await adapter._patch_card_content(card_state, "💭 思考中...")
+        result = await adapter._patch_card_content(card_state, "💭 思考中...", "sk_01")
         assert result is True
         adapter._http_client.put.assert_called_once()
         body = adapter._http_client.put.call_args.kwargs["json"]
@@ -413,27 +415,35 @@ class TestPatchCardContent:
         assert "💭 思考中..." in card_data["contents"][0]["text"]
 
     @pytest.mark.asyncio
-    async def test_ai_card_patch(self, adapter):
+    async def test_ai_card_patch_with_sk(self, adapter):
         card_state = _CardState(card_id="ai_patch_01", is_ai_card=True)
         adapter._http_client.put = AsyncMock(return_value=_mock_ai_card_stream_response())
 
-        result = await adapter._patch_card_content(card_state, "💭 深度推理中...")
+        result = await adapter._patch_card_content(card_state, "💭 深度推理中...", "sk_02")
         assert result is True
         adapter._http_client.put.assert_called_once()
         body = adapter._http_client.put.call_args.kwargs["json"]
         assert body["outTrackId"] == "ai_patch_01"
 
     @pytest.mark.asyncio
+    async def test_patch_with_final_kwarg(self, adapter):
+        card_state = _CardState(card_id="biz_final", is_ai_card=False)
+        adapter._http_client.put = AsyncMock(return_value=_mock_card_response())
+
+        result = await adapter._patch_card_content(card_state, "done", "sk", final=True)
+        assert result is True
+
+    @pytest.mark.asyncio
     async def test_patch_failure_returns_false(self, adapter):
         card_state = _CardState(card_id="biz_fail", is_ai_card=False)
         adapter._http_client.put = AsyncMock(side_effect=Exception("network"))
 
-        result = await adapter._patch_card_content(card_state, "text")
+        result = await adapter._patch_card_content(card_state, "text", "sk")
         assert result is False
 
     @pytest.mark.asyncio
     async def test_none_card_state_returns_false(self, adapter):
-        result = await adapter._patch_card_content(None, "text")
+        result = await adapter._patch_card_content(None, "text", "sk")
         assert result is False
 
     @pytest.mark.asyncio
@@ -507,3 +517,253 @@ class TestTextChunking:
     def test_empty_text(self):
         chunks = DingTalkAdapter._chunk_markdown_text("")
         assert chunks == [""]
+
+
+class TestStreamThinking:
+    """Test stream_thinking method."""
+
+    @pytest.mark.asyncio
+    async def test_thinking_updates_card(self, adapter):
+        sk = _sk("conv_group")
+        adapter._thinking_cards[sk] = _CardState(card_id="biz_think", is_ai_card=False)
+        adapter._typing_start_time[sk] = time.time() - 2.0
+        adapter._http_client.put = AsyncMock(return_value=_mock_card_response())
+
+        await adapter.stream_thinking("conv_group", "Let me analyze this...")
+
+        assert adapter._streaming_thinking[sk] == "Let me analyze this..."
+        assert adapter._typing_status[sk] == "深度思考"
+        adapter._http_client.put.assert_called_once()
+        body = adapter._http_client.put.call_args.kwargs["json"]
+        card_data = json.loads(body["cardData"])
+        assert "思考过程" in card_data["contents"][0]["text"]
+
+    @pytest.mark.asyncio
+    async def test_thinking_replaces_not_appends(self, adapter):
+        sk = _sk("conv_group")
+        adapter._thinking_cards[sk] = _CardState(card_id="biz_think", is_ai_card=False)
+        adapter._http_client.put = AsyncMock(return_value=_mock_card_response())
+
+        await adapter.stream_thinking("conv_group", "first thought")
+        await adapter.stream_thinking("conv_group", "second thought")
+
+        assert adapter._streaming_thinking[sk] == "second thought"
+
+    @pytest.mark.asyncio
+    async def test_thinking_throttle(self, adapter):
+        sk = _sk("conv_group")
+        adapter._thinking_cards[sk] = _CardState(card_id="biz_think", is_ai_card=False)
+        adapter._streaming_last_patch[sk] = time.time() * 1000
+        adapter._http_client.put = AsyncMock(return_value=_mock_card_response())
+
+        await adapter.stream_thinking("conv_group", "throttled")
+
+        assert adapter._streaming_thinking[sk] == "throttled"
+        adapter._http_client.put.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_thinking_no_card_noop(self, adapter):
+        adapter._http_client.put = AsyncMock()
+        await adapter.stream_thinking("conv_group", "no card")
+        adapter._http_client.put.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_thinking_with_duration_ms(self, adapter):
+        sk = _sk("conv_group")
+        adapter._thinking_cards[sk] = _CardState(card_id="biz_dur", is_ai_card=False)
+        adapter._http_client.put = AsyncMock(return_value=_mock_card_response())
+
+        await adapter.stream_thinking("conv_group", "deep thought", duration_ms=3200)
+
+        assert adapter._streaming_thinking_ms[sk] == 3200
+
+
+class TestStreamChainText:
+    """Test stream_chain_text method."""
+
+    @pytest.mark.asyncio
+    async def test_chain_text_appends(self, adapter):
+        sk = _sk("conv_group")
+        adapter._thinking_cards[sk] = _CardState(card_id="biz_chain", is_ai_card=False)
+        adapter._http_client.put = AsyncMock(return_value=_mock_card_response())
+
+        await adapter.stream_chain_text("conv_group", "搜索: 天气查询")
+        await adapter.stream_chain_text("conv_group", "分析: 数据解读")
+
+        assert len(adapter._streaming_chain[sk]) == 2
+        assert adapter._typing_status[sk] == "调用工具"
+
+    @pytest.mark.asyncio
+    async def test_chain_text_throttle(self, adapter):
+        sk = _sk("conv_group")
+        adapter._thinking_cards[sk] = _CardState(card_id="biz_chain", is_ai_card=False)
+        adapter._streaming_last_patch[sk] = time.time() * 1000
+        adapter._http_client.put = AsyncMock(return_value=_mock_card_response())
+
+        await adapter.stream_chain_text("conv_group", "throttled chain")
+
+        assert "throttled chain" in adapter._streaming_chain[sk]
+        adapter._http_client.put.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_chain_no_card_noop(self, adapter):
+        adapter._http_client.put = AsyncMock()
+        await adapter.stream_chain_text("conv_group", "no card")
+        adapter._http_client.put.assert_not_called()
+
+
+class TestComposeThinkingDisplay:
+    """Test _compose_thinking_display method."""
+
+    def test_empty_state_shows_default(self, adapter):
+        display = adapter._compose_thinking_display("unknown_sk:")
+        assert "思考中" in display
+
+    def test_thinking_only(self, adapter):
+        sk = "conv_group:"
+        adapter._streaming_thinking[sk] = "分析用户需求"
+        adapter._streaming_thinking_ms[sk] = 3200
+
+        display = adapter._compose_thinking_display(sk)
+        assert "思考过程" in display
+        assert "(3.2s)" in display
+        assert "分析用户需求" in display
+
+    def test_thinking_truncated(self, adapter):
+        sk = "conv_group:"
+        adapter._streaming_thinking[sk] = "x" * 800
+
+        display = adapter._compose_thinking_display(sk)
+        assert "..." in display
+        assert len(display) < 800
+
+    def test_chain_only(self, adapter):
+        sk = "conv_group:"
+        adapter._streaming_chain[sk] = ["搜索: 天气", "分析: 数据"]
+
+        display = adapter._compose_thinking_display(sk)
+        assert "搜索: 天气" in display
+        assert "分析: 数据" in display
+
+    def test_reply_only(self, adapter):
+        sk = "conv_group:"
+        adapter._streaming_buffers[sk] = "回复内容"
+
+        display = adapter._compose_thinking_display(sk)
+        assert "回复内容 ▍" in display
+
+    def test_composite_display(self, adapter):
+        sk = "conv_group:"
+        adapter._streaming_thinking[sk] = "深度分析"
+        adapter._streaming_chain[sk] = ["搜索: 查询"]
+        adapter._streaming_buffers[sk] = "结果"
+
+        display = adapter._compose_thinking_display(sk)
+        assert "思考过程" in display
+        assert "搜索: 查询" in display
+        assert "---" in display
+        assert "结果 ▍" in display
+
+    def test_chain_shows_last_8(self, adapter):
+        sk = "conv_group:"
+        adapter._streaming_chain[sk] = [f"step_{i}" for i in range(15)]
+
+        display = adapter._compose_thinking_display(sk)
+        assert "step_7" in display
+        assert "step_14" in display
+        assert "step_0" not in display
+
+
+class TestBuildFooterNote:
+    """Test _build_footer_note method."""
+
+    def test_in_progress_footer(self, adapter):
+        sk = "conv_group:"
+        adapter._typing_start_time[sk] = time.time() - 5.0
+        adapter._typing_status[sk] = "深度思考"
+
+        footer = adapter._build_footer_note(sk)
+        assert "⏱" in footer
+        assert "深度思考" in footer
+        assert "5." in footer or "4." in footer
+
+    def test_final_footer(self, adapter):
+        sk = "conv_group:"
+        adapter._typing_start_time[sk] = time.time() - 3.0
+
+        footer = adapter._build_footer_note(sk, final=True)
+        assert "完成" in footer
+        assert "3." in footer or "2." in footer
+
+    def test_no_start_time(self, adapter):
+        footer = adapter._build_footer_note("unknown_sk:")
+        assert footer == ""
+
+    def test_status_only(self, adapter):
+        sk = "conv_group:"
+        adapter._typing_start_time[sk] = time.time()
+        adapter._typing_status[sk] = "生成回复"
+
+        footer = adapter._build_footer_note(sk)
+        assert "生成回复" in footer
+
+
+class TestCacheCleanup:
+    """Test that new cache fields are properly cleaned up."""
+
+    @pytest.mark.asyncio
+    async def test_clear_typing_cleans_caches(self, adapter):
+        sk = _sk("conv_group")
+        adapter._thinking_cards[sk] = _CardState(card_id="biz_clean", is_ai_card=False)
+        adapter._streaming_thinking[sk] = "thought"
+        adapter._streaming_thinking_ms[sk] = 1000
+        adapter._streaming_chain[sk] = ["step"]
+        adapter._typing_status[sk] = "深度思考"
+        adapter._typing_start_time[sk] = time.time()
+        adapter._http_client.put = AsyncMock(return_value=_mock_card_response())
+
+        await adapter.clear_typing("conv_group")
+
+        assert sk not in adapter._streaming_thinking
+        assert sk not in adapter._streaming_thinking_ms
+        assert sk not in adapter._streaming_chain
+        assert sk not in adapter._typing_status
+        assert sk not in adapter._typing_start_time
+
+    @pytest.mark.asyncio
+    async def test_finalize_stream_cleans_caches(self, adapter):
+        sk = _sk("conv_group")
+        adapter._thinking_cards[sk] = _CardState(card_id="biz_fin", is_ai_card=False)
+        adapter._streaming_thinking[sk] = "thought"
+        adapter._streaming_thinking_ms[sk] = 2000
+        adapter._streaming_chain[sk] = ["chain"]
+        adapter._typing_status[sk] = "生成回复"
+        adapter._typing_start_time[sk] = time.time() - 3.0
+        adapter._http_client.put = AsyncMock(return_value=_mock_card_response())
+
+        result = await adapter.finalize_stream("conv_group", "final text")
+
+        assert result is True
+        assert sk not in adapter._streaming_thinking
+        assert sk not in adapter._streaming_thinking_ms
+        assert sk not in adapter._streaming_chain
+        assert sk not in adapter._typing_status
+        assert sk not in adapter._typing_start_time
+
+    @pytest.mark.asyncio
+    async def test_send_message_cleans_caches(self, adapter):
+        sk = _sk("conv_group")
+        adapter._thinking_cards[sk] = _CardState(card_id="biz_msg", is_ai_card=False)
+        adapter._streaming_thinking[sk] = "thought"
+        adapter._streaming_chain[sk] = ["chain"]
+        adapter._typing_status[sk] = "深度思考"
+        adapter._typing_start_time[sk] = time.time()
+        adapter._http_client.put = AsyncMock(return_value=_mock_card_response())
+
+        msg = OutgoingMessage.text("conv_group", "response")
+        await adapter.send_message(msg)
+
+        assert sk not in adapter._streaming_thinking
+        assert sk not in adapter._streaming_chain
+        assert sk not in adapter._typing_status
+        assert sk not in adapter._typing_start_time

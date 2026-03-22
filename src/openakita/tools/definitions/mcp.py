@@ -117,6 +117,11 @@ SSE 模式: add_mcp_server(name="legacy-api", transport="sse", url="http://local
                     "default": {},
                 },
                 "url": {"type": "string", "description": "服务 URL (streamable_http 模式必填)"},
+                "headers": {
+                    "type": "object",
+                    "description": "自定义 HTTP 请求头 (streamable_http/sse 模式可用，如 {\"Authorization\": \"Bearer xxx\"})",
+                    "default": {},
+                },
                 "description": {"type": "string", "description": "服务器描述 (可选)"},
                 "instructions": {"type": "string", "description": "使用说明文本 (可选，将写入 INSTRUCTIONS.md)"},
                 "auto_connect": {"type": "boolean", "description": "启动时是否自动连接此服务器 (默认 false)", "default": False},

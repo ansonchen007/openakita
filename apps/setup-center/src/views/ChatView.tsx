@@ -2058,6 +2058,7 @@ export function ChatView({
     const conv = conversations.find((c) => c.id === activeConvId);
     if (multiAgentEnabled) {
       const agentId = conv?.agentProfileId || "default";
+      isConvSwitchRef.current = true;
       setSelectedAgent(agentId);
     }
     setSelectedEndpoint(conv?.endpointId || "auto");
@@ -2147,11 +2148,17 @@ export function ChatView({
   // Sync selectedAgent → current conversation's agentProfileId
   // Only react to selectedAgent changes (not activeConvId) to avoid overwriting
   // a newly-switched conversation with the previous conversation's agent.
+  // isConvSwitchRef prevents write-back when selectedAgent was set by a conversation switch.
   const prevSelectedAgentRef = useRef(selectedAgent);
+  const isConvSwitchRef = useRef(false);
   useEffect(() => {
     if (!multiAgentEnabled) return;
     if (selectedAgent === prevSelectedAgentRef.current) return;
     prevSelectedAgentRef.current = selectedAgent;
+    if (isConvSwitchRef.current) {
+      isConvSwitchRef.current = false;
+      return;
+    }
     const convId = activeConvIdRef.current;
     if (!convId) return;
     setConversations((prev) => {
@@ -2273,7 +2280,7 @@ export function ChatView({
               lastMessage: b.lastMessage || local.lastMessage,
               timestamp: Math.max(local.timestamp || 0, b.timestamp || 0),
               messageCount: Math.max(local.messageCount || 0, b.messageCount || 0),
-              agentProfileId: local.agentProfileId || b.agentProfileId,
+              agentProfileId: b.agentProfileId || local.agentProfileId,
             };
           });
           const backendIds = new Set(restoredConvs.map((c) => c.id));
@@ -2980,9 +2987,15 @@ export function ChatView({
       const _recoverUserTs = userMsg.timestamp;
       const _recoverKey = STORAGE_KEY_MSGS_PREFIX + thisConvId;
       let attempts = 0;
-      const maxAttempts = 10;
-      const pollInterval = 3000;
+      const maxAttempts = 40;
+      const basePollInterval = 3000;
       let lastContentLen = 0;
+
+      const getInterval = () => {
+        if (attempts <= 10) return basePollInterval;
+        if (attempts <= 20) return 5000;
+        return 8000;
+      };
 
       const poll = () => {
         attempts++;
@@ -2990,7 +3003,7 @@ export function ChatView({
           .then((r) => r.ok ? r.json() : null)
           .then((data) => {
             if (!data) {
-              if (attempts < maxAttempts) setTimeout(poll, pollInterval);
+              if (attempts < maxAttempts) setTimeout(poll, getInterval());
               return;
             }
             const rows = Array.isArray(data?.messages) ? data.messages : [];
@@ -3004,7 +3017,7 @@ export function ChatView({
             );
             const lastAssistant = (newerThanUser.length > 0 ? newerThanUser : candidates).slice(-1)[0];
             if (!lastAssistant?.content) {
-              if (attempts < maxAttempts) setTimeout(poll, pollInterval);
+              if (attempts < maxAttempts) setTimeout(poll, getInterval());
               return;
             }
             const contentLen = (lastAssistant.content as string).length;
@@ -3028,11 +3041,11 @@ export function ChatView({
               return updated;
             });
             if (contentGrowing && attempts < maxAttempts) {
-              setTimeout(poll, pollInterval);
+              setTimeout(poll, getInterval());
             }
           })
           .catch(() => {
-            if (attempts < maxAttempts) setTimeout(poll, pollInterval);
+            if (attempts < maxAttempts) setTimeout(poll, getInterval());
             else logger.warn("Chat", "SSE recovery polling exhausted", { convId });
           });
       };
@@ -3687,7 +3700,7 @@ export function ChatView({
             const errMsg = e instanceof Error ? e.message : String(e);
             let guidance = t("chat.backendServiceHint");
             try {
-              const healthRes = await fetch(`${apiBase}/api/health`, { signal: AbortSignal.timeout(2000) });
+              const healthRes = await fetch(`${apiBase}/api/health`, { signal: AbortSignal.timeout(5000) });
               if (healthRes.ok) {
                 guidance = t("chat.backendOnlineUpstreamHint");
               }

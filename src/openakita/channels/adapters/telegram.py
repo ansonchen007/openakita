@@ -297,6 +297,8 @@ class TelegramAdapter(ChannelAdapter):
         channel_name: str | None = None,
         bot_id: str | None = None,
         agent_profile_id: str = "default",
+        footer_elapsed: bool | None = None,
+        footer_status: bool | None = None,
     ):
         """
         Args:
@@ -309,6 +311,8 @@ class TelegramAdapter(ChannelAdapter):
             channel_name: 通道名称（多Bot时用于区分实例）
             bot_id: Bot 实例唯一标识
             agent_profile_id: 绑定的 agent profile ID
+            footer_elapsed: 思考卡片显示处理耗时（默认 True，可通过 TELEGRAM_FOOTER_ELAPSED 环境变量控制）
+            footer_status: 思考卡片显示处理状态（默认 True，可通过 TELEGRAM_FOOTER_STATUS 环境变量控制）
         """
         super().__init__(channel_name=channel_name, bot_id=bot_id, agent_profile_id=agent_profile_id)
 
@@ -349,6 +353,16 @@ class TelegramAdapter(ChannelAdapter):
         self._streaming_last_patch: dict[str, float] = {}
         self._streaming_finalized: set[str] = set()
         self._streaming_throttle_ms: int = 1500
+
+        # Footer 配置（耗时 / 状态显示）
+        self._typing_start_time: dict[str, float] = {}
+        self._typing_status: dict[str, str] = {}
+        self._footer_elapsed: bool = footer_elapsed if footer_elapsed is not None else (
+            os.environ.get("TELEGRAM_FOOTER_ELAPSED", "true").lower() in ("true", "1", "yes")
+        )
+        self._footer_status: bool = footer_status if footer_status is not None else (
+            os.environ.get("TELEGRAM_FOOTER_STATUS", "true").lower() in ("true", "1", "yes")
+        )
 
     async def start(self) -> None:
         """启动 Telegram Bot"""
@@ -885,6 +899,7 @@ class TelegramAdapter(ChannelAdapter):
         """接收思考内容，Edit-in-Place 更新思考占位消息。"""
         sk = self._make_session_key(chat_id, thread_id)
         self._streaming_thinking[sk] = thinking_text
+        self._typing_status[sk] = "深度思考"
         if duration_ms:
             self._streaming_thinking_ms[sk] = duration_ms
 
@@ -919,6 +934,7 @@ class TelegramAdapter(ChannelAdapter):
         """将工具调用描述/结果摘要等 chain 文本追加到思考占位消息。"""
         sk = self._make_session_key(chat_id, thread_id)
         self._streaming_chain.setdefault(sk, []).append(text)
+        self._typing_status[sk] = "调用工具"
 
         card_ref = self._thinking_cards.get(sk)
         if not card_ref:
@@ -951,6 +967,7 @@ class TelegramAdapter(ChannelAdapter):
         """累积回复 token；有思考/chain 内容时定期刷新占位消息。"""
         sk = self._make_session_key(chat_id, thread_id)
         self._streaming_buffers[sk] = self._streaming_buffers.get(sk, "") + token
+        self._typing_status[sk] = "生成回复"
 
         card_ref = self._thinking_cards.get(sk)
         if not card_ref:
@@ -1002,6 +1019,20 @@ class TelegramAdapter(ChannelAdapter):
             parts.append("💭 思考中...")
 
         text = "\n".join(parts)
+
+        # footer: 耗时 + 状态
+        footer_parts: list[str] = []
+        start = self._typing_start_time.get(sk)
+        if self._footer_elapsed and start:
+            elapsed = time.time() - start
+            footer_parts.append(f"⏱ {elapsed:.1f}s")
+        if self._footer_status:
+            status = self._typing_status.get(sk, "")
+            if status:
+                footer_parts.append(status)
+        if footer_parts:
+            text = text + "\n" + " · ".join(footer_parts)
+
         if len(text) > 4000:
             text = text[:4000] + "\n..."
         return text
@@ -1035,7 +1066,7 @@ class TelegramAdapter(ChannelAdapter):
 
         if has_progress:
             # 有思考/chain → 编辑为 Expandable Blockquote 摘要，回复另发
-            summary_html = self._build_thinking_summary_html(thinking, dur_ms, chain_lines)
+            summary_html = self._build_thinking_summary_html(thinking, dur_ms, chain_lines, sk=sk)
             try:
                 await self._bot.edit_message_text(
                     chat_id=card_ref[0], message_id=card_ref[1],
@@ -1050,8 +1081,13 @@ class TelegramAdapter(ChannelAdapter):
             return False
 
         # 无思考/chain → 直接用回复替换占位消息
-        if final_text and len(final_text) <= 4000:
-            text_to_send = self._convert_to_telegram_markdown(final_text)
+        elapsed_suffix = ""
+        start = self._typing_start_time.get(sk)
+        if self._footer_elapsed and start:
+            elapsed_suffix = f"\n\n⏱ 完成 ({time.time() - start:.1f}s)"
+
+        if final_text and len(final_text + elapsed_suffix) <= 4000:
+            text_to_send = self._convert_to_telegram_markdown(final_text + elapsed_suffix)
             try:
                 await self._bot.edit_message_text(
                     chat_id=card_ref[0], message_id=card_ref[1],
@@ -1065,7 +1101,7 @@ class TelegramAdapter(ChannelAdapter):
                 with contextlib.suppress(Exception):
                     await self._bot.edit_message_text(
                         chat_id=card_ref[0], message_id=card_ref[1],
-                        text=final_text, parse_mode=None,
+                        text=final_text + elapsed_suffix, parse_mode=None,
                     )
                 self._streaming_finalized.add(sk)
                 self._thinking_cards.pop(sk, None)
@@ -1081,6 +1117,7 @@ class TelegramAdapter(ChannelAdapter):
 
     def _build_thinking_summary_html(
         self, thinking: str, dur_ms: int, chain_lines: list[str],
+        sk: str = "",
     ) -> str:
         """构建 Expandable Blockquote HTML（思考摘要折叠展示）。"""
         parts: list[str] = []
@@ -1097,7 +1134,14 @@ class TelegramAdapter(ChannelAdapter):
             parts.append("\n".join(_html.escape(ln) for ln in visible))
 
         inner = "\n\n".join(parts) if parts else "💭 思考完成"
-        return f"<blockquote expandable>{inner}</blockquote>"
+        html = f"<blockquote expandable>{inner}</blockquote>"
+
+        start = self._typing_start_time.get(sk) if sk else None
+        if self._footer_elapsed and start:
+            elapsed = time.time() - start
+            html += f"\n⏱ 完成 ({elapsed:.1f}s)"
+
+        return html
 
     def _convert_to_telegram_markdown(self, text: str) -> str:
         """
@@ -1182,23 +1226,33 @@ class TelegramAdapter(ChannelAdapter):
             self._streaming_finalized.discard(sk)
             self._streaming_buffers.pop(sk, None)
             self._streaming_last_patch.pop(sk, None)
+            self._typing_start_time.pop(sk, None)
+            self._typing_status.pop(sk, None)
             return str(card_ref[1]) if card_ref else sk
         if sk not in self._streaming_buffers:
             card_ref = self._thinking_cards.pop(sk, None)
             if card_ref:
                 text = message.content.text or ""
-                if text and not message.content.has_media and len(text) <= 4000:
+                elapsed_suffix = ""
+                start = self._typing_start_time.get(sk)
+                if self._footer_elapsed and start:
+                    elapsed_suffix = f"\n\n⏱ 完成 ({time.time() - start:.1f}s)"
+                if text and not message.content.has_media and len(text + elapsed_suffix) <= 4000:
                     try:
-                        t = self._convert_to_telegram_markdown(text)
+                        t = self._convert_to_telegram_markdown(text + elapsed_suffix)
                         await self._bot.edit_message_text(
                             chat_id=card_ref[0], message_id=card_ref[1],
                             text=t, parse_mode=telegram.constants.ParseMode.MARKDOWN,
                         )
+                        self._typing_start_time.pop(sk, None)
+                        self._typing_status.pop(sk, None)
                         return str(card_ref[1])
                     except Exception:
                         pass
                 with contextlib.suppress(Exception):
                     await self._bot.delete_message(chat_id=card_ref[0], message_id=card_ref[1])
+                self._typing_start_time.pop(sk, None)
+                self._typing_status.pop(sk, None)
 
         chat_id = int(message.chat_id)
         sent_message = None
@@ -1575,6 +1629,19 @@ class TelegramAdapter(ChannelAdapter):
 
         sk = self._make_session_key(chat_id, thread_id)
         if sk in self._thinking_cards:
+            # 后续调用：定期更新思考卡片的耗时显示
+            if self._footer_elapsed or self._footer_status:
+                now = time.time()
+                last_t = self._streaming_last_patch.get(sk, 0.0)
+                if now - last_t >= 3.5:
+                    display = self._compose_thinking_display(sk)
+                    card_ref = self._thinking_cards[sk]
+                    with contextlib.suppress(Exception):
+                        await self._bot.edit_message_text(
+                            chat_id=card_ref[0], message_id=card_ref[1],
+                            text=display, parse_mode=None,
+                        )
+                        self._streaming_last_patch[sk] = now
             return
 
         self._streaming_finalized.discard(sk)
@@ -1591,6 +1658,8 @@ class TelegramAdapter(ChannelAdapter):
                 message_thread_id=_tid,
             )
             self._thinking_cards[sk] = (int(chat_id), sent.message_id)
+            self._typing_start_time[sk] = time.time()
+            self._typing_status[sk] = "思考中"
         except Exception as e:
             logger.debug(f"Telegram: create thinking placeholder failed: {e}")
 
@@ -1604,6 +1673,8 @@ class TelegramAdapter(ChannelAdapter):
         self._streaming_chain.pop(sk, None)
         self._streaming_buffers.pop(sk, None)
         self._streaming_last_patch.pop(sk, None)
+        self._typing_start_time.pop(sk, None)
+        self._typing_status.pop(sk, None)
         if card_ref and self._bot:
             with contextlib.suppress(Exception):
                 await self._bot.delete_message(chat_id=card_ref[0], message_id=card_ref[1])

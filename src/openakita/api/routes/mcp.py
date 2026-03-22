@@ -62,6 +62,7 @@ class MCPServerAddRequest(BaseModel):
     args: list[str] = []
     env: dict[str, str] = {}
     url: str = ""
+    headers: dict[str, str] = {}
     description: str = ""
     auto_connect: bool = False
 
@@ -247,6 +248,7 @@ async def add_mcp_server(request: Request, body: MCPServerAddRequest):
         description=body.description,
         instructions="",
         auto_connect=body.auto_connect,
+        headers=body.headers or None,
         config_base_dir=settings.mcp_config_path,
         search_bases=[settings.project_root, Path.cwd()],
         client=client,

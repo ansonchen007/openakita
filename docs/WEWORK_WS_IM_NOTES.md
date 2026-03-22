@@ -394,6 +394,29 @@ start()
 
 ## 九、变更记录
 
+### 2026-03-19 (七): 流式回复 + 实时思考/工具进度展示
+
+**功能**: 启用 gateway 流式路径，将企微 WS 的思考指示器 stream 升级为实时进度展示载体。
+
+**改动**:
+
+- `capabilities["streaming"] = True`，启用 gateway `_call_agent_streaming` 路径
+- 新增 `stream_thinking()`: 实时显示模型思考内容，首次调用时取消等待计数器
+- 新增 `stream_chain_text()`: 实时显示工具调用/结果进度
+- 新增 `stream_token()`: 累积回复文本并节流更新 stream（800ms 间隔）
+- 新增 `finalize_stream()`: 整合思考/工具/回复到最终 `finish=true` 帧，追加耗时
+- 新增 `_compose_stream_display()` / `_update_stream()`: 辅助方法，构建复合内容并发送
+- `IM_CHAIN_PUSH` 开关完全兼容：OFF 时只有计数器+回复流式；ON 时额外展示思考/工具进度
+
+### 2026-03-22 (七): 修复 stream 过期导致重复消息
+
+**问题**: 当任务处理时间超过 WeCom 的 6 分钟流过期限制（如 Orchestrator 长任务），`_send_stream_reply` 尝试发送 `finish=true` 时被拒绝（error 846608），虽然 `_response_url_fallback` 成功发送了消息，但方法仍抛出 `RuntimeError`，导致 gateway 的重试机制触发第二次发送。
+
+**修复**:
+
+- `wework_ws.py` — `_send_stream_reply`: fallback 成功后 `return` 而非 `raise`，避免 gateway 重试
+- `wework_ws.py` — `_send_stream_reply`: 新增 stream 过期预检（>5.5 分钟），过期时跳过 stream 协议直接走 fallback，避免触发 846608 错误
+
 ### 2026-03-19 (六): 修复 flush_progress 绕过 F2 提取
 
 **问题**: F1-F4 修复了 `emit_progress_event` 的中间节流 flush，但 `agent.py` 在返回 response_text 之前显式调用 `gateway.flush_progress(session)`（line 4141），该方法未检查 `_THINK_TAG_NATIVE`，仍将累积的进度缓冲区作为独立消息发送。当 gateway 的 F2 提取逻辑随后运行时，缓冲区已为空。

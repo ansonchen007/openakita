@@ -21,6 +21,7 @@ import hashlib
 import hmac
 import json
 import logging
+import os
 import shutil
 import time
 import uuid
@@ -100,6 +101,7 @@ class QQBotAdapter(ChannelAdapter):
         bot_id: str | None = None,
         agent_profile_id: str = "default",
         public_api_url: str = "",
+        footer_elapsed: bool | None = None,
     ):
         """
         Args:
@@ -115,6 +117,7 @@ class QQBotAdapter(ChannelAdapter):
             agent_profile_id: 绑定的 agent profile ID
             public_api_url: OpenAkita API 的公网 URL（如 https://example.com），
                 用于将本地图片转为 QQ 可访问的公网 URL。不配置则群/C2C 无法发送本地图片。
+            footer_elapsed: 回复末尾显示处理耗时（默认 True，可通过 QQBOT_FOOTER_ELAPSED 环境变量控制）
         """
         super().__init__(channel_name=channel_name, bot_id=bot_id, agent_profile_id=agent_profile_id)
 
@@ -149,6 +152,13 @@ class QQBotAdapter(ChannelAdapter):
         self._msg_seq_max_entries = 500
         # {chat_id: message_id} — "正在思考中..."提示消息 ID（send_typing 发出，clear_typing 撤回）
         self._typing_msg_ids: dict[str, str] = {}
+        # C2C 使用 msg_type=6 输入状态通知，无需撤回，用此集合标记
+        self._typing_c2c_active: set[str] = set()
+        # {chat_id: start_time} — typing 开始时间，用于计算耗时 footer
+        self._typing_start_time: dict[str, float] = {}
+        self._footer_elapsed = footer_elapsed if footer_elapsed is not None else (
+            os.environ.get("QQBOT_FOOTER_ELAPSED", "true").lower() in ("true", "1", "yes")
+        )
         # Markdown 能力是否可用（自定义 markdown 需内邀开通，首次失败后自动降级）
         self._markdown_available: bool = True
 
@@ -1092,6 +1102,18 @@ class QQBotAdapter(ChannelAdapter):
             return False
         return parse_mode == "markdown" and self._has_markdown_features(text)
 
+    def _append_elapsed_footer(self, text: str, chat_id: str) -> str:
+        """若开启 footer_elapsed，在文本末尾追加耗时信息。"""
+        if not self._footer_elapsed or not text:
+            return text
+        start = self._typing_start_time.pop(chat_id, None)
+        if not start:
+            return text
+        elapsed = time.time() - start
+        if elapsed < 1.0:
+            return text
+        return f"{text}\n\n⏱ 完成 ({elapsed:.1f}s)"
+
     async def send_message(self, message: OutgoingMessage) -> str:
         """
         发送消息
@@ -1104,6 +1126,12 @@ class QQBotAdapter(ChannelAdapter):
         chat_type = self._resolve_chat_type(message.chat_id, message.metadata)
         msg_id = self._resolve_msg_id(message.chat_id, message.metadata)
         parse_mode = message.parse_mode
+
+        # 拼接耗时 footer
+        if message.content.text:
+            message.content.text = self._append_elapsed_footer(
+                message.content.text, message.chat_id,
+            )
 
         # Webhook 模式使用 HTTP API 发送
         if self.mode == "webhook":
@@ -1483,17 +1511,31 @@ class QQBotAdapter(ChannelAdapter):
     # ==================== Typing 提示 ====================
 
     async def send_typing(self, chat_id: str, thread_id: str | None = None) -> None:
-        """发送"正在思考中..."提示消息（QQ 官方无 typing API，用文本消息替代）。
+        """发送输入状态提示。
 
-        幂等：同一 chat_id 只发一次，后续调用（_keep_typing 循环）直接跳过。
+        C2C 单聊使用 msg_type=6 原生输入状态通知（每次调用都续期，不幂等）。
+        群聊/频道使用 msg_type=0 文本消息"正在思考中..."（幂等，只发一次）。
         """
+        # 记录 typing 开始时间（仅首次）
+        if chat_id not in self._typing_start_time:
+            self._typing_start_time[chat_id] = time.time()
+
+        chat_type = self._resolve_chat_type(chat_id)
+
+        # C2C: 使用 msg_type=6 输入状态通知，每 4 秒续期一次
+        if chat_type == "c2c":
+            self._typing_c2c_active.add(chat_id)
+            try:
+                await self._send_input_notify(chat_id)
+            except Exception as e:
+                logger.debug(f"QQ Official Bot: send_typing (input_notify) failed: {e}")
+            return
+
+        # 群聊/频道: 幂等发送文本消息
         if chat_id in self._typing_msg_ids:
             return
 
-        # 立即占位，防止 _keep_typing 循环在 await 期间重入
         self._typing_msg_ids[chat_id] = ""
-
-        chat_type = self._resolve_chat_type(chat_id)
         msg_id = self._resolve_msg_id(chat_id)
 
         try:
@@ -1513,6 +1555,28 @@ class QQBotAdapter(ChannelAdapter):
                 self._typing_msg_ids[chat_id] = sent_id
         except Exception as e:
             logger.debug(f"QQ Official Bot: send_typing failed: {e}")
+
+    async def _send_input_notify(self, chat_id: str) -> None:
+        """C2C 发送 msg_type=6 输入状态通知（QQ 客户端显示"对方正在输入..."）。"""
+        import httpx as hx
+
+        headers = await self._build_api_headers()
+        base_url = self._api_base_url()
+        msg_id = self._resolve_msg_id(chat_id)
+        seq_key = msg_id or chat_id
+
+        body: dict[str, Any] = {
+            "msg_type": 6,
+            "input_notify": {"input_type": 1, "input_second": 10},
+            "msg_seq": self._next_msg_seq(seq_key),
+        }
+        if msg_id:
+            body["msg_id"] = msg_id
+
+        url = f"{base_url}/v2/users/{chat_id}/messages"
+        async with hx.AsyncClient(timeout=15.0) as client:
+            resp = await client.post(url, json=body, headers=headers)
+            resp.raise_for_status()
 
     async def _send_typing_via_http(
         self, chat_id: str, chat_type: str, msg_id: str | None,
@@ -1546,7 +1610,14 @@ class QQBotAdapter(ChannelAdapter):
             return str(data.get("id", ""))
 
     async def clear_typing(self, chat_id: str, thread_id: str | None = None) -> None:
-        """撤回之前发送的"正在思考中..."消息（2 分钟内有效）"""
+        """清除输入状态提示。
+
+        C2C: msg_type=6 自动过期，只需清理内部状态。
+        群聊/频道: 撤回之前发送的"正在思考中..."消息（2 分钟内有效）。
+        """
+        self._typing_c2c_active.discard(chat_id)
+        self._typing_start_time.pop(chat_id, None)
+
         sent_id = self._typing_msg_ids.pop(chat_id, None)
         if not sent_id:
             return
@@ -1561,10 +1632,6 @@ class QQBotAdapter(ChannelAdapter):
                 if chat_type == "group":
                     await api.recall_group_message(
                         group_openid=chat_id, message_id=sent_id,
-                    )
-                elif chat_type == "c2c":
-                    await api.recall_c2c_message(
-                        openid=chat_id, message_id=sent_id,
                     )
                 elif chat_type == "channel":
                     await api.recall_message(

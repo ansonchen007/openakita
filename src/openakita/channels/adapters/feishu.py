@@ -129,6 +129,8 @@ class FeishuAdapter(ChannelAdapter):
         group_streaming: bool | None = None,
         streaming_throttle_ms: int | None = None,
         group_response_mode: str | None = None,
+        footer_elapsed: bool | None = None,
+        footer_status: bool | None = None,
     ):
         """
         Args:
@@ -212,6 +214,16 @@ class FeishuAdapter(ChannelAdapter):
         self._group_response_mode: str | None = group_response_mode or (
             os.environ.get("FEISHU_GROUP_RESPONSE_MODE") or None
         )
+
+        # 卡片 footer 配置（显示耗时 / 状态）
+        self._footer_elapsed = footer_elapsed if footer_elapsed is not None else (
+            os.environ.get("FEISHU_FOOTER_ELAPSED", "true").lower() in ("true", "1", "yes")
+        )
+        self._footer_status = footer_status if footer_status is not None else (
+            os.environ.get("FEISHU_FOOTER_STATUS", "true").lower() in ("true", "1", "yes")
+        )
+        self._typing_start_time: dict[str, float] = {}
+        self._typing_status: dict[str, str] = {}
 
         # 关键事件缓冲（per-chat_id，上限 _MAX_EVENTS_PER_CHAT 条）
         self._important_events: dict[str, list[dict]] = {}
@@ -1027,8 +1039,10 @@ class FeishuAdapter(ChannelAdapter):
             return
         if not self._client:
             return
+        self._typing_start_time[sk] = time.time()
+        self._typing_status[sk] = "思考中"
         reply_to = self._last_user_msg.pop(sk, None) or thread_id
-        card_msg_id = await self._send_thinking_card(chat_id, reply_to=reply_to)
+        card_msg_id = await self._send_thinking_card(chat_id, reply_to=reply_to, sk=sk)
         if card_msg_id:
             self._thinking_cards[sk] = card_msg_id
 
@@ -1039,6 +1053,8 @@ class FeishuAdapter(ChannelAdapter):
         任何事。仅在异常路径或 _keep_typing 重建卡片后未被消费时触发。
         """
         sk = self._make_session_key(chat_id, thread_id)
+        self._typing_start_time.pop(sk, None)
+        self._typing_status.pop(sk, None)
         self._typing_suppressed.discard(sk)
         card_id = self._thinking_cards.pop(sk, None)
         if card_id:
@@ -1046,16 +1062,54 @@ class FeishuAdapter(ChannelAdapter):
             with contextlib.suppress(Exception):
                 await self._delete_feishu_message(card_id)
 
-    async def _send_thinking_card(
-        self, chat_id: str, reply_to: str | None = None,
-    ) -> str | None:
-        """发送"思考中..."交互卡片，返回卡片 message_id。"""
-        card = {
-            "config": {"wide_screen_mode": True},
+    def _build_footer_note(self, sk: str, *, final: bool = False) -> dict | None:
+        """构建卡片底部 note 元素（显示耗时和/或状态）。"""
+        if not self._footer_elapsed and not self._footer_status:
+            return None
+
+        start = self._typing_start_time.get(sk)
+        elapsed_s = (time.time() - start) if start else 0.0
+        status = self._typing_status.get(sk, "")
+
+        parts: list[str] = []
+        if final:
+            if self._footer_elapsed:
+                parts.append(f"⏱ 完成 ({elapsed_s:.1f}s)")
+            else:
+                parts.append("✅ 完成")
+        else:
+            if self._footer_elapsed and elapsed_s > 0:
+                parts.append(f"⏱ {elapsed_s:.1f}s")
+            if self._footer_status and status:
+                parts.append(status)
+
+        if not parts:
+            return None
+
+        return {
+            "tag": "note",
             "elements": [
-                {"tag": "markdown", "content": "💭 **思考中...**"},
+                {"tag": "plain_text", "content": " · ".join(parts)},
             ],
         }
+
+    def _build_card_json(
+        self, content: str, sk: str | None = None, *, final: bool = False,
+    ) -> dict:
+        """构建飞书卡片 JSON 1.0 结构，含可选 footer note。"""
+        elements: list[dict] = [{"tag": "markdown", "content": content}]
+        if sk:
+            note = self._build_footer_note(sk, final=final)
+            if note:
+                elements.append(note)
+        return {"config": {"wide_screen_mode": True}, "elements": elements}
+
+    async def _send_thinking_card(
+        self, chat_id: str, reply_to: str | None = None,
+        sk: str | None = None,
+    ) -> str | None:
+        """发送"思考中..."交互卡片，返回卡片 message_id。"""
+        card = self._build_card_json("💭 **思考中...**", sk)
         content = json.dumps(card)
         try:
             if reply_to:
@@ -1097,14 +1151,12 @@ class FeishuAdapter(ChannelAdapter):
             logger.debug(f"Feishu: _send_thinking_card error: {e}")
         return None
 
-    async def _patch_card_content(self, message_id: str, new_content: str) -> bool:
+    async def _patch_card_content(
+        self, message_id: str, new_content: str,
+        sk: str | None = None, *, final: bool = False,
+    ) -> bool:
         """通过 PATCH API 将占位卡片更新为最终回复内容。"""
-        card = {
-            "config": {"wide_screen_mode": True},
-            "elements": [
-                {"tag": "markdown", "content": new_content},
-            ],
-        }
+        card = self._build_card_json(new_content, sk, final=final)
         request = (
             lark_oapi.api.im.v1.PatchMessageRequest.builder()
             .message_id(message_id)
@@ -1165,6 +1217,7 @@ class FeishuAdapter(ChannelAdapter):
 
         sk = self._make_session_key(chat_id, thread_id)
         self._streaming_thinking[sk] = thinking_text
+        self._typing_status[sk] = "深度思考"
         if duration_ms:
             self._streaming_thinking_ms[sk] = duration_ms
 
@@ -1174,7 +1227,7 @@ class FeishuAdapter(ChannelAdapter):
 
         display = self._compose_thinking_display(sk)
         try:
-            await self._patch_card_content(card_id, display)
+            await self._patch_card_content(card_id, display, sk)
             self._streaming_last_patch[sk] = time.time()
         except Exception as e:
             logger.debug(f"Feishu: stream_thinking patch failed (non-fatal): {e}")
@@ -1193,6 +1246,7 @@ class FeishuAdapter(ChannelAdapter):
 
         sk = self._make_session_key(chat_id, thread_id)
         self._streaming_chain.setdefault(sk, []).append(text)
+        self._typing_status[sk] = "调用工具"
 
         card_id = self._thinking_cards.get(sk)
         if not card_id:
@@ -1204,7 +1258,7 @@ class FeishuAdapter(ChannelAdapter):
         if now - last_t >= throttle_s:
             display = self._compose_thinking_display(sk)
             try:
-                await self._patch_card_content(card_id, display)
+                await self._patch_card_content(card_id, display, sk)
                 self._streaming_last_patch[sk] = now
             except Exception as e:
                 logger.debug(f"Feishu: stream_chain_text patch failed (non-fatal): {e}")
@@ -1253,6 +1307,7 @@ class FeishuAdapter(ChannelAdapter):
             return
 
         sk = self._make_session_key(chat_id, thread_id)
+        self._typing_status[sk] = "生成回复"
 
         buf = self._streaming_buffers.get(sk, "")
         buf += token
@@ -1270,7 +1325,7 @@ class FeishuAdapter(ChannelAdapter):
             has_thinking = sk in self._streaming_thinking
             display_text = self._compose_thinking_display(sk) if has_thinking else (buf + " ▍")
             try:
-                await self._patch_card_content(card_id, display_text)
+                await self._patch_card_content(card_id, display_text, sk)
                 self._streaming_last_patch[sk] = now
             except Exception as e:
                 logger.debug(f"Feishu: streaming patch failed (non-fatal): {e}")
@@ -1301,11 +1356,13 @@ class FeishuAdapter(ChannelAdapter):
             return False
 
         try:
-            success = await self._patch_card_content(card_id, final_text)
+            success = await self._patch_card_content(card_id, final_text, sk, final=True)
             if success:
                 self._streaming_finalized.add(sk)
                 self._thinking_cards.pop(sk, None)
                 self._typing_suppressed.add(sk)
+                self._typing_start_time.pop(sk, None)
+                self._typing_status.pop(sk, None)
                 return True
         except Exception as e:
             logger.warning(f"Feishu: finalize_stream patch failed: {e}")
@@ -1315,6 +1372,8 @@ class FeishuAdapter(ChannelAdapter):
             await self._delete_feishu_message(card_id)
         self._thinking_cards.pop(sk, None)
         self._typing_suppressed.add(sk)
+        self._typing_start_time.pop(sk, None)
+        self._typing_status.pop(sk, None)
         return False
 
     # ── /feishu command helpers ─────────────────────────────────────────
@@ -1857,22 +1916,26 @@ class FeishuAdapter(ChannelAdapter):
             self._typing_suppressed.add(sk)
             self._streaming_buffers.pop(sk, None)
             self._streaming_last_patch.pop(sk, None)
+            self._typing_start_time.pop(sk, None)
+            self._typing_status.pop(sk, None)
             return card_id or sk
         if sk not in self._streaming_buffers:
             text = message.content.text or ""
-            # 仅对纯文本消息（最终回复）消耗 thinking card；
-            # media 消息（如工具中间发送的表情包/图片）不应消耗，保留卡片给最终回复使用
             if text and not message.content.has_media:
                 thinking_card_id = self._thinking_cards.pop(sk, None)
                 if thinking_card_id:
                     self._typing_suppressed.add(sk)
                     try:
-                        if await self._patch_card_content(thinking_card_id, text):
+                        if await self._patch_card_content(thinking_card_id, text, sk, final=True):
+                            self._typing_start_time.pop(sk, None)
+                            self._typing_status.pop(sk, None)
                             return thinking_card_id
                     except Exception as e:
                         logger.warning(f"Feishu: patch thinking card failed: {e}")
                     with contextlib.suppress(Exception):
                         await self._delete_feishu_message(thinking_card_id)
+                    self._typing_start_time.pop(sk, None)
+                    self._typing_status.pop(sk, None)
 
         reply_target = message.reply_to or message.thread_id
 

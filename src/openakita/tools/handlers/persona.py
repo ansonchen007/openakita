@@ -2,7 +2,7 @@
 人格系统 + 活人感处理器
 
 处理人格和活人感相关的工具调用:
-- switch_persona: 切换预设
+- switch_persona: 切换预设或用户自创 Agent 角色
 - update_persona_trait: 更新偏好特质
 - toggle_proactive: 开关活人感
 - get_persona_profile: 获取人格配置
@@ -16,6 +16,31 @@ if TYPE_CHECKING:
     from ...core.agent import Agent
 
 logger = logging.getLogger(__name__)
+
+
+def _find_agent_profile_by_name(name: str):
+    """按名称模糊查找用户创建的 AgentProfile。
+
+    Returns (profile, store) or (None, None).
+    """
+    try:
+        from ...agents.profile import ProfileStore
+        from ...config import settings
+
+        store_dir = settings.data_dir / "agents"
+        if not store_dir.exists():
+            return None, None
+        store = ProfileStore(store_dir)
+        name_lower = name.strip().lower()
+        for p in store.list_all(include_ephemeral=False):
+            if p.name.strip().lower() == name_lower:
+                return p, store
+        for p in store.list_all(include_ephemeral=False):
+            if name_lower in p.name.strip().lower():
+                return p, store
+    except Exception as e:
+        logger.debug(f"Agent profile lookup failed: {e}")
+    return None, None
 
 
 class PersonaHandler:
@@ -45,22 +70,76 @@ class PersonaHandler:
             return f"❌ Unknown persona tool: {tool_name}"
 
     def _switch_persona(self, params: dict) -> str:
-        """切换人格预设"""
+        """切换人格预设或用户自创 Agent 角色"""
         preset_name = params.get("preset_name", "default")
 
         if not hasattr(self.agent, "persona_manager") or not self.agent.persona_manager:
             return "❌ 人格系统未初始化"
 
+        # 1) 先尝试内置预设
         success = self.agent.persona_manager.switch_preset(preset_name)
         if success:
-            # 更新配置并持久化
             from ...config import runtime_state, settings
             settings.persona_name = preset_name
             runtime_state.save()
-            return f"✅ 已切换人格为: {preset_name}\n\n当前可用预设: {', '.join(self.agent.persona_manager.available_presets)}"
-        else:
-            available = self.agent.persona_manager.available_presets
-            return f"❌ 预设 '{preset_name}' 不存在\n可用预设: {', '.join(available)}"
+            return (
+                f"✅ 已切换人格为: {preset_name}\n\n"
+                f"当前可用预设: {', '.join(self.agent.persona_manager.available_presets)}"
+            )
+
+        # 2) 内置预设没有匹配，尝试查找用户自创的 Agent Profile
+        profile, _ = _find_agent_profile_by_name(preset_name)
+        if profile:
+            switched = self._switch_to_agent_profile(profile)
+            if switched:
+                return (
+                    f"✅ 已切换到自定义角色「{profile.name}」（{profile.description or '无描述'}）\n"
+                    f"角色将从下一条消息开始生效。"
+                )
+
+        # 3) 都没有匹配
+        available_presets = self.agent.persona_manager.available_presets
+        lines = [f"❌ 未找到名为「{preset_name}」的预设或自定义角色\n"]
+        lines.append(f"**内置预设**: {', '.join(available_presets)}")
+        try:
+            from ...agents.profile import ProfileStore
+            from ...config import settings
+
+            store_dir = settings.data_dir / "agents"
+            if store_dir.exists():
+                store = ProfileStore(store_dir)
+                custom_profiles = [
+                    p for p in store.list_all(include_ephemeral=False)
+                    if p.type.value == "custom"
+                ]
+                if custom_profiles:
+                    names = [f"{p.icon} {p.name}" for p in custom_profiles]
+                    lines.append(f"**自定义角色**: {', '.join(names)}")
+        except Exception:
+            pass
+        return "\n".join(lines)
+
+    def _switch_to_agent_profile(self, profile) -> bool:
+        """将当前会话的 agent_profile_id 切换到目标 AgentProfile。"""
+        try:
+            session = getattr(self.agent, "_current_session", None)
+            if session is None:
+                logger.warning("[switch_persona] No active session, cannot switch profile")
+                return False
+            ctx = getattr(session, "context", None)
+            if ctx is None:
+                logger.warning("[switch_persona] Session has no context")
+                return False
+            old_id = getattr(ctx, "agent_profile_id", "default")
+            ctx.agent_profile_id = profile.id
+            logger.info(
+                f"[switch_persona] Switched agent_profile_id: {old_id} -> {profile.id} "
+                f"({profile.name})"
+            )
+            return True
+        except Exception as e:
+            logger.error(f"[switch_persona] Profile switch failed: {e}")
+            return False
 
     def _update_persona_trait(self, params: dict) -> str:
         """更新人格偏好特质"""

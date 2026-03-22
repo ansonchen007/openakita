@@ -503,7 +503,7 @@ class WeWorkWsAdapter(ChannelAdapter):
     _THINK_TAG_NATIVE = True
 
     capabilities = {
-        "streaming": False,
+        "streaming": True,
         "send_image": True,
         "send_file": True,
         "send_voice": True,
@@ -594,11 +594,26 @@ class WeWorkWsAdapter(ChannelAdapter):
         # background tasks ref holder
         self._bg_tasks: set[asyncio.Task] = set()
 
+        # Streaming state (for gateway streaming path)
+        self._chat_to_req: dict[str, str] = {}
+        self._typing_start_time: dict[str, float] = {}
+        self._streaming_thinking: dict[str, str] = {}
+        self._streaming_chain: dict[str, list[str]] = {}
+        self._streaming_buffers: dict[str, str] = {}
+        self._streaming_last_patch: dict[str, float] = {}
+
     # ==================== Properties ====================
 
     @property
     def supports_streaming(self) -> bool:
         return True
+
+    def is_streaming_enabled(self, is_group: bool = False) -> bool:
+        return True
+
+    @staticmethod
+    def _make_session_key(chat_id: str, thread_id: str | None = None) -> str:
+        return chat_id
 
     # ==================== Lifecycle ====================
 
@@ -638,10 +653,13 @@ class WeWorkWsAdapter(ChannelAdapter):
     async def _connection_loop(self) -> None:
         """Main connection loop with exponential back-off reconnect."""
         attempt = 0
+        _consecutive_auth_failures = 0
+        _MAX_AUTH_FAILURES = 3
         while self._running:
             try:
                 await self._connect_and_run()
                 attempt = 0
+                _consecutive_auth_failures = 0
             except asyncio.CancelledError:
                 return
             except Exception as e:
@@ -656,6 +674,16 @@ class WeWorkWsAdapter(ChannelAdapter):
                     "Stopping reconnect to avoid infinite loop."
                 )
                 return
+
+            if getattr(self, "_auth_fatal", False):
+                _consecutive_auth_failures += 1
+                if _consecutive_auth_failures >= _MAX_AUTH_FAILURES:
+                    logger.error(
+                        f"Fatal auth error persisted after {_consecutive_auth_failures} "
+                        f"attempts (last: {getattr(self, '_auth_error', '?')}). "
+                        "Stopping reconnect — check bot_id/secret configuration."
+                    )
+                    return
 
             # check max reconnect
             max_att = self.config.max_reconnect_attempts
@@ -677,6 +705,8 @@ class WeWorkWsAdapter(ChannelAdapter):
         """Single connection lifetime: connect → auth → heartbeat + receive."""
         self._authenticated.clear()
         self._missed_pong = 0
+        self._auth_error: str | None = None
+        self._auth_fatal: bool = False
         self._reject_all_pending("reconnecting")
 
         async with websockets.connect(
@@ -700,7 +730,9 @@ class WeWorkWsAdapter(ChannelAdapter):
                 receive_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await receive_task
-                return
+                raise ConnectionError(
+                    self._auth_error or "Authentication timeout"
+                )
 
             logger.info("WebSocket authenticated successfully")
 
@@ -819,7 +851,11 @@ class WeWorkWsAdapter(ChannelAdapter):
                     self._authenticated.set()
                 else:
                     errmsg = frame.get("errmsg", "unknown")
+                    self._auth_error = f"{errcode} {errmsg}"
                     logger.error(f"Auth failed: {errcode} {errmsg}")
+                    _FATAL_AUTH_CODES = {600041, 600042, 600043}
+                    if errcode in _FATAL_AUTH_CODES:
+                        self._auth_fatal = True
                 return
 
             # heartbeat response
@@ -940,6 +976,10 @@ class WeWorkWsAdapter(ChannelAdapter):
 
         # D9: reset reply rate window on new inbound message
         self._rate_tracker.reset_reply_window(chat_id)
+
+        # Store chat_id -> req_id mapping for streaming methods
+        self._chat_to_req[chat_id] = req_id
+        self._typing_start_time[chat_id] = time.time()
 
         # Per-peer serialization lock (A6): serialize messages from the same chat
         lock = self._get_peer_lock(chat_id)
@@ -1202,6 +1242,188 @@ class WeWorkWsAdapter(ChannelAdapter):
         task = self._thinking_tasks.pop(req_id, None)
         if task and not task.done():
             task.cancel()
+
+    # ==================== Streaming display ====================
+
+    _STREAM_THINKING_THROTTLE = 2.0
+    _STREAM_TOKEN_THROTTLE = 0.8
+    _STREAM_MSG_RESERVE = 5  # reserve for finalize_stream finish=true frame
+
+    def _compose_stream_display(self, sk: str) -> str:
+        """Build display content from accumulated thinking + chain + reply."""
+        thinking = self._streaming_thinking.get(sk, "")
+        chain = self._streaming_chain.get(sk, [])
+        reply = self._streaming_buffers.get(sk, "")
+
+        think_parts: list[str] = []
+        if thinking:
+            preview = thinking.strip().replace("\n", " ")[:200]
+            if len(thinking) > 200:
+                preview += "..."
+            think_parts.append(f"💭 {preview}")
+        if chain:
+            think_parts.extend(chain[-8:])
+
+        content = ""
+        if think_parts:
+            content = "<think>\n" + "\n".join(think_parts) + "\n</think>\n"
+        if reply:
+            content += reply
+        return content or "<think>处理中...</think>"
+
+    async def _update_stream(
+        self, req_id: str, stream_id: str, content: str,
+    ) -> bool:
+        """Send a non-final stream frame. Returns True on success."""
+        count = self._stream_msg_count.get(stream_id, 0)
+        if count >= MAX_INTERMEDIATE_STREAM_MSGS - self._STREAM_MSG_RESERVE:
+            return False
+        encoded = content.encode("utf-8")
+        if len(encoded) > STREAM_CONTENT_MAX_BYTES:
+            content = encoded[:STREAM_CONTENT_MAX_BYTES].decode("utf-8", errors="ignore")
+        body: dict = {
+            "msgtype": "stream",
+            "stream": {"id": stream_id, "finish": False, "content": content},
+        }
+        try:
+            await self._send_reply_with_ack(req_id, body, CMD_RESPONSE)
+            self._stream_msg_count[stream_id] = count + 1
+            self._last_stream_sent[stream_id] = time.time()
+            return True
+        except Exception as e:
+            logger.debug(f"[streaming] Update failed (non-fatal): {e}")
+            return False
+
+    async def stream_thinking(
+        self,
+        chat_id: str,
+        thinking_text: str,
+        *,
+        thread_id: str | None = None,
+        is_group: bool = False,
+        duration_ms: int | None = None,
+    ) -> None:
+        """Receive thinking content delta and update the stream display."""
+        sk = self._make_session_key(chat_id, thread_id)
+        self._streaming_thinking[sk] = self._streaming_thinking.get(sk, "") + thinking_text
+        req_id = self._chat_to_req.get(chat_id)
+        if not req_id:
+            return
+        self._cancel_thinking_task(req_id)
+        now = time.time()
+        last = self._streaming_last_patch.get(sk, 0)
+        if now - last < self._STREAM_THINKING_THROTTLE:
+            return
+        stream_id = self._pre_streams.get(req_id)
+        if stream_id:
+            display = self._compose_stream_display(sk)
+            if await self._update_stream(req_id, stream_id, display):
+                self._streaming_last_patch[sk] = now
+
+    async def stream_chain_text(
+        self,
+        chat_id: str,
+        text: str,
+        *,
+        thread_id: str | None = None,
+        is_group: bool = False,
+    ) -> None:
+        """Append a tool progress line and update the stream display."""
+        sk = self._make_session_key(chat_id, thread_id)
+        self._streaming_chain.setdefault(sk, []).append(text)
+        req_id = self._chat_to_req.get(chat_id)
+        if not req_id:
+            return
+        self._cancel_thinking_task(req_id)
+        now = time.time()
+        last = self._streaming_last_patch.get(sk, 0)
+        if now - last < self._STREAM_THINKING_THROTTLE:
+            return
+        stream_id = self._pre_streams.get(req_id)
+        if stream_id:
+            display = self._compose_stream_display(sk)
+            if await self._update_stream(req_id, stream_id, display):
+                self._streaming_last_patch[sk] = now
+
+    async def stream_token(
+        self,
+        chat_id: str,
+        token: str,
+        *,
+        thread_id: str | None = None,
+        is_group: bool = False,
+    ) -> None:
+        """Accumulate a reply token and periodically update the stream."""
+        sk = self._make_session_key(chat_id, thread_id)
+        self._streaming_buffers[sk] = self._streaming_buffers.get(sk, "") + token
+        req_id = self._chat_to_req.get(chat_id)
+        if not req_id:
+            return
+        self._cancel_thinking_task(req_id)
+        now = time.time()
+        last = self._streaming_last_patch.get(sk, 0)
+        if now - last < self._STREAM_TOKEN_THROTTLE:
+            return
+        stream_id = self._pre_streams.get(req_id)
+        if stream_id:
+            display = self._compose_stream_display(sk)
+            if await self._update_stream(req_id, stream_id, display):
+                self._streaming_last_patch[sk] = now
+
+    def _cleanup_streaming_state(self, chat_id: str, sk: str) -> None:
+        """Remove all streaming state entries for a given session."""
+        self._chat_to_req.pop(chat_id, None)
+        self._streaming_thinking.pop(sk, None)
+        self._streaming_chain.pop(sk, None)
+        self._streaming_buffers.pop(sk, None)
+        self._streaming_last_patch.pop(sk, None)
+        self._typing_start_time.pop(sk, None)
+
+    async def finalize_stream(
+        self,
+        chat_id: str,
+        final_text: str,
+        *,
+        thread_id: str | None = None,
+    ) -> bool:
+        """Send the final stream frame with integrated thinking/chain/reply."""
+        sk = self._make_session_key(chat_id, thread_id)
+        req_id = self._chat_to_req.get(chat_id)
+        if not req_id:
+            return False
+
+        self._cancel_thinking_task(req_id)
+
+        thinking = self._streaming_thinking.get(sk, "")
+        chain = self._streaming_chain.get(sk, [])
+
+        if thinking or chain:
+            think_lines: list[str] = []
+            if thinking:
+                preview = thinking.strip()[:500]
+                if len(preview) < len(thinking.strip()):
+                    preview += "..."
+                think_lines.append(f"💭 {preview}")
+            think_lines.extend(chain)
+            final_text = "<think>\n" + "\n".join(think_lines) + "\n</think>\n" + final_text
+
+        start = self._typing_start_time.get(sk)
+        if start:
+            elapsed = time.time() - start
+            final_text += f"\n\n---\n⏱ {elapsed:.1f}s"
+
+        msg = OutgoingMessage.text(
+            chat_id=chat_id, text=final_text,
+            metadata={"req_id": req_id},
+        )
+        try:
+            await self._send_stream_reply(req_id, final_text, msg)
+            return True
+        except Exception as e:
+            logger.error(f"[finalize_stream] Failed: {e}")
+            return False
+        finally:
+            self._cleanup_streaming_state(chat_id, sk)
 
     # ==================== Sending ====================
 
@@ -1471,6 +1693,31 @@ class WeWorkWsAdapter(ChannelAdapter):
         self._cancel_thinking_task(req_id)
 
         pre_stream_id = self._pre_streams.pop(req_id, None)
+
+        # If a pre-created stream has expired (>5.5 min since last send),
+        # skip stream protocol entirely and use response_url fallback.
+        _STREAM_EXPIRY_S = 330  # 5.5 min safety margin (WeCom hard limit is 6 min)
+        if pre_stream_id:
+            last_sent = self._last_stream_sent.get(pre_stream_id, 0)
+            if last_sent and (time.time() - last_sent) > _STREAM_EXPIRY_S:
+                logger.warning(
+                    f"[stream_reply] Pre-created stream {pre_stream_id[:8]} expired "
+                    f"({time.time() - last_sent:.0f}s since last send), using fallback"
+                )
+                self._stream_msg_count.pop(pre_stream_id, None)
+                self._last_stream_sent.pop(pre_stream_id, None)
+                ok = await self._response_url_fallback(req_id, text)
+                if ok:
+                    pending_media = self._pending_media_msgs.pop(req_id, [])
+                    for media_msg in pending_media:
+                        try:
+                            await self._send_reply_with_ack(req_id, media_msg, CMD_RESPONSE)
+                        except Exception:
+                            pass
+                    return f"fallback:{req_id}"
+                self._enqueue_pending_reply(req_id, text, message)
+                raise RuntimeError("WeWorkWS: stream expired and fallback failed")
+
         stream_id = pre_stream_id or secrets.token_hex(16)
 
         # D3: normalize think tags before sending
@@ -1547,8 +1794,10 @@ class WeWorkWsAdapter(ChannelAdapter):
                     logger.error(f"Stream reply failed at chunk {i}: {e}")
                     if i == 0:
                         ok = await self._response_url_fallback(req_id, text)
-                        if not ok:
-                            self._enqueue_pending_reply(req_id, text, message)
+                        if ok:
+                            logger.info(f"[stream_reply] Fallback via response_url succeeded, skipping raise")
+                            return
+                        self._enqueue_pending_reply(req_id, text, message)
                     raise RuntimeError(
                         f"WeWorkWS: stream reply failed at chunk {i}"
                     ) from e

@@ -286,6 +286,7 @@ function MessagesTab({ serviceRunning, apiBase }: { serviceRunning: boolean; api
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const topSentinelRef = useRef<HTMLDivElement>(null);
   const isFirstLoad = useRef(true);
+  const oldestLoadedOffset = useRef(0);
 
   const [inlineEditSessionId, setInlineEditSessionId] = useState<string | null>(null);
   const [inlineEditValue, setInlineEditValue] = useState("");
@@ -342,16 +343,18 @@ function MessagesTab({ serviceRunning, apiBase }: { serviceRunning: boolean; api
     return [];
   }, [serviceRunning, apiBase]);
 
-  const fetchMessages = useCallback(async (sessionId: string, limit = 50, offset = 0, df?: string, dt?: string) => {
+  const fetchMessages = useCallback(async (sessionId: string, limit = 50, offset = 0, df?: string, dt?: string, latest = false) => {
     if (!serviceRunning) return;
     try {
       const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
       if (df) params.set("date_from", df);
       if (dt) params.set("date_to", dt);
+      if (latest) params.set("latest", "true");
       const res = await safeFetch(`${apiBase}/api/im/sessions/${encodeURIComponent(sessionId)}/messages?${params}`);
       const data = await res.json();
       setMessages(data.messages || []);
       setTotalMessages(data.total || 0);
+      oldestLoadedOffset.current = data.offset ?? 0;
     } catch { /* ignore */ }
   }, [serviceRunning, apiBase]);
 
@@ -390,9 +393,9 @@ function MessagesTab({ serviceRunning, apiBase }: { serviceRunning: boolean; api
 
   useEffect(() => {
     if (!serviceRunning || !selectedSessionId) return;
-    fetchMessages(selectedSessionId, 50, 0, dateFrom || undefined, dateTo || undefined);
+    fetchMessages(selectedSessionId, 50, 0, dateFrom || undefined, dateTo || undefined, true);
     const msgTimer = setInterval(() => {
-      fetchMessages(selectedSessionId, 50, 0, dateFrom || undefined, dateTo || undefined);
+      fetchMessages(selectedSessionId, 50, 0, dateFrom || undefined, dateTo || undefined, true);
     }, IS_WEB ? 30_000 : 8000);
     return () => clearInterval(msgTimer);
   }, [serviceRunning, selectedSessionId, fetchMessages, dateFrom, dateTo]);
@@ -407,7 +410,7 @@ function MessagesTab({ serviceRunning, apiBase }: { serviceRunning: boolean; api
         if (selectedChannel && (!evtChannel || evtChannel === selectedChannel)) {
           fetchSessions(selectedChannel);
         }
-        if (selectedSessionId) fetchMessages(selectedSessionId);
+        if (selectedSessionId) fetchMessages(selectedSessionId, 50, 0, undefined, undefined, true);
       }
       if (event === "im:bot_config_changed") {
         if (selectedChannel) fetchSessions(selectedChannel);
@@ -424,7 +427,7 @@ function MessagesTab({ serviceRunning, apiBase }: { serviceRunning: boolean; api
       const first = list[0];
       setSelectedSessionId(first.sessionId);
       isFirstLoad.current = true;
-      fetchMessages(first.sessionId);
+      fetchMessages(first.sessionId, 50, 0, undefined, undefined, true);
     }
   }, [fetchSessions, fetchMessages]);
 
@@ -433,26 +436,29 @@ function MessagesTab({ serviceRunning, apiBase }: { serviceRunning: boolean; api
     setSelectMode(false);
     setSelectedMsgIds(new Set());
     isFirstLoad.current = true;
-    fetchMessages(sid);
+    fetchMessages(sid, 50, 0, undefined, undefined, true);
   }, [fetchMessages]);
 
   const handleLoadMore = useCallback(async () => {
-    if (!selectedSessionId || loadingMore) return;
+    if (!selectedSessionId || loadingMore || oldestLoadedOffset.current <= 0) return;
     const container = scrollContainerRef.current;
     const prevScrollHeight = container?.scrollHeight ?? 0;
     setLoadingMore(true);
     try {
-      const nextOffset = messages.length;
-      const params = new URLSearchParams({ limit: "50", offset: String(nextOffset) });
+      const batchSize = 50;
+      const newOffset = Math.max(0, oldestLoadedOffset.current - batchSize);
+      const actualLimit = oldestLoadedOffset.current - newOffset;
+      const params = new URLSearchParams({ limit: String(actualLimit), offset: String(newOffset) });
       if (dateFrom) params.set("date_from", dateFrom);
       if (dateTo) params.set("date_to", dateTo);
       const res = await safeFetch(
         `${apiBase}/api/im/sessions/${encodeURIComponent(selectedSessionId)}/messages?${params}`,
       );
       const data = await res.json();
-      const more: IMMessage[] = data.messages || [];
-      if (more.length) {
-        setMessages((prev) => [...prev, ...more]);
+      const older: IMMessage[] = data.messages || [];
+      if (older.length) {
+        oldestLoadedOffset.current = newOffset;
+        setMessages((prev) => [...older, ...prev]);
         requestAnimationFrame(() => {
           if (container) {
             container.scrollTop += container.scrollHeight - prevScrollHeight;
@@ -462,7 +468,7 @@ function MessagesTab({ serviceRunning, apiBase }: { serviceRunning: boolean; api
       setTotalMessages(data.total || totalMessages);
     } catch { /* ignore */ }
     setLoadingMore(false);
-  }, [apiBase, selectedSessionId, messages.length, totalMessages, loadingMore, dateFrom, dateTo]);
+  }, [apiBase, selectedSessionId, totalMessages, loadingMore, dateFrom, dateTo]);
 
   const handleDeleteMessages = useCallback(async () => {
     if (!selectedSessionId || selectedMsgIds.size === 0) return;
@@ -509,7 +515,7 @@ function MessagesTab({ serviceRunning, apiBase }: { serviceRunning: boolean; api
     if (!sentinel || !container) return;
     const observer = new IntersectionObserver(
       (entries) => {
-        if (entries[0]?.isIntersecting && messages.length < totalMessages && !loadingMore) {
+        if (entries[0]?.isIntersecting && oldestLoadedOffset.current > 0 && !loadingMore) {
           handleLoadMore();
         }
       },
@@ -517,7 +523,7 @@ function MessagesTab({ serviceRunning, apiBase }: { serviceRunning: boolean; api
     );
     observer.observe(sentinel);
     return () => observer.disconnect();
-  }, [messages.length, totalMessages, loadingMore, handleLoadMore]);
+  }, [totalMessages, loadingMore, handleLoadMore]);
 
   const handleDeleteSession = useCallback((s: IMSession, e?: React.MouseEvent) => {
     e?.stopPropagation();
@@ -887,7 +893,7 @@ function MessagesTab({ serviceRunning, apiBase }: { serviceRunning: boolean; api
               <div ref={scrollContainerRef} className="flex-1 overflow-auto px-4 py-3 space-y-3">
                 {/* Top sentinel for infinite scroll */}
                 <div ref={topSentinelRef} className="h-px" />
-                {messages.length < totalMessages && (
+                {oldestLoadedOffset.current > 0 && (
                   <div className="flex justify-center py-1">
                     {loadingMore && <Loader2 className="animate-spin size-4 text-muted-foreground" />}
                   </div>
@@ -1394,6 +1400,8 @@ export function BotConfigTab({ apiBase, multiAgentEnabled, onRequestRestart, ven
 
   const streamingEnabled = editingBot.credentials.streaming_enabled === "true" || editingBot.credentials.streaming_enabled === true;
   const groupStreamingEnabled = editingBot.credentials.group_streaming === "true" || editingBot.credentials.group_streaming === true;
+  const footerElapsed = editingBot.credentials.footer_elapsed !== "false" && editingBot.credentials.footer_elapsed !== false;
+  const footerStatus = editingBot.credentials.footer_status !== "false" && editingBot.credentials.footer_status !== false;
 
   return (
     <div className="p-5 relative">
@@ -1737,18 +1745,39 @@ export function BotConfigTab({ apiBase, multiAgentEnabled, onRequestRestart, ven
                     ))}
                   </div>
                 </details>
+
+                <div className="space-y-1.5">
+                  <Label>{t("telegram.footerTitle")}</Label>
+                  <label className="flex items-center justify-between p-2.5 rounded-lg border cursor-pointer select-none">
+                    <span className="text-sm">{t("telegram.footerElapsed")}</span>
+                    <Switch checked={footerElapsed} onCheckedChange={(v) => updateCredential("footer_elapsed", v ? "true" : "false")} />
+                  </label>
+                  <label className="flex items-center justify-between p-2.5 rounded-lg border cursor-pointer select-none">
+                    <span className="text-sm">{t("telegram.footerStatus")}</span>
+                    <Switch checked={footerStatus} onCheckedChange={(v) => updateCredential("footer_status", v ? "true" : "false")} />
+                  </label>
+                </div>
               </div>
             )}
 
             {/* QQ Bot extras */}
             {editingBot.type === "qqbot" && (
-              <label className="flex items-center gap-2 cursor-pointer select-none">
-                <Checkbox
-                  checked={editingBot.credentials.sandbox === "true" || editingBot.credentials.sandbox === true}
-                  onCheckedChange={(v) => updateCredential("sandbox", v ? "true" : "false")}
-                />
-                <span className="text-sm">{t("config.imQQBotSandbox")}</span>
-              </label>
+              <div className="space-y-3">
+                <label className="flex items-center gap-2 cursor-pointer select-none">
+                  <Checkbox
+                    checked={editingBot.credentials.sandbox === "true" || editingBot.credentials.sandbox === true}
+                    onCheckedChange={(v) => updateCredential("sandbox", v ? "true" : "false")}
+                  />
+                  <span className="text-sm">{t("config.imQQBotSandbox")}</span>
+                </label>
+                <div className="space-y-1.5">
+                  <Label>{t("qqbot.footerTitle")}</Label>
+                  <label className="flex items-center justify-between p-2.5 rounded-lg border cursor-pointer select-none">
+                    <span className="text-sm">{t("qqbot.footerElapsed")}</span>
+                    <Switch checked={footerElapsed} onCheckedChange={(v) => updateCredential("footer_elapsed", v ? "true" : "false")} />
+                  </label>
+                </div>
+              </div>
             )}
 
             {/* Feishu extras */}
@@ -1782,6 +1811,49 @@ export function BotConfigTab({ apiBase, multiAgentEnabled, onRequestRestart, ven
                   {(editingBot.credentials.group_response_mode === "smart" || editingBot.credentials.group_response_mode === "always") && (
                     <p className="text-[11px] text-amber-600 dark:text-amber-400 leading-relaxed">{t("feishu.groupModeHint")}</p>
                   )}
+                </div>
+                <div className="space-y-1.5">
+                  <Label>{t("feishu.footerTitle")}</Label>
+                  <label className="flex items-center justify-between p-2.5 rounded-lg border cursor-pointer select-none">
+                    <span className="text-sm">{t("feishu.footerElapsed")}</span>
+                    <Switch checked={footerElapsed} onCheckedChange={(v) => updateCredential("footer_elapsed", v ? "true" : "false")} />
+                  </label>
+                  <label className="flex items-center justify-between p-2.5 rounded-lg border cursor-pointer select-none">
+                    <span className="text-sm">{t("feishu.footerStatus")}</span>
+                    <Switch checked={footerStatus} onCheckedChange={(v) => updateCredential("footer_status", v ? "true" : "false")} />
+                  </label>
+                </div>
+              </div>
+            )}
+
+            {/* DingTalk extras */}
+            {editingBot.type === "dingtalk" && (
+              <div className="space-y-4">
+                <div className="border-t" />
+                <div className="space-y-1.5">
+                  <Label>{t("dingtalk.footerTitle")}</Label>
+                  <label className="flex items-center justify-between p-2.5 rounded-lg border cursor-pointer select-none">
+                    <span className="text-sm">{t("dingtalk.footerElapsed")}</span>
+                    <Switch checked={footerElapsed} onCheckedChange={(v) => updateCredential("footer_elapsed", v ? "true" : "false")} />
+                  </label>
+                  <label className="flex items-center justify-between p-2.5 rounded-lg border cursor-pointer select-none">
+                    <span className="text-sm">{t("dingtalk.footerStatus")}</span>
+                    <Switch checked={footerStatus} onCheckedChange={(v) => updateCredential("footer_status", v ? "true" : "false")} />
+                  </label>
+                </div>
+              </div>
+            )}
+
+            {/* WeChat extras */}
+            {editingBot.type === "wechat" && (
+              <div className="space-y-4">
+                <div className="border-t" />
+                <div className="space-y-1.5">
+                  <Label>{t("wechat.footerTitle")}</Label>
+                  <label className="flex items-center justify-between p-2.5 rounded-lg border cursor-pointer select-none">
+                    <span className="text-sm">{t("wechat.footerElapsed")}</span>
+                    <Switch checked={footerElapsed} onCheckedChange={(v) => updateCredential("footer_elapsed", v ? "true" : "false")} />
+                  </label>
                 </div>
               </div>
             )}
@@ -2037,6 +2109,8 @@ function BotCreationWizard({
     : bot.type;
   const streamingEnabled = bot.credentials.streaming_enabled === "true" || bot.credentials.streaming_enabled === true;
   const groupStreamingEnabled = bot.credentials.group_streaming === "true" || bot.credentials.group_streaming === true;
+  const footerElapsed = bot.credentials.footer_elapsed !== "false" && bot.credentials.footer_elapsed !== false;
+  const footerStatus = bot.credentials.footer_status !== "false" && bot.credentials.footer_status !== false;
   const credMissing = !areCredsFilled(bot.type, bot.credentials);
   const [credWarning, setCredWarning] = useState(false);
 
@@ -2346,6 +2420,18 @@ function BotCreationWizard({
                         ))}
                       </div>
                     </details>
+
+                    <div className="space-y-1.5">
+                      <Label>{t("telegram.footerTitle")}</Label>
+                      <label className="flex items-center justify-between p-2.5 rounded-lg border cursor-pointer select-none">
+                        <span className="text-sm">{t("telegram.footerElapsed")}</span>
+                        <Switch checked={footerElapsed} onCheckedChange={(v) => updateCredential("footer_elapsed", v ? "true" : "false")} />
+                      </label>
+                      <label className="flex items-center justify-between p-2.5 rounded-lg border cursor-pointer select-none">
+                        <span className="text-sm">{t("telegram.footerStatus")}</span>
+                        <Switch checked={footerStatus} onCheckedChange={(v) => updateCredential("footer_status", v ? "true" : "false")} />
+                      </label>
+                    </div>
                   </div>
                 )}
               </div>
@@ -2384,6 +2470,32 @@ function BotCreationWizard({
                         <p className="text-[11px] text-amber-600 dark:text-amber-400 leading-relaxed">{t("feishu.groupModeHint")}</p>
                       )}
                     </div>
+                    <div className="space-y-1.5">
+                      <Label>{t("feishu.footerTitle")}</Label>
+                      <label className="flex items-center justify-between p-2.5 rounded-lg border cursor-pointer select-none">
+                        <span className="text-sm">{t("feishu.footerElapsed")}</span>
+                        <Switch checked={footerElapsed} onCheckedChange={(v) => updateCredential("footer_elapsed", v ? "true" : "false")} />
+                      </label>
+                      <label className="flex items-center justify-between p-2.5 rounded-lg border cursor-pointer select-none">
+                        <span className="text-sm">{t("feishu.footerStatus")}</span>
+                        <Switch checked={footerStatus} onCheckedChange={(v) => updateCredential("footer_status", v ? "true" : "false")} />
+                      </label>
+                    </div>
+                  </div>
+                )}
+                {bot.type === "dingtalk" && (
+                  <div className="space-y-4">
+                    <div className="space-y-1.5">
+                      <Label>{t("dingtalk.footerTitle")}</Label>
+                      <label className="flex items-center justify-between p-2.5 rounded-lg border cursor-pointer select-none">
+                        <span className="text-sm">{t("dingtalk.footerElapsed")}</span>
+                        <Switch checked={footerElapsed} onCheckedChange={(v) => updateCredential("footer_elapsed", v ? "true" : "false")} />
+                      </label>
+                      <label className="flex items-center justify-between p-2.5 rounded-lg border cursor-pointer select-none">
+                        <span className="text-sm">{t("dingtalk.footerStatus")}</span>
+                        <Switch checked={footerStatus} onCheckedChange={(v) => updateCredential("footer_status", v ? "true" : "false")} />
+                      </label>
+                    </div>
                   </div>
                 )}
                 {bot.type === "qqbot" && (
@@ -2405,6 +2517,24 @@ function BotCreationWizard({
                         <ToggleGroupItem value="websocket">WebSocket</ToggleGroupItem>
                         <ToggleGroupItem value="webhook">Webhook</ToggleGroupItem>
                       </ToggleGroup>
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label>{t("qqbot.footerTitle")}</Label>
+                      <label className="flex items-center justify-between p-2.5 rounded-lg border cursor-pointer select-none">
+                        <span className="text-sm">{t("qqbot.footerElapsed")}</span>
+                        <Switch checked={footerElapsed} onCheckedChange={(v) => updateCredential("footer_elapsed", v ? "true" : "false")} />
+                      </label>
+                    </div>
+                  </div>
+                )}
+                {bot.type === "wechat" && (
+                  <div className="space-y-3">
+                    <div className="space-y-1.5">
+                      <Label>{t("wechat.footerTitle")}</Label>
+                      <label className="flex items-center justify-between p-2.5 rounded-lg border cursor-pointer select-none">
+                        <span className="text-sm">{t("wechat.footerElapsed")}</span>
+                        <Switch checked={footerElapsed} onCheckedChange={(v) => updateCredential("footer_elapsed", v ? "true" : "false")} />
+                      </label>
                     </div>
                   </div>
                 )}

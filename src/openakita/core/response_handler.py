@@ -61,7 +61,9 @@ def strip_tool_simulation_text(text: str) -> str:
     移除 LLM 在文本中模拟工具调用的内容。
 
     当使用不支持原生工具调用的备用模型时，LLM 可能在文本中
-    "模拟"工具调用。
+    "模拟"工具调用。支持两种情况：
+    1. 整行都是工具调用（直接移除）
+    2. 行内嵌入的 .tool_name(args)（从行尾剥离，保留前面的正文）
     """
     if not text:
         return text
@@ -69,9 +71,12 @@ def strip_tool_simulation_text(text: str) -> str:
     pattern1 = r"^\.?[a-z_]+\s*\(.*\)\s*$"
     pattern2 = r"^[a-z_]+:\d+[\{\(].*[\}\)]\s*$"
     pattern3 = r'^\{["\']?(tool|function|name)["\']?\s*:'
-    # 裸工具名：含下划线的标识符独占一行，如 "browser_open"、"web_search"
-    # 部分模型不格式化工具调用，仅输出函数名
     pattern4 = r"^[a-z][a-z0-9]*(?:_[a-z0-9]+)+$"
+
+    # 行内 .tool_name(args) 剥离：匹配行尾的 .tool_name(args) 部分
+    inline_dot_pattern = re.compile(
+        r"\s*\.[a-z][a-z0-9_]{2,}\s*\(.*\)\s*$", re.IGNORECASE
+    )
 
     lines = text.split("\n")
     cleaned_lines = []
@@ -95,7 +100,14 @@ def strip_tool_simulation_text(text: str) -> str:
             or re.match(pattern3, stripped, re.IGNORECASE)
             or re.match(pattern4, stripped)
         )
-        if not is_tool_sim:
+        if is_tool_sim:
+            continue
+
+        # 检查行尾是否嵌入了 .tool_name(args)（如混合文本+工具调用）
+        m = inline_dot_pattern.search(stripped)
+        if m and m.start() > 0:
+            cleaned_lines.append(stripped[:m.start()].rstrip())
+        else:
             cleaned_lines.append(line)
 
     return "\n".join(cleaned_lines).strip()

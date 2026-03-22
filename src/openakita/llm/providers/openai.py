@@ -473,7 +473,7 @@ class OpenAIProvider(LLMProvider):
                 input=args,
             ))
 
-        if tool_calls:
+        if tool_calls and stop_reason != StopReason.MAX_TOKENS:
             stop_reason = StopReason.TOOL_USE
 
         return LLMResponse(
@@ -845,7 +845,10 @@ class OpenAIProvider(LLMProvider):
 
         # 解析停止原因
         finish_reason = choice.get("finish_reason", "stop")
-        if has_tool_calls:
+        if has_tool_calls and finish_reason == "length":
+            # finish_reason=length + tool_calls = 输出被截断，工具参数可能不完整
+            stop_reason = StopReason.MAX_TOKENS
+        elif has_tool_calls:
             stop_reason = StopReason.TOOL_USE
         else:
             stop_reason_map = {

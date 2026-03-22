@@ -12,10 +12,10 @@ PERSONA_TOOLS = [
     {
         "name": "switch_persona",
         "category": "Persona",
-        "description": "切换人格预设角色。可用预设: default(默认助手), business(商务), tech_expert(技术专家), butler(管家), girlfriend(女友), boyfriend(男友), family(家人), jarvis(贾维斯)。当用户要求切换角色或沟通风格时使用。",
-        "detail": """切换 Agent 的人格预设角色。
+        "description": "切换人格预设或用户自创的 Agent 角色。内置预设: default/business/tech_expert/butler/girlfriend/boyfriend/family/jarvis。也支持用户自创的角色名称（如「诸葛亮」「翻译官」等）。当用户要求切换角色或沟通风格时使用。",
+        "detail": """切换 Agent 的人格角色。
 
-**可用预设**：
+**内置预设**：
 - default: 默认助手（专业友好）
 - business: 商务助理（正式高效）
 - tech_expert: 技术专家（严谨深度）
@@ -25,25 +25,18 @@ PERSONA_TOOLS = [
 - family: 家人感（亲切唠叨）
 - jarvis: 贾维斯（英式幽默、小叛逆、话唠、任务时严谨）
 
+也支持传入用户自创的 Agent 角色名称，系统会自动查找匹配的 Agent Profile。
+
 **适用场景**：
 - 用户要求切换角色/性格
-- 用户说"正式一点"/"随意一点"等""",
+- 用户说"正式一点"/"随意一点"等
+- 用户说"切换到诸葛亮"/"用XX角色"等""",
         "input_schema": {
             "type": "object",
             "properties": {
                 "preset_name": {
                     "type": "string",
-                    "description": "预设名称 (default/business/tech_expert/butler/girlfriend/boyfriend/family/jarvis)",
-                    "enum": [
-                        "default",
-                        "business",
-                        "tech_expert",
-                        "butler",
-                        "girlfriend",
-                        "boyfriend",
-                        "family",
-                        "jarvis",
-                    ],
+                    "description": "预设名称或用户自创的角色名称",
                 }
             },
             "required": ["preset_name"],

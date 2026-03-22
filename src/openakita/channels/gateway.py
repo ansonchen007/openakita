@@ -27,7 +27,7 @@ from typing import TYPE_CHECKING, Optional
 from ..sessions import Session, SessionManager
 from .base import ChannelAdapter
 from .group_response import GroupResponseMode, SmartModeThrottle
-from .types import OutgoingMessage, UnifiedMessage
+from .types import MediaStatus, OutgoingMessage, UnifiedMessage
 
 
 def _notify_im_event(event: str, data: dict | None = None) -> None:
@@ -2720,8 +2720,11 @@ class MessageGateway:
                 async with sem:
                     local_path = await adapter.download_media(img)
                     img.local_path = str(local_path)
+                    img.status = MediaStatus.READY
                     logger.info(f"Image downloaded: {img.local_path}")
             except Exception as e:
+                img.status = MediaStatus.FAILED
+                img.description = f"下载失败: {e}"
                 logger.error(f"Failed to download image: {e}")
 
         async def _process_video(vid) -> None:
@@ -2731,8 +2734,11 @@ class MessageGateway:
                 async with sem:
                     local_path = await adapter.download_media(vid)
                     vid.local_path = str(local_path)
+                    vid.status = MediaStatus.READY
                     logger.info(f"Video downloaded: {vid.local_path}")
             except Exception as e:
+                vid.status = MediaStatus.FAILED
+                vid.description = f"下载失败: {e}"
                 logger.error(f"Failed to download video: {e}")
 
         async def _process_file(fil) -> None:
@@ -2742,8 +2748,11 @@ class MessageGateway:
                 async with sem:
                     local_path = await adapter.download_media(fil)
                     fil.local_path = str(local_path)
+                    fil.status = MediaStatus.READY
                     logger.info(f"File downloaded: {fil.local_path}")
             except Exception as e:
+                fil.status = MediaStatus.FAILED
+                fil.description = f"下载失败: {e}"
                 logger.error(f"Failed to download file: {e}")
 
         tasks = []
@@ -2943,6 +2952,17 @@ class MessageGateway:
                     except Exception as e:
                         logger.error(f"Failed to read image: {e}")
 
+            # 检查图片下载失败
+            failed_images = [
+                img for img in message.content.images
+                if img.status == MediaStatus.FAILED
+            ]
+            if failed_images:
+                reasons = "; ".join(img.description or "未知原因" for img in failed_images)
+                notice = f"[用户发送了{len(failed_images)}张图片，但下载失败: {reasons}]"
+                input_text = f"{input_text}\n\n{notice}" if input_text.strip() else notice
+                logger.warning(f"Image download failed, notifying agent: {reasons}")
+
             # 如果有图片，构建多模态输入
             if images_data:
                 # 存储图片数据到 session，供 Agent 使用
@@ -3001,6 +3021,20 @@ class MessageGateway:
                     except Exception as e:
                         logger.error(f"Failed to process video: {e}")
 
+            # 检查视频下载失败
+            failed_videos = [
+                vid for vid in message.content.videos
+                if vid.status == MediaStatus.FAILED
+            ]
+            if failed_videos:
+                reasons = "; ".join(vid.description or "未知原因" for vid in failed_videos)
+                notice = (
+                    f"[用户发送了{len(failed_videos)}个视频，但下载失败: {reasons}。"
+                    f"请告知用户视频下载失败，建议发送较小的视频文件。]"
+                )
+                input_text = f"{input_text}\n\n{notice}" if input_text.strip() else notice
+                logger.warning(f"Video download failed, notifying agent: {reasons}")
+
             if videos_data:
                 session.set_metadata("pending_videos", videos_data)
                 if not input_text.strip():
@@ -3034,6 +3068,17 @@ class MessageGateway:
                             input_text += f"\n[附件: {fil.filename or Path(fil.local_path).name} ({mime or suffix})]"
                     except Exception as e:
                         logger.error(f"Failed to process file: {e}")
+
+            # 检查文件下载失败
+            failed_files = [
+                fil for fil in message.content.files
+                if fil.status == MediaStatus.FAILED
+            ]
+            if failed_files:
+                reasons = "; ".join(fil.description or "未知原因" for fil in failed_files)
+                notice = f"[用户发送了{len(failed_files)}个文件，但下载失败: {reasons}]"
+                input_text = f"{input_text}\n\n{notice}" if input_text.strip() else notice
+                logger.warning(f"File download failed, notifying agent: {reasons}")
 
             if files_data:
                 session.set_metadata("pending_files", files_data)
@@ -3240,13 +3285,13 @@ class MessageGateway:
     # 分片间发送间隔（秒），避免触发平台限流
     _SPLIT_SEND_INTERVAL: dict[str, float] = {
         "telegram": 0.5,
-        "wechat":   1.5,
+        "wechat":   2.5,
     }
     _DEFAULT_SPLIT_INTERVAL = 0.15
 
     # 进度消息节流间隔（秒）— 不支持卡片更新的平台需要更高的节流间隔
     _CHANNEL_PROGRESS_THROTTLE: dict[str, float] = {
-        "wechat": 8.0,
+        "wechat": 12.0,
     }
 
     @staticmethod
@@ -3320,6 +3365,12 @@ class MessageGateway:
         interval = self._SPLIT_SEND_INTERVAL.get(
             base_channel, self._DEFAULT_SPLIT_INTERVAL
         )
+
+        footer = adapter.format_final_footer(
+            original.chat_id, thread_id=original.thread_id,
+        )
+        if footer and messages:
+            messages[-1] = messages[-1] + footer
 
         outgoing_meta = dict(original.metadata) if original.metadata else {}
         if original.channel_user_id:
@@ -3695,6 +3746,9 @@ class MessageGateway:
         if not card_id:
             return False
 
+        if hasattr(adapter, "_typing_status"):
+            adapter._typing_status[sk] = "调用工具"
+
         session_key = session.session_key
         accum = self._progress_card_accum.setdefault(session_key, [])
         accum.extend(new_lines)
@@ -3703,7 +3757,7 @@ class MessageGateway:
 
         display = "\n".join(accum)
         try:
-            return await adapter._patch_card_content(card_id, display)
+            return await adapter._patch_card_content(card_id, display, sk)
         except Exception:
             return False
 

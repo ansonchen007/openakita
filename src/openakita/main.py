@@ -972,6 +972,15 @@ async def stop_im_channels(*, graceful: bool = True, drain_timeout: float = 30.0
     """
     global _message_gateway, _session_manager, _orchestrator, _desktop_pool
 
+    # Gateway drain MUST happen first — agents and orchestrator must stay alive
+    # so in-flight IM responses can finish sending before we tear down the pool.
+    if _message_gateway:
+        if graceful:
+            await _message_gateway.drain(timeout=drain_timeout)
+        else:
+            await _message_gateway.stop()
+        logger.info("MessageGateway stopped")
+
     if _desktop_pool:
         try:
             await _desktop_pool.stop()
@@ -985,13 +994,6 @@ async def stop_im_channels(*, graceful: bool = True, drain_timeout: float = 30.0
         except Exception as e:
             logger.warning(f"Orchestrator shutdown error: {e}")
         _orchestrator = None
-
-    if _message_gateway:
-        if graceful:
-            await _message_gateway.drain(timeout=drain_timeout)
-        else:
-            await _message_gateway.stop()
-        logger.info("MessageGateway stopped")
 
     if _session_manager:
         await _session_manager.stop()

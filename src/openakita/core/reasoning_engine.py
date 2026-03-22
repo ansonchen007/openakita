@@ -43,6 +43,7 @@ from .resource_budget import BudgetAction, ResourceBudget, create_budget_from_se
 from .supervisor import RuntimeSupervisor
 from .token_tracking import TokenTrackingContext, reset_tracking_context, set_tracking_context
 from .tool_executor import ToolExecutor
+from ..llm.converters.tools import PARSE_ERROR_KEY
 
 logger = logging.getLogger(__name__)
 
@@ -123,6 +124,7 @@ class ReasoningEngine:
         # Checkpoint 管理
         self._checkpoints: list[Checkpoint] = []
         self._tool_failure_counter: dict[str, int] = {}  # tool_name -> consecutive_failures
+        self._consecutive_truncation_count: int = 0  # 连续截断计数（防止截断→回滚死循环）
 
         # 跨 rollback 的持久性失败计数器（rollback 不会清除）
         # 用于检测 "write_file 因截断反复失败" 等跨 rollback 循环
@@ -898,6 +900,36 @@ class ReasoningEngine:
                 )
                 _iter_trace["truncated"] = True
 
+                # 自动扩容 max_tokens 并重试被完全截断的工具调用
+                if decision.type == DecisionType.TOOL_CALLS:
+                    truncated_calls = [
+                        tc for tc in decision.tool_calls
+                        if isinstance(tc.get("input"), dict) and PARSE_ERROR_KEY in tc["input"]
+                    ]
+                    _current_max = self._brain.max_tokens or 16384
+                    _max_ceiling = min(_current_max * 3, 65536)
+                    if truncated_calls and len(truncated_calls) == len(decision.tool_calls):
+                        _new_max = min(_current_max * 2, _max_ceiling)
+                        if _new_max > _current_max:
+                            logger.warning(
+                                f"[ReAct] Iter {iteration+1} — All {len(truncated_calls)} tool "
+                                f"calls truncated. Auto-increasing max_tokens: "
+                                f"{_current_max} → {_new_max} and retrying"
+                            )
+                            self._brain.max_tokens = _new_max
+                            react_trace.append(_iter_trace)
+                            continue
+                    elif truncated_calls:
+                        _new_max = min(int(_current_max * 1.5), _max_ceiling)
+                        if _new_max > _current_max:
+                            logger.warning(
+                                f"[ReAct] Iter {iteration+1} — "
+                                f"{len(truncated_calls)}/{len(decision.tool_calls)} tool calls "
+                                f"truncated. Increasing max_tokens for next iteration: "
+                                f"{_current_max} → {_new_max}"
+                            )
+                            self._brain.max_tokens = _new_max
+
             # ==================== 决策分支 ====================
 
             if decision.type == DecisionType.FINAL_ANSWER:
@@ -1244,15 +1276,33 @@ class ReasoningEngine:
                         f"[PersistentFail] {_tool_names} exceeded persistent fail limit "
                         f"({self.PERSISTENT_FAIL_LIMIT}), injecting strategy switch"
                     )
-                    # 重置计数器以给新策略一次机会
                     for name in _persistent_exceeded:
                         self._persistent_tool_failures[name] = 0
                     self._tool_failure_counter.clear()
                     continue
 
-                # 检查是否应该回滚
+                # 检测截断错误（PARSE_ERROR_KEY）— 截断导致的失败不应触发回滚，
+                # 因为回滚会丢弃错误反馈，导致 LLM 重复生成同样的超长内容形成死循环
+                _has_truncation = any(
+                    isinstance(tc.get("input"), dict) and PARSE_ERROR_KEY in tc["input"]
+                    for tc in decision.tool_calls
+                )
+                if _has_truncation:
+                    self._consecutive_truncation_count += 1
+                    for tc in decision.tool_calls:
+                        if isinstance(tc.get("input"), dict) and PARSE_ERROR_KEY in tc["input"]:
+                            self._tool_failure_counter.pop(tc.get("name", ""), None)
+                    logger.info(
+                        f"[ReAct] Iter {iteration+1} — Tool args truncated "
+                        f"(count: {self._consecutive_truncation_count}), "
+                        f"skipping rollback to preserve error feedback"
+                    )
+                else:
+                    self._consecutive_truncation_count = 0
+
+                # 检查是否应该回滚 — 截断错误不回滚
                 should_rb, rb_reason = self._should_rollback(tool_results)
-                if should_rb:
+                if should_rb and not _has_truncation:
                     rollback_result = self._rollback(rb_reason)
                     if rollback_result:
                         working_messages, _ = rollback_result
@@ -1271,6 +1321,22 @@ class ReasoningEngine:
                     "role": "user",
                     "content": tool_results,
                 })
+
+                # 连续截断 >= 2 次：注入强制分拆指导，打破死循环
+                if _has_truncation and self._consecutive_truncation_count >= 2:
+                    _split_guidance = (
+                        "⚠️ 你的工具调用参数因内容过长被 API 反复截断（已连续 "
+                        f"{self._consecutive_truncation_count} 次）。你必须立即改变策略：\n"
+                        "1. 将大文件拆分为多次 write_file 调用（每次不超过 2000 行）\n"
+                        "2. 先创建文件框架，再用 edit_file 逐段补充内容\n"
+                        "3. 减少内联 CSS/JS，使用简洁实现\n"
+                        "4. 如果内容确实很长，考虑用 Markdown 替代 HTML"
+                    )
+                    working_messages.append({"role": "user", "content": _split_guidance})
+                    logger.warning(
+                        f"[ReAct] Injected split guidance after "
+                        f"{self._consecutive_truncation_count} consecutive truncations"
+                    )
 
                 # Supervisor: 记录工具调用数据
                 # 使用 decision.tool_calls 和 tool_results 按索引对齐，
@@ -1855,6 +1921,37 @@ class ReasoningEngine:
                     )
                     _iter_trace["truncated"] = True
 
+                    # 自动扩容 max_tokens 并重试（与 run() 一致）
+                    if decision.type == DecisionType.TOOL_CALLS:
+                        truncated_calls = [
+                            tc for tc in decision.tool_calls
+                            if isinstance(tc.get("input"), dict) and PARSE_ERROR_KEY in tc["input"]
+                        ]
+                        _current_max = self._brain.max_tokens or 16384
+                        _max_ceiling = min(_current_max * 3, 65536)
+                        if truncated_calls and len(truncated_calls) == len(decision.tool_calls):
+                            _new_max = min(_current_max * 2, _max_ceiling)
+                            if _new_max > _current_max:
+                                logger.warning(
+                                    f"[ReAct-Stream] Iter {_iteration+1} — All "
+                                    f"{len(truncated_calls)} tool calls truncated. "
+                                    f"Auto-increasing max_tokens: "
+                                    f"{_current_max} → {_new_max} and retrying"
+                                )
+                                self._brain.max_tokens = _new_max
+                                react_trace.append(_iter_trace)
+                                continue
+                        elif truncated_calls:
+                            _new_max = min(int(_current_max * 1.5), _max_ceiling)
+                            if _new_max > _current_max:
+                                logger.warning(
+                                    f"[ReAct-Stream] Iter {_iteration+1} — "
+                                    f"{len(truncated_calls)}/{len(decision.tool_calls)} tool "
+                                    f"calls truncated. Increasing max_tokens for next "
+                                    f"iteration: {_current_max} → {_new_max}"
+                                )
+                                self._brain.max_tokens = _new_max
+
                 # ==================== FINAL_ANSWER ====================
                 if decision.type == DecisionType.FINAL_ANSWER:
                     consecutive_tool_rounds = 0
@@ -2243,9 +2340,27 @@ class ReasoningEngine:
                     except ValueError:
                         state.status = TaskStatus.OBSERVING
 
-                    # --- Rollback 检查（与 run() 一致） ---
+                    # --- 截断检测（与 run() 一致）---
+                    _has_truncation = any(
+                        isinstance(tc.get("input"), dict) and PARSE_ERROR_KEY in tc["input"]
+                        for tc in decision.tool_calls
+                    )
+                    if _has_truncation:
+                        self._consecutive_truncation_count += 1
+                        for tc in decision.tool_calls:
+                            if isinstance(tc.get("input"), dict) and PARSE_ERROR_KEY in tc["input"]:
+                                self._tool_failure_counter.pop(tc.get("name", ""), None)
+                        logger.info(
+                            f"[ReAct-Stream] Iter {_iteration+1} — Tool args truncated "
+                            f"(count: {self._consecutive_truncation_count}), "
+                            f"skipping rollback"
+                        )
+                    else:
+                        self._consecutive_truncation_count = 0
+
+                    # --- Rollback 检查（与 run() 一致）— 截断错误不回滚 ---
                     should_rb, rb_reason = self._should_rollback(tool_results_for_msg)
-                    if should_rb:
+                    if should_rb and not _has_truncation:
                         rollback_result = self._rollback(rb_reason)
                         if rollback_result:
                             working_messages, _ = rollback_result
@@ -2270,6 +2385,22 @@ class ReasoningEngine:
                         "role": "user",
                         "content": tool_results_for_msg,
                     })
+
+                    # 连续截断 >= 2 次：注入强制分拆指导（与 run() 一致）
+                    if _has_truncation and self._consecutive_truncation_count >= 2:
+                        _split_guidance = (
+                            "⚠️ 你的工具调用参数因内容过长被 API 反复截断（已连续 "
+                            f"{self._consecutive_truncation_count} 次）。你必须立即改变策略：\n"
+                            "1. 将大文件拆分为多次 write_file 调用（每次不超过 2000 行）\n"
+                            "2. 先创建文件框架，再用 edit_file 逐段补充内容\n"
+                            "3. 减少内联 CSS/JS，使用简洁实现\n"
+                            "4. 如果内容确实很长，考虑用 Markdown 替代 HTML"
+                        )
+                        working_messages.append({"role": "user", "content": _split_guidance})
+                        logger.warning(
+                            f"[ReAct-Stream] Injected split guidance after "
+                            f"{self._consecutive_truncation_count} consecutive truncations"
+                        )
 
                     # === 统一处理 skip 反思 + 用户插入消息 ===
                     if state:
@@ -3024,6 +3155,35 @@ class ReasoningEngine:
                         )
             except Exception as e:
                 logger.debug(f"[_parse_decision] Thinking tool-call check failed: {e}")
+
+        # 防御层：从 text_content 中提取嵌入的工具调用（Python dot-style 等）。
+        # 部分模型（如 qwen3-coder, qwen3.5）不使用原生 function calling，
+        # 而是在文本中输出 .web_search(query="...") 风格的工具调用。
+        if not tool_calls and text_content:
+            try:
+                from ..llm.converters.tools import has_text_tool_calls, parse_text_tool_calls
+                if has_text_tool_calls(text_content):
+                    _clean, embedded_tool_calls = parse_text_tool_calls(text_content)
+                    if embedded_tool_calls:
+                        text_content = _clean
+                        for tc in embedded_tool_calls:
+                            tool_calls.append({
+                                "id": tc.id,
+                                "name": tc.name,
+                                "input": tc.input,
+                            })
+                            assistant_content.append({
+                                "type": "tool_use",
+                                "id": tc.id,
+                                "name": tc.name,
+                                "input": tc.input,
+                            })
+                        logger.warning(
+                            f"[_parse_decision] Recovered {len(embedded_tool_calls)} tool calls "
+                            f"from text content: {[tc.name for tc in embedded_tool_calls]}"
+                        )
+            except Exception as e:
+                logger.debug(f"[_parse_decision] Text tool-call check failed: {e}")
 
         # 防御层：剥离 text_content 末尾的裸工具名。
         # 部分模型会在 content 中输出 "用户原文\nbrowser_open" 这类垃圾，

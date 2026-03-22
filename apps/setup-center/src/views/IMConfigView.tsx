@@ -10,6 +10,7 @@ import { copyToClipboard } from "../utils/clipboard";
 import { BotConfigTab } from "./IMView";
 import { cn } from "@/lib/utils";
 import { AlertCircle, BookOpen, BrainCircuit, ExternalLink, Info } from "lucide-react";
+import { openExternalUrl } from "../platform";
 
 type IMConfigViewProps = {
   envDraft: EnvMap;
@@ -118,15 +119,15 @@ export function IMConfigView(props: IMConfigViewProps) {
                 <TooltipProvider delayDuration={200}>
                   <Tooltip>
                     <TooltipTrigger asChild>
-                      <a
-                        href={p.docUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-muted-foreground hover:text-foreground transition-colors"
-                        onClick={(e) => e.stopPropagation()}
+                      <span
+                        className="text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          openExternalUrl(p.docUrl);
+                        }}
                       >
                         <ExternalLink size={13} />
-                      </a>
+                      </span>
                     </TooltipTrigger>
                     <TooltipContent side="top" className="text-xs">
                       {t("config.imDoc")} — {p.docUrl}

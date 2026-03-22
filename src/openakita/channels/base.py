@@ -179,6 +179,14 @@ class ChannelAdapter(ABC):
         )
         return await self.send_message(message)
 
+    def format_final_footer(self, chat_id: str, thread_id: str | None = None) -> str | None:
+        """返回追加到最终回复末尾的 footer 文本（如耗时统计）。
+
+        默认返回 None（不追加）。子类可覆写此方法，返回的文本会被 gateway
+        拼接到最后一条分片消息末尾，并在调用后自动重置内部计时器。
+        """
+        return None
+
     # ==================== 媒体处理 ====================
 
     @abstractmethod
