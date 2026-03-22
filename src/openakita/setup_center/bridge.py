@@ -74,6 +74,12 @@ async def _list_models_openai(api_key: str, base_url: str, provider_slug: str | 
         is_dashscope = slug in {"dashscope", "dashscope-intl"} or "dashscope.aliyuncs.com" in b
         return is_dashscope and "coding" in b
 
+    def _is_qianfan_coding_plan_provider() -> bool:
+        slug = (provider_slug or "").strip().lower()
+        b = (base_url or "").strip().lower()
+        is_qianfan = slug == "qianfan" or "qianfan.baidubce.com" in b
+        return is_qianfan and "coding" in b
+
     def _minimax_fallback_models() -> list[dict]:
         # MiniMax Anthropic/OpenAI 兼容文档仅列出固定模型，且未提供 /models 列表接口。
         ids = [
@@ -93,6 +99,22 @@ async def _list_models_openai(api_key: str, base_url: str, provider_slug: str | 
         ]
         out.sort(key=lambda x: x["id"])
         return out
+
+    def _qianfan_coding_plan_fallback_models() -> list[dict]:
+        ids = [
+            "kimi-k2.5",
+            "deepseek-v3.2",
+            "glm-5",
+            "minimax-m2.5",
+        ]
+        return [
+            {
+                "id": mid,
+                "name": mid,
+                "capabilities": infer_capabilities(mid, provider_slug="qianfan"),
+            }
+            for mid in ids
+        ]
 
     def _volc_coding_plan_fallback_models() -> list[dict]:
         ids = [
@@ -156,6 +178,8 @@ async def _list_models_openai(api_key: str, base_url: str, provider_slug: str | 
         return _volc_coding_plan_fallback_models()
     if _is_dashscope_coding_plan_provider():
         return _dashscope_coding_plan_fallback_models()
+    if _is_qianfan_coding_plan_provider():
+        return _qianfan_coding_plan_fallback_models()
     if _is_longcat_provider():
         return _longcat_fallback_models()
 
@@ -231,6 +255,12 @@ async def _list_models_anthropic(api_key: str, base_url: str, provider_slug: str
         is_dashscope = slug in {"dashscope", "dashscope-intl"} or "dashscope.aliyuncs.com" in b
         return is_dashscope and "coding" in b
 
+    def _is_qianfan_coding_plan_provider() -> bool:
+        slug = (provider_slug or "").strip().lower()
+        b = (base_url or "").strip().lower()
+        is_qianfan = slug == "qianfan" or "qianfan.baidubce.com" in b
+        return is_qianfan and "coding" in b
+
     def _minimax_fallback_models() -> list[dict]:
         ids = [
             "MiniMax-M2.5",
@@ -244,6 +274,22 @@ async def _list_models_anthropic(api_key: str, base_url: str, provider_slug: str
                 "id": mid,
                 "name": mid,
                 "capabilities": infer_capabilities(mid, provider_slug="minimax"),
+            }
+            for mid in ids
+        ]
+
+    def _qianfan_coding_plan_fallback_models() -> list[dict]:
+        ids = [
+            "kimi-k2.5",
+            "deepseek-v3.2",
+            "glm-5",
+            "minimax-m2.5",
+        ]
+        return [
+            {
+                "id": mid,
+                "name": mid,
+                "capabilities": infer_capabilities(mid, provider_slug="qianfan"),
             }
             for mid in ids
         ]
@@ -306,6 +352,8 @@ async def _list_models_anthropic(api_key: str, base_url: str, provider_slug: str
         return _volc_coding_plan_fallback_models()
     if _is_dashscope_coding_plan_provider():
         return _dashscope_coding_plan_fallback_models()
+    if _is_qianfan_coding_plan_provider():
+        return _qianfan_coding_plan_fallback_models()
     if _is_longcat_provider():
         return _longcat_fallback_models()
 
@@ -656,7 +704,11 @@ def ensure_channel_deps(workspace_dir: str) -> None:
     import subprocess
 
     from openakita.python_compat import patch_simplejson_jsondecodeerror
-    from openakita.runtime_env import get_channel_deps_dir, get_python_executable, inject_module_paths_runtime
+    from openakita.runtime_env import (
+        get_channel_deps_dir,
+        get_python_executable,
+        inject_module_paths_runtime,
+    )
 
     def _build_pip_env(py_path: Path) -> dict[str, str]:
         e = os.environ.copy()
