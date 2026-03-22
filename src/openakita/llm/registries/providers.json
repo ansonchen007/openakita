@@ -182,6 +182,8 @@
     "slug": "qianfan",
     "api_type": "openai",
     "default_base_url": "https://qianfan.baidubce.com/v2",
+    "coding_plan_base_url": "https://qianfan.baidubce.com/v2/coding",
+    "coding_plan_api_type": "openai",
     "api_key_env_suggestion": "QIANFAN_API_KEY",
     "supports_model_list": true,
     "supports_capability_api": false,

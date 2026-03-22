@@ -5,8 +5,10 @@ import {
   isLocalProvider, localProviderPlaceholderKey, friendlyFetchError,
   fetchModelsDirectly, safeFetch,
   isMiniMaxProvider, isVolcCodingPlanProvider, isDashScopeCodingPlanProvider,
-  isLongCatProvider, miniMaxFallbackModels, volcCodingPlanFallbackModels,
-  dashScopeCodingPlanFallbackModels, longCatFallbackModels,
+  isQianFanCodingPlanProvider, isLongCatProvider,
+  miniMaxFallbackModels, volcCodingPlanFallbackModels,
+  dashScopeCodingPlanFallbackModels, qianFanCodingPlanFallbackModels,
+  longCatFallbackModels,
 } from "../providers";
 import {
   envKeyFromSlug, nextEnvKeyName, suggestEndpointName, envGet, envSet,
@@ -273,6 +275,10 @@ export function LLMView(props: LLMViewProps) {
     }
     if (isDashScopeCodingPlanProvider(selectedProvider.slug, effectiveBaseUrl)) {
       setModels(dashScopeCodingPlanFallbackModels(selectedProvider.slug));
+      return;
+    }
+    if (isQianFanCodingPlanProvider(selectedProvider.slug, effectiveBaseUrl)) {
+      setModels(qianFanCodingPlanFallbackModels(selectedProvider.slug));
       return;
     }
     if (isLongCatProvider(selectedProvider.slug, effectiveBaseUrl)) {
@@ -1794,7 +1800,7 @@ export function LLMView(props: LLMViewProps) {
                   if (cp) {
                     if (v && cp.coding_plan_base_url) {
                       setCompilerBaseUrl(cp.coding_plan_base_url);
-                      setCompilerApiType("anthropic");
+                      setCompilerApiType((cp.coding_plan_api_type as "openai" | "anthropic") || "anthropic");
                     } else {
                       setCompilerBaseUrl(cp.default_base_url || "");
                       setCompilerApiType((cp.api_type as "openai" | "anthropic") || "openai");
