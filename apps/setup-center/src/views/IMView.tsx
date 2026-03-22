@@ -18,6 +18,7 @@ import { IS_WEB, onWsEvent } from "../platform";
 import { FeishuQRModal } from "../components/FeishuQRModal";
 import { QQBotQRModal } from "../components/QQBotQRModal";
 import { WecomQRModal } from "../components/WecomQRModal";
+import { WechatQRModal } from "../components/WechatQRModal";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -97,7 +98,7 @@ type AgentProfile = {
 
 const DEFAULT_API = "http://127.0.0.1:18900";
 
-const BOT_TYPES = ["wework", "wework_ws", "qqbot", "feishu", "dingtalk", "telegram", "onebot", "onebot_reverse"] as const;
+const BOT_TYPES = ["wechat", "wework", "wework_ws", "qqbot", "feishu", "dingtalk", "telegram", "onebot", "onebot_reverse"] as const;
 
 const BOT_TYPE_LABEL_KEYS: Record<string, string> = {
   feishu: "im.botTypeFeishu",
@@ -108,6 +109,7 @@ const BOT_TYPE_LABEL_KEYS: Record<string, string> = {
   onebot: "im.botTypeOnebotForward",
   onebot_reverse: "im.botTypeOnebotReverse",
   qqbot: "im.botTypeQQBot",
+  wechat: "im.botTypeWechat",
 };
 
 const WEWORK_TYPES = new Set(["wework", "wework_ws"]);
@@ -151,6 +153,9 @@ const CREDENTIAL_FIELDS: Record<string, { key: string; label: string; secret?: b
   qqbot: [
     { key: "app_id", label: "App ID" },
     { key: "app_secret", label: "App Secret", secret: true },
+  ],
+  wechat: [
+    { key: "token", label: "Token", secret: true, placeholder: "wechat.tokenHint" },
   ],
 };
 
@@ -1129,7 +1134,7 @@ function GroupPolicyTab({ apiBase }: { apiBase: string }) {
 
 // ─── Bot Configuration Tab ──────────────────────────────────────────────
 
-export function BotConfigTab({ apiBase, multiAgentEnabled, onRequestRestart, venvDir, apiBaseUrl, enabledChannels }: { apiBase: string; multiAgentEnabled: boolean; onRequestRestart?: () => void; venvDir?: string; apiBaseUrl?: string; enabledChannels?: string[] }) {
+export function BotConfigTab({ apiBase, onRequestRestart, venvDir, apiBaseUrl }: { apiBase: string; multiAgentEnabled?: boolean; onRequestRestart?: () => void; venvDir?: string; apiBaseUrl?: string; enabledChannels?: string[] }) {
   const { t } = useTranslation();
   const [bots, setBots] = useState<IMBot[]>([]);
   const [profiles, setProfiles] = useState<AgentProfile[]>([]);
@@ -1143,6 +1148,7 @@ export function BotConfigTab({ apiBase, multiAgentEnabled, onRequestRestart, ven
   const [showFeishuQR, setShowFeishuQR] = useState(false);
   const [showQQBotQR, setShowQQBotQR] = useState(false);
   const [showWecomQR, setShowWecomQR] = useState(false);
+  const [showWechatQR, setShowWechatQR] = useState(false);
   const [tgPairingCode, setTgPairingCode] = useState<string | null>(null);
   const [tgPairingLoading, setTgPairingLoading] = useState(false);
 
@@ -1342,15 +1348,6 @@ export function BotConfigTab({ apiBase, multiAgentEnabled, onRequestRestart, ven
   const streamingEnabled = editingBot.credentials.streaming_enabled === "true" || editingBot.credentials.streaming_enabled === true;
   const groupStreamingEnabled = editingBot.credentials.group_streaming === "true" || editingBot.credentials.group_streaming === true;
 
-  if (!multiAgentEnabled) {
-    return (
-      <div className="flex flex-col items-center justify-center py-10 text-muted-foreground opacity-50">
-        <IconBot size={48} />
-        <div className="mt-3 font-bold">{t("im.needMultiAgent")}</div>
-      </div>
-    );
-  }
-
   return (
     <div className="p-5 relative">
       {/* Header */}
@@ -1448,8 +1445,8 @@ export function BotConfigTab({ apiBase, multiAgentEnabled, onRequestRestart, ven
       {/* Editor Sheet */}
       <Sheet open={editorOpen} onOpenChange={(open) => { if (!open) closeEditor(); }}>
         <SheetContent side="right" className="sm:max-w-md flex flex-col"
-          onPointerDownOutside={(e) => { if (showFeishuQR || showQQBotQR || showWecomQR) e.preventDefault(); }}
-          onInteractOutside={(e) => { if (showFeishuQR || showQQBotQR || showWecomQR) e.preventDefault(); }}
+          onPointerDownOutside={(e) => { if (showFeishuQR || showQQBotQR || showWecomQR || showWechatQR) e.preventDefault(); }}
+          onInteractOutside={(e) => { if (showFeishuQR || showQQBotQR || showWecomQR || showWechatQR) e.preventDefault(); }}
         >
           <SheetHeader>
             <SheetTitle>{isCreating ? t("im.createBot") : t("im.editBot")}</SheetTitle>
@@ -1489,7 +1486,6 @@ export function BotConfigTab({ apiBase, multiAgentEnabled, onRequestRestart, ven
                 <SelectTrigger className="w-full"><SelectValue placeholder={t("im.botTypePlaceholder")} /></SelectTrigger>
                 <SelectContent>
                   {BOT_TYPES.filter((bt) => bt !== "wework" && bt !== "onebot")
-                    .filter((bt) => !enabledChannels || enabledChannels.includes(bt))
                     .map((bt) => (
                     <SelectItem key={bt} value={bt}>
                       {bt === "wework_ws" ? t("im.botTypeWework") : bt === "onebot_reverse" ? t("im.botTypeOnebot") : t(BOT_TYPE_LABEL_KEYS[bt] || "", { defaultValue: bt })}
@@ -1644,6 +1640,18 @@ export function BotConfigTab({ apiBase, multiAgentEnabled, onRequestRestart, ven
               </div>
             )}
 
+            {/* WeChat extras */}
+            {editingBot.type === "wechat" && (
+              <div className="space-y-2.5">
+                {(venvDir || apiBaseUrl) && (
+                  <Button variant="outline" className="w-full border-dashed border-primary text-primary" onClick={() => setShowWechatQR(true)}>
+                    {t("wechat.qrScanLogin")}
+                  </Button>
+                )}
+                <p className="text-[11px] text-muted-foreground leading-relaxed">{t("wechat.hint")}</p>
+              </div>
+            )}
+
             {/* Feishu extras */}
             {editingBot.type === "feishu" && (
               <div className="space-y-3">
@@ -1731,6 +1739,18 @@ export function BotConfigTab({ apiBase, multiAgentEnabled, onRequestRestart, ven
             updateCredential("bot_id", botId);
             updateCredential("secret", secret);
             setShowWecomQR(false);
+          }}
+        />
+      )}
+
+      {showWechatQR && (
+        <WechatQRModal
+          venvDir={venvDir}
+          apiBaseUrl={apiBaseUrl}
+          onClose={() => setShowWechatQR(false)}
+          onSuccess={(token) => {
+            updateCredential("token", token);
+            setShowWechatQR(false);
           }}
         />
       )}

@@ -15,6 +15,7 @@ CHANNEL_DEPS: dict[str, list[tuple[str, str]]] = {
     "onebot": [("websockets", "websockets")],
     "onebot_reverse": [("websockets", "websockets")],
     "qqbot": [("botpy", "qq-botpy"), ("pilk", "pilk")],
+    "wechat": [("httpx", "httpx"), ("Crypto", "pycryptodome")],
 }
 
 # 通道名 → pyproject.toml extras 名称（用于 pip install openakita[xxx] 提示）
@@ -26,4 +27,5 @@ CHANNEL_EXTRAS: dict[str, str] = {
     "onebot": "onebot",
     "onebot_reverse": "onebot",
     "qqbot": "qqbot",
+    "wechat": "wechat",
 }

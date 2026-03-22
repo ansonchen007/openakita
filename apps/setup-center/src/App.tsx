@@ -1732,6 +1732,7 @@ export function App() {
           "DINGTALK_ENABLED", "DINGTALK_CLIENT_ID", "DINGTALK_CLIENT_SECRET",
           "ONEBOT_ENABLED", "ONEBOT_MODE", "ONEBOT_WS_URL", "ONEBOT_REVERSE_HOST", "ONEBOT_REVERSE_PORT", "ONEBOT_ACCESS_TOKEN",
           "QQBOT_ENABLED", "QQBOT_APP_ID", "QQBOT_APP_SECRET", "QQBOT_SANDBOX", "QQBOT_MODE", "QQBOT_WEBHOOK_PORT", "QQBOT_WEBHOOK_PATH",
+          "WECHAT_ENABLED", "WECHAT_TOKEN",
         ];
       case "tools":
         return [
@@ -2670,14 +2671,10 @@ export function App() {
   };
 
   function renderIM(wizardMode?: boolean) {
-    const imDisabled = disabledViews.includes("im");
     return (
       <IMConfigView
         {..._configViewProps}
         venvDir={venvDir}
-        imDisabled={imDisabled}
-        onToggleIM={() => toggleViewDisabled("im")}
-        multiAgentEnabled={multiAgentEnabled}
         apiBaseUrl={apiBaseUrl}
         onRequestRestart={restartService}
         wizardMode={wizardMode}
@@ -3020,6 +3017,9 @@ export function App() {
       "QQBOT_MODE",
       "QQBOT_WEBHOOK_PORT",
       "QQBOT_WEBHOOK_PATH",
+      // WeChat (iLink Bot API)
+      "WECHAT_ENABLED",
+      "WECHAT_TOKEN",
       // MCP (docs/mcp-integration.md)
       "MCP_ENABLED",
       "MCP_TIMEOUT",
@@ -3211,6 +3211,17 @@ export function App() {
                         {FT({ k: "QQBOT_WEBHOOK_PATH", label: t("config.imQQBotWebhookPath"), placeholder: "/qqbot/callback" })}
                       </>
                     )}
+                  </>
+                ),
+              },
+              {
+                title: t("config.imWechat") + "（需要 openakita[wechat]）",
+                enabledKey: "WECHAT_ENABLED",
+                apply: "",
+                body: (
+                  <>
+                    {FT({ k: "WECHAT_TOKEN", label: "Token", type: "password", placeholder: t("wechat.tokenHint") })}
+                    <p style={{ fontSize: 11, color: "var(--muted)", marginTop: 4 }}>{t("wechat.hint")}</p>
                   </>
                 ),
               },

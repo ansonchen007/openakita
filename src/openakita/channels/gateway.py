@@ -3235,6 +3235,7 @@ class MessageGateway:
         "feishu":    28000,
         "onebot":    20000,
         "qqbot":     20000,
+        "wechat":    4000,
     }
     _DEFAULT_MAX_LENGTH = 4000
 

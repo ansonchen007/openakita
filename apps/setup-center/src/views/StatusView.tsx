@@ -94,6 +94,7 @@ export function StatusView(props: StatusViewProps) {
     { k: "DINGTALK_ENABLED", name: t("status.dingtalk"), required: ["DINGTALK_CLIENT_ID", "DINGTALK_CLIENT_SECRET"] },
     { k: "ONEBOT_ENABLED", name: "OneBot", required: [] },
     { k: "QQBOT_ENABLED", name: "QQ 机器人", required: ["QQBOT_APP_ID", "QQBOT_APP_SECRET"] },
+    { k: "WECHAT_ENABLED", name: t("status.wechat"), required: ["WECHAT_TOKEN"] },
   ];
   const imStatus = im.map((c) => {
     const enabled = envGet(envDraft, c.k, "false").toLowerCase() === "true";
