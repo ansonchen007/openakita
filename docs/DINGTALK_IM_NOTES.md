@@ -744,3 +744,63 @@ Gateway: _on_message()
 | 指数退避重连 (自定义) | 看门狗已有指数退避 |
 | 长任务文本降级通知 | 已有 thinking card，暂不需要 |
 | SessionWebhook 废弃 | OpenAkita 的 Webhook 优先策略是合理的性能优化 |
+
+---
+
+## 十五、思考流式增强（与飞书对齐）
+
+> 为钉钉 IM 互动卡片增加思考过程、工具调用链、Footer 耗时/状态展示，与飞书适配器对齐。
+
+### 新增方法
+
+| 方法 | 说明 |
+|------|------|
+| `stream_thinking(chat_id, thinking_text, *, thread_id, is_group, duration_ms)` | 实时将思考内容写入卡片，设置 `_typing_status = "深度思考"` |
+| `stream_chain_text(chat_id, text, *, thread_id, is_group)` | 追加工具调用链描述，设置 `_typing_status = "调用工具"` |
+| `_compose_thinking_display(sk)` | 根据 thinking + chain + reply 构建复合卡片内容 |
+| `_build_footer_note(sk, *, final)` | 构建卡片底部状态文本（耗时 + 状态） |
+
+### 新增状态字段
+
+```python
+self._streaming_thinking: dict[str, str] = {}       # 思考内容（替换式）
+self._streaming_thinking_ms: dict[str, int] = {}    # 思考耗时（毫秒）
+self._streaming_chain: dict[str, list[str]] = {}    # 工具调用链
+self._typing_status: dict[str, str] = {}            # 当前状态标签
+self._typing_start_time: dict[str, float] = {}      # send_typing 开始时间
+```
+
+### 卡片显示内容示例
+
+```
+💭 **思考过程** (3.2s)
+> 用户想要了解天气情况，我需要调用天气 API...
+
+搜索: 天气查询
+分析: 数据解读
+
+---
+今天北京天气晴，最高温度 25°C ▍
+
+⏱ 5.3s · 生成回复
+```
+
+完成时 footer 变为：`⏱ 完成 (8.1s)`
+
+### chain_push 开关交互
+
+Gateway 判断逻辑：`can_stream_thinking = chain_push AND hasattr(adapter, "stream_thinking")`
+
+- **chain_push = OFF**: 思考不展示，与之前行为一致
+- **chain_push = ON**: 思考内容通过 `stream_thinking` 实时写入卡片
+
+不影响开关语义，ON 时体验改善（从独立文本消息变为卡片内联展示）。
+
+### Bug 修复
+
+- `_patch_card_content` 签名扩展为 `(self, card_state, text, sk=None, *, final=False)`，修复 gateway 调用时传 3 个位置参数的 TypeError
+- `stream_token` 改用 `_compose_thinking_display`，使回复与思考/工具链共存于卡片
+
+### 缓存清理
+
+在 `finalize_stream`、`clear_typing`、`send_message` 中统一清理所有新增缓存字段，避免跨会话残留。

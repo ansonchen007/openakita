@@ -213,8 +213,18 @@ async def delete_bot(bot_id: str):
         logger.info(f"[Agents API] Deleted bot: {bot_id}")
 
         if deleted:
-            from openakita.main import remove_im_bot
+            from openakita.main import remove_im_bot, _bot_channel_name, get_message_gateway
             await remove_im_bot(deleted[0])
+
+            channel_name = _bot_channel_name(deleted[0])
+            gw = get_message_gateway()
+            if gw and gw.session_manager:
+                purged = gw.session_manager.purge_channel(channel_name)
+                if purged:
+                    logger.info(
+                        f"[Agents API] Purged {purged} sessions for deleted bot: "
+                        f"{channel_name}"
+                    )
 
         return {"status": "ok"}
     finally:
@@ -628,6 +638,11 @@ async def get_topology(request: Request):
                         if sub_status == "starting":
                             sub_status = "running"
 
+                        _VALID_SUB_STATUSES = {
+                            "running", "completed", "error", "idle",
+                            "cancelled", "timeout", "interrupted",
+                        }
+
                         from_agent = sub.get("from_agent", "")
                         parent_node_id = sid
                         if from_agent and f"{sid}::{from_agent}" in seen_ids:
@@ -639,7 +654,7 @@ async def get_topology(request: Request):
                             "name": sub.get("name", pinfo["name"]),
                             "icon": sub.get("icon", pinfo["icon"]),
                             "color": pinfo["color"],
-                            "status": sub_status if sub_status in ("running", "completed", "error", "idle") else "running",
+                            "status": sub_status if sub_status in _VALID_SUB_STATUSES else "running",
                             "is_sub_agent": True,
                             "parent_id": parent_node_id,
                             "iteration": sub.get("iteration", 0),

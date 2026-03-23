@@ -107,6 +107,7 @@ class MCPServerConfig:
     description: str = ""
     transport: str = "stdio"  # "stdio" | "streamable_http" | "sse"
     url: str = ""  # streamable_http / sse 模式使用
+    headers: dict[str, str] = field(default_factory=dict)
     cwd: str = ""  # stdio 模式的工作目录（为空则继承父进程）
 
 
@@ -188,6 +189,7 @@ class MCPClient:
                     description=server_data.get("description", ""),
                     transport=transport,
                     url=server_data.get("url", ""),
+                    headers=server_data.get("headers", {}),
                 )
                 self.add_server(config)
 
@@ -427,8 +429,17 @@ class MCPClient:
 
         http_cm = None
         client_cm = None
+        _managed_http_client = None
         try:
-            http_cm = streamablehttp_client(url=config.url)
+            kwargs: dict[str, Any] = {"url": config.url}
+            if config.headers:
+                import httpx as _httpx
+                _managed_http_client = _httpx.AsyncClient(
+                    headers=config.headers,
+                    timeout=_httpx.Timeout(self._CONNECT_TIMEOUT),
+                )
+                kwargs["http_client"] = _managed_http_client
+            http_cm = streamablehttp_client(**kwargs)
             read, write, _ = await asyncio.wait_for(
                 http_cm.__aenter__(), timeout=self._CONNECT_TIMEOUT,
             )
@@ -449,6 +460,7 @@ class MCPClient:
                 "transport": "streamable_http",
                 "_client_cm": client_cm,
                 "_http_cm": http_cm,
+                "_http_client": _managed_http_client,
             }
             tool_count = len(self.list_tools(server_name))
             logger.info(f"Connected to MCP server via streamable HTTP: {server_name} ({config.url}, {tool_count} tools)")
@@ -457,11 +469,15 @@ class MCPClient:
             msg = f"HTTP 连接超时（{self._CONNECT_TIMEOUT}s）。URL: {config.url}"
             logger.error(f"Timeout connecting to {server_name} via streamable HTTP")
             await self._cleanup_cms(client_cm, http_cm)
+            if _managed_http_client:
+                await _managed_http_client.aclose()
             return MCPConnectResult(success=False, error=msg)
         except BaseException as e:
             msg = f"HTTP 连接失败: {type(e).__name__}: {e}"
             logger.error(f"Failed to connect to {server_name} via streamable HTTP: {e}")
             await self._cleanup_cms(client_cm, http_cm)
+            if _managed_http_client:
+                await _managed_http_client.aclose()
             return MCPConnectResult(success=False, error=msg)
 
     async def _connect_sse(self, server_name: str, config: MCPServerConfig) -> MCPConnectResult:
@@ -479,7 +495,7 @@ class MCPClient:
         sse_cm = None
         client_cm = None
         try:
-            sse_cm = sse_client(url=config.url)
+            sse_cm = sse_client(url=config.url, headers=config.headers or None)
             read, write = await asyncio.wait_for(
                 sse_cm.__aenter__(), timeout=self._CONNECT_TIMEOUT,
             )
@@ -703,6 +719,27 @@ class MCPClient:
                     "MCP %s cleanup failed for %s (ignored)",
                     cm_key, server_name, exc_info=True,
                 )
+        http_client = conn.get("_http_client")
+        if http_client is not None:
+            try:
+                await http_client.aclose()
+            except BaseException:
+                pass
+
+    @staticmethod
+    def _extract_content(items: list) -> list:
+        """从 MCP 响应中提取所有 content 块的文本/数据表示。"""
+        content = []
+        for item in items:
+            if hasattr(item, "text"):
+                content.append(item.text)
+            elif hasattr(item, "data"):
+                content.append(item.data)
+            elif hasattr(item, "resource"):
+                content.append(f"[resource: {getattr(item.resource, 'uri', item.resource)}]")
+            else:
+                content.append(str(item))
+        return content
 
     @staticmethod
     def _is_connection_error(exc: BaseException) -> bool:
@@ -809,12 +846,19 @@ class MCPClient:
                     timeout=self._CALL_TIMEOUT,
                 )
 
-                content = []
-                for item in result.content:
-                    if hasattr(item, "text"):
-                        content.append(item.text)
-                    elif hasattr(item, "data"):
-                        content.append(item.data)
+                content = self._extract_content(result.content)
+
+                if getattr(result, "isError", False):
+                    error_text = "\n".join(str(c) for c in content) if content else "Unknown error"
+                    logger.warning(
+                        "MCP tool %s:%s returned isError=true: %s",
+                        server_name, tool_name, error_text[:500],
+                    )
+                    return MCPCallResult(
+                        success=False,
+                        error=error_text,
+                        reconnected=did_reconnect,
+                    )
 
                 return MCPCallResult(
                     success=True,

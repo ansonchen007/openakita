@@ -134,6 +134,69 @@ def _apply_agent_profile(session: object, new_profile_id: str) -> bool:
     return True
 
 
+def _schedule_background_save(
+    agent_task: asyncio.Task,
+    agent_done: asyncio.Event,
+    agent_queue: asyncio.Queue,
+    sse_fn,
+    session,
+    session_manager,
+    conversation_id: str,
+    full_reply_snapshot: str,
+    collected_artifacts: list,
+    save_done: bool,
+) -> None:
+    """Register a background callback so that when a long-running agent task
+    finally completes after the SSE stream has closed, the result is still
+    saved to the session.  The user will see it when they refresh the page."""
+
+    async def _bg_drain_and_save():
+        try:
+            await agent_done.wait()
+        except Exception:
+            return
+
+        bg_reply = full_reply_snapshot
+        bg_artifacts = list(collected_artifacts)
+        try:
+            while not agent_queue.empty():
+                ev = agent_queue.get_nowait()
+                if ev is None or ev.get("type") == "__agent_error__":
+                    break
+                et = ev.get("type", "")
+                if et == "text_delta" and "content" in ev:
+                    bg_reply += ev["content"]
+        except Exception:
+            pass
+
+        if session and bg_reply and not save_done:
+            try:
+                meta: dict = {}
+                if bg_artifacts:
+                    meta["artifacts"] = bg_artifacts
+                session.add_message("assistant", bg_reply, **meta)
+                if session_manager:
+                    session_manager.mark_dirty()
+                logger.info(
+                    "[Chat API] Background save: %d chars (conv=%s)",
+                    len(bg_reply), conversation_id,
+                )
+            except Exception as e:
+                logger.warning("[Chat API] Background save failed: %s", e)
+
+        if conversation_id:
+            try:
+                await get_lifecycle_manager().finish(conversation_id)
+            except Exception:
+                pass
+
+    asyncio.create_task(_bg_drain_and_save())
+    logger.info(
+        "[Chat API] Scheduled background save for long-running task (conv=%s)",
+        conversation_id,
+    )
+
+
 async def _stream_chat(
     chat_request: ChatRequest,
     agent: object,
@@ -275,6 +338,11 @@ async def _stream_chat(
         _agent_task = asyncio.create_task(_agent_runner())
 
         # --- 后台断连检测：宽限期机制 ---
+        # 长任务（如 multi-agent 委派）可能运行 10-20 分钟。客户端断连后不立即
+        # 取消任务，而是给予较长的宽限期（DISCONNECT_GRACE_SECONDS）。任务完成后
+        # 通过 _schedule_background_save 保存结果到 session，用户刷新即可看到。
+        DISCONNECT_GRACE_SECONDS = 900  # 15 分钟
+
         async def _disconnect_watcher():
             nonlocal _client_disconnected
             while True:
@@ -285,12 +353,21 @@ async def _stream_chat(
                     try:
                         if await http_request.is_disconnected():
                             _client_disconnected = True
-                            logger.info("[Chat API] 客户端断开，进入宽限期（60s）")
+                            logger.info(
+                                "[Chat API] 客户端断开，进入宽限期（%ds）",
+                                DISCONNECT_GRACE_SECONDS,
+                            )
                             try:
-                                await asyncio.wait_for(_agent_done.wait(), timeout=60.0)
+                                await asyncio.wait_for(
+                                    _agent_done.wait(),
+                                    timeout=DISCONNECT_GRACE_SECONDS,
+                                )
                                 logger.info("[Chat API] Agent task 在宽限期内完成")
                             except asyncio.TimeoutError:
-                                logger.info("[Chat API] 宽限期超时，取消任务")
+                                logger.warning(
+                                    "[Chat API] 宽限期超时（%ds），取消任务",
+                                    DISCONNECT_GRACE_SECONDS,
+                                )
                                 try:
                                     actual_agent.cancel_current_task(
                                         "客户端断开连接（宽限期后）",
@@ -305,9 +382,19 @@ async def _stream_chat(
         _disconnect_watcher_task = asyncio.create_task(_disconnect_watcher())
 
         # --- 主 SSE 事件循环：从 queue 读取事件并转发 ---
+        # 每 SSE_KEEPALIVE_INTERVAL 秒无真实事件时发送 keepalive，
+        # 防止前端 fetch 连接因长时间无数据而超时断开（LLM 重试等场景）。
+        SSE_KEEPALIVE_INTERVAL = 15.0
         _agent_errored = False
         while True:
-            event = await _agent_queue.get()
+            try:
+                event = await asyncio.wait_for(
+                    _agent_queue.get(), timeout=SSE_KEEPALIVE_INTERVAL
+                )
+            except TimeoutError:
+                if not _client_disconnected and not await _check_disconnected():
+                    yield _sse("heartbeat", {"ts": time.time()})
+                continue
             if event is None:
                 break
 
@@ -539,15 +626,23 @@ async def _stream_chat(
             yield _sse("done")
     finally:
         # ── Wait for agent task to finish (deferred save if SSE gen was interrupted) ──
+        _bg_save_scheduled = False
         if _agent_task is not None and not _agent_done.is_set():
             try:
                 await asyncio.wait_for(_agent_done.wait(), timeout=65.0)
             except (asyncio.TimeoutError, asyncio.CancelledError, Exception):
                 if _agent_task and not _agent_task.done():
-                    _agent_task.cancel()
+                    # 长任务仍在运行 — 不立即取消，注册后台保存回调。
+                    # 任务完成时回调会 drain queue 并保存 session。
+                    _bg_save_scheduled = True
+                    _schedule_background_save(
+                        _agent_task, _agent_done, _agent_queue, _sse,
+                        session, session_manager, conversation_id,
+                        _full_reply, _collected_artifacts, _save_done,
+                    )
 
         # Drain remaining queue events to accumulate _full_reply for deferred save
-        if not _save_done:
+        if not _save_done and not _bg_save_scheduled:
             try:
                 while not _agent_queue.empty():
                     ev = _agent_queue.get_nowait()
@@ -583,7 +678,7 @@ async def _stream_chat(
                 pass
 
         # ── 清理 agent task ──
-        if _agent_task and not _agent_task.done():
+        if _agent_task and not _agent_task.done() and not _bg_save_scheduled:
             _agent_task.cancel()
             try:
                 await _agent_task

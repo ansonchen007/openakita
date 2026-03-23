@@ -64,6 +64,7 @@ async def add_server_to_workspace(
     instructions: str,
     auto_connect: bool,
     *,
+    headers: dict[str, str] | None = None,
     config_base_dir: Path,
     search_bases: list[Path],
     client: MCPClient,
@@ -82,7 +83,7 @@ async def add_server_to_workspace(
         else list(args)
     )
 
-    metadata = {
+    metadata: dict = {
         "serverIdentifier": name,
         "serverName": description or name,
         "command": command,
@@ -92,6 +93,8 @@ async def add_server_to_workspace(
         "url": url,
         "autoConnect": auto_connect,
     }
+    if headers:
+        metadata["headers"] = headers
 
     metadata_file = server_dir / "SERVER_METADATA.json"
     metadata_file.write_text(
@@ -113,6 +116,7 @@ async def add_server_to_workspace(
         description=description,
         transport=transport,
         url=url,
+        headers=headers or {},
         cwd=str(server_dir),
     ))
 
@@ -201,6 +205,7 @@ async def reload_all_servers(
             description=server.name or "",
             transport=transport,
             url=server.url or "",
+            headers=dict(server.headers or {}),
             cwd=server.config_dir or "",
         ))
 

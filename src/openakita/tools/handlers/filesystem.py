@@ -358,7 +358,17 @@ class FilesystemHandler:
                 logger.warning(msg)
                 return msg
         await self.agent.file_tool.write(path, content)
-        return f"文件已写入: {path}"
+        result = f"文件已写入: {path}"
+
+        from ...core.im_context import get_im_session
+        if not get_im_session():
+            result += (
+                "\n\n💡 当前为 Desktop 模式，用户无法直接访问服务器文件。"
+                "请将文件的关键内容直接包含在回复中，"
+                "或调用 deliver_artifacts(artifacts=[{type: 'file', path: '"
+                + str(path) + "'}]) 使文件在前端可下载。"
+            )
+        return result
 
     # read_file 默认最大行数（参考 Claude Code 的 2000 行，我们用 300 更保守）
     READ_FILE_DEFAULT_LIMIT = 300

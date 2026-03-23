@@ -89,9 +89,9 @@ CONFIG_CACHE_MAX_RETRY_S = 3600.0
 DEDUP_TTL_S = 600  # 10 min
 DEDUP_MAX_SIZE = 500
 
-SEND_MIN_INTERVAL_S = 1.5
-SEND_RATE_LIMIT_RETRIES = 3
-SEND_RATE_LIMIT_BASE_DELAY_S = 3.0
+SEND_MIN_INTERVAL_S = 2.5
+SEND_RATE_LIMIT_RETRIES = 4
+SEND_RATE_LIMIT_BASE_DELAY_S = 5.0
 
 # MessageItemType
 ITEM_NONE = 0
@@ -276,6 +276,7 @@ class WeChatAdapter(ChannelAdapter):
         channel_name: str | None = None,
         bot_id: str | None = None,
         agent_profile_id: str = "default",
+        footer_elapsed: bool | None = None,
     ):
         super().__init__(
             channel_name=channel_name,
@@ -316,6 +317,12 @@ class WeChatAdapter(ChannelAdapter):
         # 发送限流 (user_id → 上次发送时间戳)
         self._last_send_ts: dict[str, float] = {}
 
+        # 耗时统计 (chat_id → 首次 send_typing 的 time.time())
+        self._typing_start_time: dict[str, float] = {}
+        self._footer_elapsed: bool = footer_elapsed if footer_elapsed is not None else (
+            os.environ.get("WECHAT_FOOTER_ELAPSED", "true").lower() in ("true", "1", "yes")
+        )
+
         # 统计指标
         self._msg_count: int = 0
         self._send_count: int = 0
@@ -325,6 +332,11 @@ class WeChatAdapter(ChannelAdapter):
     # ==================== 生命周期 ====================
 
     async def start(self) -> None:
+        if not self.config.token:
+            raise ValueError(
+                "微信 Token 未配置，请先在 Bot 配置中扫码登录获取 Token。"
+            )
+
         _import_httpx()
         self._http = httpx.AsyncClient(timeout=httpx.Timeout(
             connect=10.0,
@@ -340,8 +352,7 @@ class WeChatAdapter(ChannelAdapter):
         self._poll_task = asyncio.create_task(self._poll_loop())
         logger.info(
             f"{self.channel_name}: WeChat adapter started "
-            f"(base_url={self.config.base_url}, "
-            f"token={'present' if self.config.token else 'MISSING'})"
+            f"(base_url={self.config.base_url})"
         )
 
     async def stop(self) -> None:
@@ -955,7 +966,12 @@ class WeChatAdapter(ChannelAdapter):
     # iLink Bot API 不支持通过同一 client_id 更新消息（API 按 client_id 去重），
     # 因此无法实现"单气泡流式更新"。仅使用原生 typing 指示器。
 
+    _TYPING_STALE_THRESHOLD_S = 1800  # 30 min
+
     async def send_typing(self, chat_id: str, thread_id: str | None = None) -> None:
+        existing = self._typing_start_time.get(chat_id)
+        if existing is None or (time.time() - existing) > self._TYPING_STALE_THRESHOLD_S:
+            self._typing_start_time[chat_id] = time.time()
         ticket = await self._get_typing_ticket(chat_id)
         if not ticket:
             return
@@ -988,6 +1004,19 @@ class WeChatAdapter(ChannelAdapter):
             )
         except Exception:
             logger.debug(f"{self.channel_name}: clearTyping failed (ignored)")
+
+    def format_final_footer(self, chat_id: str, thread_id: str | None = None) -> str | None:
+        if not self._footer_elapsed:
+            return None
+        start = self._typing_start_time.pop(chat_id, None)
+        if start is None:
+            return None
+        elapsed = time.time() - start
+        if elapsed < 60:
+            return f"\n\n⏱ 耗时 {elapsed:.1f}s"
+        minutes = int(elapsed // 60)
+        secs = elapsed % 60
+        return f"\n\n⏱ 耗时 {minutes}m{secs:.0f}s"
 
     async def _get_typing_ticket(self, user_id: str) -> str:
         now = time.time()

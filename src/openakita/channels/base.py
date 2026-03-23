@@ -9,6 +9,7 @@
 """
 
 import logging
+import re
 from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -17,6 +18,16 @@ from typing import ClassVar
 from .types import MediaFile, OutgoingMessage, UnifiedMessage
 
 logger = logging.getLogger(__name__)
+
+# Windows 文件名非法字符 (: * ? " < > |)
+_UNSAFE_FILENAME_RE = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+
+
+def sanitize_filename(name: str) -> str:
+    """将文件名中的非法字符替换为下划线，确保跨平台兼容。"""
+    safe = _UNSAFE_FILENAME_RE.sub("_", name)
+    return safe.strip(". ") or "download"
+
 
 # 回调类型定义
 MessageCallback = Callable[[UnifiedMessage], Awaitable[None]]
@@ -178,6 +189,14 @@ class ChannelAdapter(ABC):
             chat_id, image_path, caption, reply_to=reply_to, **kwargs
         )
         return await self.send_message(message)
+
+    def format_final_footer(self, chat_id: str, thread_id: str | None = None) -> str | None:
+        """返回追加到最终回复末尾的 footer 文本（如耗时统计）。
+
+        默认返回 None（不追加）。子类可覆写此方法，返回的文本会被 gateway
+        拼接到最后一条分片消息末尾，并在调用后自动重置内部计时器。
+        """
+        return None
 
     # ==================== 媒体处理 ====================
 

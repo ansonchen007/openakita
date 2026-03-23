@@ -453,7 +453,10 @@ class Organization:
         filtered = {k: v for k, v in d.items() if k in known and k not in ("nodes", "edges")}
         org = cls(**filtered)
         org.nodes = [OrgNode.from_dict(n) for n in raw_nodes]
-        org.edges = [OrgEdge.from_dict(e) for e in raw_edges]
+        org.edges = [
+            OrgEdge.from_dict(e) for e in raw_edges
+            if e.get("source") != e.get("target")
+        ]
         if isinstance(raw_persona, dict):
             org.user_persona = UserPersona.from_dict(raw_persona)
         return org
@@ -495,13 +498,15 @@ class Organization:
     def get_children(self, node_id: str) -> list[OrgNode]:
         child_ids: set[str] = set()
         for e in self.edges:
-            if e.edge_type == EdgeType.HIERARCHY and e.source == node_id:
+            if (e.edge_type == EdgeType.HIERARCHY
+                    and e.source == node_id and e.target != node_id):
                 child_ids.add(e.target)
         return [n for n in self.nodes if n.id in child_ids]
 
     def get_parent(self, node_id: str) -> OrgNode | None:
         for e in self.edges:
-            if e.edge_type == EdgeType.HIERARCHY and e.target == node_id:
+            if (e.edge_type == EdgeType.HIERARCHY
+                    and e.target == node_id and e.source != node_id):
                 return self.get_node(e.source)
         return None
 

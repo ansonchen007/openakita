@@ -949,7 +949,8 @@
     "botTypeOnebotReverse": "OneBot (反向WS)",
     "botTypeOnebot": "OneBot",
     "botTypeQQBot": "QQ",
-    "botTypeWechat": "微信"
+    "botTypeWechat": "微信",
+    "adapterStartFailed": "通道 {{name}} 启动失败"
   },
   "llm": {
     "title": "LLM 端点",
@@ -1681,7 +1682,7 @@
     "qrDenied": "授权已被拒绝",
     "qrInitFailed": "初始化失败，请检查网络",
     "streaming": "流式卡片输出",
-    "groupStreaming": "群聊中也启用流式输出",
+    "groupStreaming": "群聊流式卡片输出",
     "groupMode": "群聊回复模式",
     "groupMode_mention_only": "仅 @时回复",
     "groupMode_smart": "智能判断",
@@ -1689,7 +1690,20 @@
     "groupModeHint_mention_only": "仅在被 @提及 时回复，最安全",
     "groupModeHint_smart": "AI 判断消息是否需要回复",
     "groupModeHint_always": "回复群内所有消息（慎用）",
-    "groupModeHint": "⚠ 需要在飞书开放平台 → 应用 → 机器人 → 权限管理 中开启敏感权限「获取群组中所有消息」(im:message.group_msg)，否则机器人只能收到 @消息"
+    "groupModeHint": "⚠ 需要在飞书开放平台 → 应用 → 机器人 → 权限管理 中开启敏感权限「获取群组中所有消息」(im:message.group_msg)，否则机器人只能收到 @消息",
+    "footerTitle": "卡片底栏",
+    "footerElapsed": "显示处理耗时",
+    "footerStatus": "显示处理状态"
+  },
+  "telegram": {
+    "footerTitle": "思考卡片底栏",
+    "footerElapsed": "显示处理耗时",
+    "footerStatus": "显示处理状态"
+  },
+  "dingtalk": {
+    "footerTitle": "卡片底栏",
+    "footerElapsed": "显示处理耗时",
+    "footerStatus": "显示处理状态"
   },
   "security": {
     "title": "安全策略",
@@ -1749,7 +1763,9 @@
     "qrInitFailed": "初始化失败，请检查网络",
     "qrLoginOk": "登录成功，正在创建机器人...",
     "qrCreateFailed": "创建机器人失败",
-    "qrNeedBrowser": "该接口需要浏览器登录态，请在浏览器中手动创建"
+    "qrNeedBrowser": "该接口需要浏览器登录态，请在浏览器中手动创建",
+    "footerTitle": "回复底部",
+    "footerElapsed": "显示处理耗时"
   },
   "wechat": {
     "qrScanLogin": "扫码登录",
@@ -1766,7 +1782,9 @@
     "qrExpired": "二维码已过期，点击刷新",
     "qrInitFailed": "初始化失败，请检查网络",
     "hint": "微信个人号机器人，通过 iLink Bot API 接入。扫码登录获取访问令牌，无需公网 IP。",
-    "tokenHint": "通过扫码登录获取"
+    "tokenHint": "通过扫码登录获取",
+    "footerTitle": "回复底部",
+    "footerElapsed": "显示处理耗时"
   },
   "wecom": {
     "qrScanConfig": "扫码配置机器人",

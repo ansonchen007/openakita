@@ -92,14 +92,19 @@ async def list_channels(request: Request):
             or bot_name_map.get(name)
             or name
         )
-        channels.append({
+        entry: dict[str, Any] = {
             "channel": name,
             "channel_type": getattr(adapter, "channel_type", name.split(":")[0]),
             "name": display_name,
             "status": status,
             "sessionCount": session_count,
             "lastActive": last_active,
-        })
+        }
+        if status == "offline":
+            reasons = getattr(gateway, "_failed_adapter_reasons", {})
+            if name in reasons:
+                entry["error"] = reasons[name]
+        channels.append(entry)
 
     return JSONResponse(content={"channels": channels})
 
@@ -198,11 +203,13 @@ async def get_session_messages(
     source: str = Query("memory"),
     date_from: str | None = Query(None),
     date_to: str | None = Query(None),
+    latest: bool = Query(False),
 ):
     """Return messages for a specific session.
 
     source=memory (default) or sqlite.
     date_from / date_to: optional ISO date strings (e.g. '2026-03-19') to filter.
+    latest: if true, return the last `limit` messages (auto-calculate offset).
     """
 
     if source == "sqlite":
@@ -256,6 +263,8 @@ async def get_session_messages(
         history = [m for m in history if _in_range(m)]
 
     total = len(history)
+    if latest:
+        offset = max(0, total - limit)
     page = history[offset: offset + limit]
 
     def _to_str(content: Any) -> str:
@@ -322,6 +331,7 @@ async def get_session_messages(
     return JSONResponse(content={
         "messages": messages,
         "total": total,
+        "offset": offset,
         "hasMore": offset + limit < total,
         "source": "memory",
     })

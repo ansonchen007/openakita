@@ -40,10 +40,10 @@ async def list_sessions(request: Request, channel: str = "desktop"):
     for s in sessions:
         msgs = s.context.messages
         user_msgs = [m for m in msgs if m.get("role") == "user"]
-        last_user = user_msgs[-1] if user_msgs else None
+        first_user = user_msgs[0] if user_msgs else None
         title = ""
-        if last_user:
-            content = last_user.get("content", "")
+        if first_user:
+            content = first_user.get("content", "")
             title = content[:30] if isinstance(content, str) else ""
 
         last_msg_content = ""
@@ -203,8 +203,14 @@ def _cancel_tasks_for_session(
     # Orchestrator 级：强制取消 asyncio Task（兜底，确保任务停止）
     try:
         orchestrator = getattr(request.app.state, "orchestrator", None)
-        if orchestrator is not None and orchestrator.cancel_request(session_id):
-            logger.info(f"[Sessions] Cancelled orchestrator tasks: sid={session_id}")
+        if orchestrator is not None:
+            if orchestrator.cancel_request(session_id):
+                logger.info(f"[Sessions] Cancelled orchestrator tasks: sid={session_id}")
+            # Desktop 路径的任务不经过 orchestrator.handle_message，
+            # 所以 cancel_request 可能不命中 _active_tasks。
+            # 用 conversation_id 再做一次 purge 确保子 Agent 状态被清理。
+            if conversation_id != session_id:
+                orchestrator.purge_session_states(conversation_id)
     except Exception as e:
         logger.debug(f"[Sessions] Orchestrator cancel skipped: {e}")
 

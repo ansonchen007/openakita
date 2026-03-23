@@ -7,6 +7,7 @@ Lightweight in-process design using asyncio.
 from __future__ import annotations
 
 import asyncio
+import enum
 import json
 import logging
 import re
@@ -18,6 +19,27 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from openakita.channels import MessageGateway
+
+
+class SubAgentStatus(enum.StrEnum):
+    """Canonical statuses for sub-agent lifecycle."""
+
+    STARTING = "starting"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    CANCELLED = "cancelled"
+    TIMEOUT = "timeout"
+    ERROR = "error"
+    INTERRUPTED = "interrupted"
+    IDLE = "idle"
+
+    @classmethod
+    def terminal_states(cls) -> frozenset[SubAgentStatus]:
+        return frozenset({cls.COMPLETED, cls.CANCELLED, cls.TIMEOUT, cls.ERROR})
+
+    @property
+    def is_terminal(self) -> bool:
+        return self in self.terminal_states()
 
 logger = logging.getLogger(__name__)
 
@@ -568,25 +590,32 @@ class AgentOrchestrator:
             raise
 
     def _update_sub_state(self, key: str, status: str, elapsed: float) -> None:
-        """Update a sub-agent's terminal state and schedule cleanup.
+        """Update a sub-agent's state and schedule cleanup for terminal states.
 
-        For ephemeral profiles, also removes the temporary profile from
-        the ProfileStore once the task reaches a terminal state.
+        Also broadcasts an ``agents:sub_state`` WebSocket event so the
+        frontend can react immediately instead of waiting for the next poll.
         """
+        canonical = SubAgentStatus(status) if status in SubAgentStatus._value2member_map_ else None
+
         state_entry = self._sub_agent_states.get(key)
         if state_entry:
             state_entry["status"] = status
             state_entry["elapsed_s"] = round(elapsed)
 
-        # Persist to disk on terminal state changes
-        if status in ("completed", "timeout", "cancelled", "error"):
+        is_terminal = canonical.is_terminal if canonical else False
+
+        if is_terminal:
             self._persist_sub_states()
 
-        # Clean up ephemeral profile on terminal states
         profile_id = state_entry.get("profile_id", "") if state_entry else ""
-        if profile_id and status in ("completed", "timeout", "cancelled", "error"):
+        if profile_id and is_terminal:
             self._try_cleanup_ephemeral(profile_id)
 
+        # Broadcast state change via WebSocket for instant frontend feedback
+        self._broadcast_sub_state_change(key, status, state_entry)
+
+        # Schedule delayed removal so the frontend can still display
+        # the terminal state briefly before the entry disappears.
         async def _delayed_cleanup() -> None:
             await asyncio.sleep(120)
             self._sub_agent_states.pop(key, None)
@@ -599,6 +628,28 @@ class AgentOrchestrator:
             self._sub_cleanup_tasks[key] = asyncio.create_task(_delayed_cleanup())
         except RuntimeError:
             self._sub_agent_states.pop(key, None)
+
+    def _broadcast_sub_state_change(
+        self, key: str, status: str, state_entry: dict | None,
+    ) -> None:
+        """Best-effort broadcast of sub-agent state via WebSocket."""
+        try:
+            from openakita.api.routes.websocket import broadcast_event
+
+            parts = key.split(":", 1)
+            session_id = parts[0] if parts else key
+            payload: dict[str, Any] = {
+                "session_id": session_id,
+                "status": status,
+            }
+            if state_entry:
+                payload["agent_id"] = state_entry.get("agent_id", "")
+                payload["name"] = state_entry.get("name", "")
+                payload["elapsed_s"] = state_entry.get("elapsed_s", 0)
+
+            asyncio.ensure_future(broadcast_event("agents:sub_state", payload))
+        except Exception:
+            pass
 
     def _try_cleanup_ephemeral(self, profile_id: str) -> None:
         """Remove an ephemeral profile from ProfileStore if applicable."""
@@ -920,14 +971,55 @@ class AgentOrchestrator:
     # ------------------------------------------------------------------
 
     def cancel_request(self, session_id: str) -> bool:
-        """Cancel all active requests for a session (by session.id UUID)."""
+        """Cancel all active requests for a session and purge sub-agent states.
+
+        Immediately marks all matching ``_sub_agent_states`` entries as
+        *cancelled* and removes them, rather than relying on the 120-second
+        delayed cleanup.  This ensures the topology / sub-tasks APIs stop
+        returning stale "running" nodes right away.
+        """
         tasks = self._active_tasks.get(session_id, [])
         cancelled = False
         for task in tasks:
             if not task.done():
                 task.cancel()
                 cancelled = True
+        self.purge_session_states(session_id)
         return cancelled
+
+    def purge_session_states(self, session_id: str) -> int:
+        """Immediately remove all ``_sub_agent_states`` entries for *session_id*.
+
+        Accepts either a full ``session.id`` or a ``conversation_id`` (chat_id)
+        and uses the same fuzzy-matching logic as ``get_sub_agent_states``.
+
+        Returns the number of entries purged.
+        """
+        to_remove: list[str] = []
+        for key in self._sub_agent_states:
+            sid_part = key.split(":")[0] if ":" in key else key
+            if sid_part == session_id or session_id in sid_part:
+                to_remove.append(key)
+
+        for key in to_remove:
+            entry = self._sub_agent_states.pop(key, None)
+            # Cancel the delayed-cleanup task — it's no longer needed
+            cleanup_task = self._sub_cleanup_tasks.pop(key, None)
+            if cleanup_task and not cleanup_task.done():
+                cleanup_task.cancel()
+            # Broadcast the terminal state so the frontend updates instantly
+            if entry and entry.get("status") not in SubAgentStatus.terminal_states():
+                self._broadcast_sub_state_change(
+                    key, SubAgentStatus.CANCELLED, entry,
+                )
+
+        if to_remove:
+            self._persist_sub_states()
+            logger.info(
+                "[Orchestrator] Purged %d sub-agent states for session %s",
+                len(to_remove), session_id,
+            )
+        return len(to_remove)
 
     # ------------------------------------------------------------------
     # Health / monitoring

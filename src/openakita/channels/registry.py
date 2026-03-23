@@ -49,6 +49,8 @@ def _create_feishu(creds: dict, *, channel_name: str, bot_id: str, agent_profile
         streaming_enabled=_cred_bool(creds.get("streaming_enabled")),
         group_streaming=_cred_bool(creds.get("group_streaming")),
         group_response_mode=creds.get("group_response_mode") or None,
+        footer_elapsed=_cred_bool(creds.get("footer_elapsed")),
+        footer_status=_cred_bool(creds.get("footer_status")),
     )
 
 
@@ -66,6 +68,12 @@ def _create_telegram(creds: dict, *, channel_name: str, bot_id: str, agent_profi
     rp = _cred_bool(creds.get("require_pairing"))
     if rp is not None:
         kwargs["require_pairing"] = rp
+    fe = _cred_bool(creds.get("footer_elapsed"))
+    if fe is not None:
+        kwargs["footer_elapsed"] = fe
+    fs = _cred_bool(creds.get("footer_status"))
+    if fs is not None:
+        kwargs["footer_status"] = fs
     return TelegramAdapter(**kwargs)
 
 
@@ -75,6 +83,8 @@ def _create_dingtalk(creds: dict, *, channel_name: str, bot_id: str, agent_profi
         app_key=creds.get("app_key", creds.get("client_id", "")),
         app_secret=creds.get("app_secret", creds.get("client_secret", "")),
         channel_name=channel_name, bot_id=bot_id, agent_profile_id=agent_profile_id,
+        footer_elapsed=_cred_bool(creds.get("footer_elapsed")),
+        footer_status=_cred_bool(creds.get("footer_status")),
     )
 
 
@@ -132,6 +142,7 @@ def _create_qqbot(creds: dict, *, channel_name: str, bot_id: str, agent_profile_
         webhook_port=_safe_int(creds.get("webhook_port", 9890), 9890),
         webhook_path=creds.get("webhook_path", "/qqbot/callback"),
         channel_name=channel_name, bot_id=bot_id, agent_profile_id=agent_profile_id,
+        footer_elapsed=_cred_bool(creds.get("footer_elapsed")),
     )
 
 
@@ -142,6 +153,7 @@ def _create_wechat(creds: dict, *, channel_name: str, bot_id: str, agent_profile
         base_url=creds.get("base_url", ""),
         cdn_base_url=creds.get("cdn_base_url", ""),
         channel_name=channel_name, bot_id=bot_id, agent_profile_id=agent_profile_id,
+        footer_elapsed=_cred_bool(creds.get("footer_elapsed")),
     )
 
 

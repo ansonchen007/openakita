@@ -340,6 +340,36 @@ class SessionManager:
 
         return len(expired_keys)
 
+    def purge_channel(self, channel_name: str) -> int:
+        """清理指定通道的所有会话和注册表数据。
+
+        当 IM bot 被删除时调用，确保 UI 不再显示已删除通道的聊天窗口。
+
+        Returns:
+            被清理的会话数量
+        """
+        with self._sessions_lock:
+            keys_to_remove = [
+                key for key, session in self._sessions.items()
+                if session.channel == channel_name
+            ]
+            for key in keys_to_remove:
+                del self._sessions[key]
+
+        if channel_name in self._channel_registry:
+            del self._channel_registry[channel_name]
+            self._save_channel_registry()
+
+        if keys_to_remove:
+            self.mark_dirty()
+            self._save_sessions()
+            logger.info(
+                f"Purged {len(keys_to_remove)} sessions and registry for channel: "
+                f"{channel_name}"
+            )
+
+        return len(keys_to_remove)
+
     async def _cleanup_loop(self) -> None:
         """定期清理循环（每 24 小时清理 30 天未活跃的僵尸 session）"""
         while self._running:

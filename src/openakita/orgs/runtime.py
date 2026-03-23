@@ -166,11 +166,17 @@ class OrgRuntime:
                 idle_task.cancel()
         self._idle_tasks.clear()
 
+        for _org_id, watchdog_task in list(self._watchdog_tasks.items()):
+            if watchdog_task and not watchdog_task.done():
+                watchdog_task.cancel()
+        self._watchdog_tasks.clear()
+
         for org_id, tasks in list(self._running_tasks.items()):
             for node_id, task in tasks.items():
                 if not task.done():
                     task.cancel()
             tasks.clear()
+        self._running_tasks.clear()
 
         for key, cached in list(self._agent_cache.items()):
             try:
@@ -192,6 +198,11 @@ class OrgRuntime:
         self._event_stores.clear()
         self._identities.clear()
         self._policies.clear()
+        self._org_semaphores.clear()
+        self._save_locks.clear()
+        self._node_busy_since.clear()
+        self._node_current_chain.clear()
+        self._chain_delegation_depth.clear()
 
         self._started = False
         logger.info("[OrgRuntime] Shutdown complete.")
@@ -265,17 +276,13 @@ class OrgRuntime:
 
         return org
 
-    async def stop_org(self, org_id: str) -> Organization:
-        """Stop an organization."""
-        org = self._active_orgs.get(org_id) or self._manager.get(org_id)
-        if not org:
-            raise ValueError(f"Organization not found: {org_id}")
-
-        self._check_transition(org, OrgStatus.DORMANT)
-
+    async def _stop_org_services(self, org_id: str) -> None:
+        """Stop heartbeat and scheduler for an organization."""
         await self._heartbeat.stop_for_org(org_id)
         await self._scheduler.stop_for_org(org_id)
 
+    async def _cancel_org_tasks(self, org_id: str) -> None:
+        """Cancel all background tasks (idle, watchdog, running) for an organization."""
         idle_task = self._idle_tasks.pop(org_id, None)
         if idle_task and not idle_task.done():
             idle_task.cancel()
@@ -289,14 +296,25 @@ class OrgRuntime:
                 pass
 
         org_tasks = self._running_tasks.pop(org_id, {})
-        for node_id, task in org_tasks.items():
+        for _node_id, task in org_tasks.items():
             if not task.done():
                 task.cancel()
-        for node_id, task in org_tasks.items():
+        for _node_id, task in org_tasks.items():
             try:
                 await task
             except (asyncio.CancelledError, Exception):
                 pass
+
+    async def stop_org(self, org_id: str) -> Organization:
+        """Stop an organization."""
+        org = self._active_orgs.get(org_id) or self._manager.get(org_id)
+        if not org:
+            raise ValueError(f"Organization not found: {org_id}")
+
+        self._check_transition(org, OrgStatus.DORMANT)
+
+        await self._stop_org_services(org_id)
+        await self._cancel_org_tasks(org_id)
 
         for node in org.nodes:
             if node.status in (NodeStatus.BUSY, NodeStatus.WAITING, NodeStatus.ERROR):
@@ -306,9 +324,10 @@ class OrgRuntime:
         org.updated_at = _now_iso()
         self._manager.update(org_id, {"status": org.status.value})
         await self._save_org(org)
-        await self._deactivate_org(org_id)
 
         self.get_event_store(org_id).emit("org_stopped", "system")
+        await self._deactivate_org(org_id)
+
         await self._broadcast_ws("org:status_change", {
             "org_id": org_id, "status": "dormant"
         })
@@ -366,17 +385,15 @@ class OrgRuntime:
         logger.info(f"[OrgRuntime] Deleted org: {org_id} ({org.name})")
 
     async def reset_org(self, org_id: str) -> Organization:
-        """Reset an organization: stop it, clear all runtime state, and restart fresh."""
+        """Reset an organization: stop runtime, clear all data, prepare for fresh start."""
         org = self._active_orgs.get(org_id) or self._manager.get(org_id)
         if not org:
             raise ValueError(f"Organization not found: {org_id}")
 
-        # 1. Stop if running
-        if org.status in (OrgStatus.ACTIVE, OrgStatus.RUNNING, OrgStatus.PAUSED):
-            try:
-                await self.stop_org(org_id)
-            except Exception:
-                pass
+        # 1. Stop services and cancel tasks (without calling stop_org/_deactivate_org,
+        #    so that in-memory references remain alive for data cleanup below)
+        await self._stop_org_services(org_id)
+        await self._cancel_org_tasks(org_id)
 
         # 2. Reset all node statuses to idle, clear frozen state and current_task
         for node in org.nodes:
@@ -391,29 +408,27 @@ class OrgRuntime:
         for k in keys_to_evict:
             self._agent_cache.pop(k, None)
 
-        # 4. Clear event store
-        es = self._event_stores.pop(org_id, None)
-        if es:
-            es.clear()
-
-        # 5. Clear blackboard
-        bb = self._blackboards.pop(org_id, None)
+        # 4. Clear data stores while references are still alive
+        bb = self._blackboards.get(org_id)
         if bb and hasattr(bb, "clear"):
-            self.get_event_store(org_id).emit(
-                "blackboard_cleared", "system", {"reason": "org_reset"}
-            )
             bb.clear()
 
-        # 6. Clear messenger queues
-        messenger = self._messengers.pop(org_id, None)
+        es = self._event_stores.get(org_id)
+        if es and hasattr(es, "clear"):
+            es.clear()
+
+        messenger = self._messengers.get(org_id)
         if messenger and hasattr(messenger, "clear_all"):
             messenger.clear_all()
 
-        # 7. Clear identity / policies caches
-        self._identities.pop(org_id, None)
-        self._policies.pop(org_id, None)
+        # Emit a single audit event as the first entry in the fresh event store
+        if es:
+            es.emit("org_reset", "system", {"reason": "org_reset"})
 
-        # 8. Save clean state
+        # 5. Tear down all in-memory references
+        await self._deactivate_org(org_id)
+
+        # 6. Save clean state
         org.status = OrgStatus.DORMANT
         org.updated_at = _now_iso()
         self._manager.update(org_id, org.to_dict())
@@ -1009,12 +1024,7 @@ class OrgRuntime:
         if not node or node.status in (NodeStatus.FROZEN, NodeStatus.OFFLINE):
             return
 
-        active_key = f"{org_id}:{node_id}"
-        running = self._running_tasks.get(org_id, {})
-        active_count = sum(
-            1 for k, t in running.items()
-            if k.startswith(f"{node_id}:") and not t.done()
-        )
+        active_count = self._node_active_count(org_id, node_id)
 
         messenger = self.get_messenger(org_id)
         pending = messenger.get_pending_count(node_id) if messenger else 0
@@ -1318,7 +1328,7 @@ class OrgRuntime:
         self._manager.save_state(org_id, state)
 
     async def _recover_pending_tasks(self, org: Organization) -> None:
-        """Reset stale node statuses after a restart.
+        """Reset stale node statuses and orphan tasks after a restart.
 
         After a process restart, in-memory agents are gone. Any node still
         marked busy/waiting/error in the persisted org.json is stale and must
@@ -1326,19 +1336,71 @@ class OrgRuntime:
         org object (loaded from org.json) rather than only the state.json
         snapshot, because state.json is only written during graceful shutdown
         and may be missing or outdated after a crash.
+
+        We also reset any ``in_progress`` tasks assigned to recovered nodes
+        back to ``todo`` so the orchestrator can re-dispatch them.
         """
         recovered_count = 0
         stale_statuses = {NodeStatus.BUSY, NodeStatus.WAITING, NodeStatus.ERROR}
+        recovered_node_ids: set[str] = set()
 
         for node in org.nodes:
             if node.status in stale_statuses:
                 self._set_node_status(org, node, NodeStatus.IDLE, "restart_cleanup")
                 self._agent_cache.pop(f"{org.id}:{node.id}", None)
+                recovered_node_ids.add(node.id)
                 recovered_count += 1
 
         if recovered_count > 0:
             await self._save_org(org)
             logger.info(f"[OrgRuntime] Recovered {recovered_count} stale nodes for {org.name}")
+
+        self._recover_orphan_tasks(org, recovered_node_ids)
+
+    def _recover_orphan_tasks(
+        self, org: Organization, recovered_node_ids: set[str]
+    ) -> None:
+        """Reset in_progress tasks whose assignee nodes are now idle.
+
+        Called after node recovery to maintain task ↔ node consistency.
+        Tasks are reset to ``todo`` so they can be re-dispatched.
+        """
+        from openakita.orgs.models import TaskStatus
+        from openakita.orgs.project_store import ProjectStore
+
+        try:
+            org_dir = self._manager._org_dir(org.id)
+            store = ProjectStore(org_dir)
+        except Exception as exc:
+            logger.debug("[OrgRuntime] Cannot open ProjectStore for %s: %s", org.id, exc)
+            return
+
+        orphan_tasks = store.all_tasks(status="in_progress")
+        reset_count = 0
+        for task_dict in orphan_tasks:
+            assignee = task_dict.get("assignee_node_id", "")
+            if not assignee:
+                continue
+            node_is_idle = any(n.id == assignee and n.status == NodeStatus.IDLE for n in org.nodes)
+            if not node_is_idle:
+                continue
+            if recovered_node_ids and assignee not in recovered_node_ids:
+                continue
+            task_id = task_dict.get("id", "")
+            project_id = task_dict.get("project_id", "")
+            if not task_id or not project_id:
+                continue
+            store.update_task(project_id, task_id, {"status": TaskStatus.TODO})
+            reset_count += 1
+            logger.info(
+                "[OrgRuntime] Reset orphan task %s (assignee=%s) to todo in org %s",
+                task_id[:12], assignee, org.name,
+            )
+
+        if reset_count > 0:
+            logger.info(
+                "[OrgRuntime] Reset %d orphan tasks for org %s", reset_count, org.name
+            )
 
     def _evict_expired_agents(self) -> None:
         expired = [k for k, v in self._agent_cache.items() if v.expired]
@@ -1378,29 +1440,63 @@ class OrgRuntime:
     # Task completion hook & idle probe
     # ------------------------------------------------------------------
 
-    async def _drain_node_pending(self, org: Organization, node: OrgNode) -> bool:
-        """Process one pending message from a node's mailbox. Returns True if processed."""
+    def _node_active_count(self, org_id: str, node_id: str) -> int:
+        """Count running (not-done) tasks for a node."""
+        running = self._running_tasks.get(org_id, {})
+        return sum(
+            1 for k, t in running.items()
+            if k.startswith(f"{node_id}:") and not t.done()
+        )
+
+    async def _drain_node_pending(
+        self, org: Organization, node: OrgNode, *, max_msgs: int = 0,
+    ) -> int:
+        """Drain pending messages from a node's mailbox.
+
+        Processes up to *max_msgs* messages (0 = fill all available
+        concurrency slots).  Returns the number of messages dispatched.
+        """
         messenger = self.get_messenger(org.id)
         if not messenger:
-            return False
+            return 0
         mailbox = messenger.get_mailbox(node.id)
         if not mailbox or mailbox.pending_count <= 0:
-            return False
-        msg = await mailbox.get(timeout=0.5)
-        if not msg:
-            return False
-        mailbox.mark_dispatched()
-        logger.info(
-            f"[OrgRuntime] Draining pending message {msg.id} for {node.id} "
-            f"(remaining: {mailbox.pending_count})"
-        )
-        task_prompt = self._format_incoming_message(msg)
-        chain_id = msg.metadata.get("task_chain_id") or None
-        await self._activate_and_run(org, node, task_prompt, chain_id=chain_id)
-        return True
+            return 0
+
+        active = self._node_active_count(org.id, node.id)
+        slots = self.max_concurrent_per_node - active
+        if slots <= 0:
+            return 0
+        if max_msgs > 0:
+            slots = min(slots, max_msgs)
+
+        dispatched = 0
+        for _ in range(slots):
+            if mailbox.pending_count <= 0:
+                break
+            msg = await mailbox.get(timeout=0.5)
+            if not msg:
+                break
+            mailbox.mark_dispatched()
+            logger.info(
+                f"[OrgRuntime] Draining pending message {msg.id} for {node.id} "
+                f"(remaining: {mailbox.pending_count})"
+            )
+            task_prompt = self._format_incoming_message(msg)
+            chain_id = msg.metadata.get("task_chain_id") or None
+            await self._activate_and_run(org, node, task_prompt, chain_id=chain_id)
+            dispatched += 1
+        return dispatched
 
     async def _post_task_hook(self, org: Organization, node: OrgNode) -> None:
-        """After a node finishes, process pending messages or notify parent."""
+        """After a node finishes, process pending messages or notify parent.
+
+        Priority order:
+        1. Drain THIS node's own pending messages (it just freed a slot).
+        2. If parent has pending messages (e.g. deliverables from children),
+           drain those instead of creating a new "completion notification".
+        3. Only when parent has NO pending messages, send the notification.
+        """
         try:
             await asyncio.sleep(2)
             org = self.get_org(org.id)
@@ -1416,15 +1512,18 @@ class OrgRuntime:
             parent = org.get_parent(node.id)
             if not parent:
                 return
-            if parent.status in (NodeStatus.BUSY, NodeStatus.FROZEN, NodeStatus.OFFLINE):
+            if parent.status in (NodeStatus.FROZEN, NodeStatus.OFFLINE):
                 return
 
             messenger = self.get_messenger(org.id)
-            pending = messenger.get_pending_count(parent.id) if messenger else 0
+            parent_pending = messenger.get_pending_count(parent.id) if messenger else 0
 
-            if pending > 0:
+            if parent_pending > 0:
                 if parent.status == NodeStatus.IDLE:
                     await self._drain_node_pending(org, parent)
+                return
+
+            if parent.status == NodeStatus.BUSY:
                 return
 
             role_title = node.role_title or node.id

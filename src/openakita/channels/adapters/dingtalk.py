@@ -16,6 +16,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import os
 import threading
 import time
 import uuid
@@ -157,6 +158,8 @@ class DingTalkAdapter(ChannelAdapter):
         channel_name: str | None = None,
         bot_id: str | None = None,
         agent_profile_id: str = "default",
+        footer_elapsed: bool | None = None,
+        footer_status: bool | None = None,
     ):
         """
         Args:
@@ -167,6 +170,8 @@ class DingTalkAdapter(ChannelAdapter):
             channel_name: 通道名称（多Bot时用于区分实例）
             bot_id: Bot 实例唯一标识
             agent_profile_id: 绑定的 agent profile ID
+            footer_elapsed: 卡片底栏显示处理耗时（默认 True，可通过 DINGTALK_FOOTER_ELAPSED 环境变量控制）
+            footer_status: 卡片底栏显示处理状态（默认 True，可通过 DINGTALK_FOOTER_STATUS 环境变量控制）
         """
         super().__init__(channel_name=channel_name, bot_id=bot_id, agent_profile_id=agent_profile_id)
 
@@ -221,6 +226,21 @@ class DingTalkAdapter(ChannelAdapter):
         self._streaming_throttle_ms: int = 800
         self._streaming_enabled: bool = True
 
+        # 思考/工具链流式展示 (与飞书对齐)
+        self._streaming_thinking: dict[str, str] = {}
+        self._streaming_thinking_ms: dict[str, int] = {}
+        self._streaming_chain: dict[str, list[str]] = {}
+        self._typing_status: dict[str, str] = {}
+        self._typing_start_time: dict[str, float] = {}
+
+        # 卡片 footer 配置（显示耗时 / 状态）
+        self._footer_elapsed = footer_elapsed if footer_elapsed is not None else (
+            os.environ.get("DINGTALK_FOOTER_ELAPSED", "true").lower() in ("true", "1", "yes")
+        )
+        self._footer_status = footer_status if footer_status is not None else (
+            os.environ.get("DINGTALK_FOOTER_STATUS", "true").lower() in ("true", "1", "yes")
+        )
+
     def _make_session_key(self, chat_id: str, thread_id: str | None = None) -> str:
         return f"{chat_id}:{thread_id or ''}"
 
@@ -235,7 +255,7 @@ class DingTalkAdapter(ChannelAdapter):
         thread_id: str | None = None,
         is_group: bool = False,
     ) -> None:
-        """逐 token 流式更新互动卡片内容。"""
+        """逐 token 流式更新互动卡片内容（含思考和工具链上下文）。"""
         sk = self._make_session_key(chat_id, thread_id)
         card_state = self._thinking_cards.get(sk)
         if not card_state:
@@ -243,6 +263,7 @@ class DingTalkAdapter(ChannelAdapter):
 
         buf = self._streaming_buffers.get(sk, "") + token
         self._streaming_buffers[sk] = buf
+        self._typing_status[sk] = "生成回复"
 
         now = time.time() * 1000
         last = self._streaming_last_patch.get(sk, 0)
@@ -250,14 +271,79 @@ class DingTalkAdapter(ChannelAdapter):
             return
 
         self._streaming_last_patch[sk] = now
+        display = self._compose_thinking_display(sk)
+        footer = self._build_footer_note(sk)
         try:
-            display = buf + " ▍"
             if card_state.is_ai_card:
-                await self._stream_ai_card(card_state.card_id, display)
+                await self._stream_ai_card(card_state.card_id, display + footer)
             else:
-                await self._update_interactive_card(card_state.card_id, display)
+                await self._update_interactive_card(card_state.card_id, display + footer)
         except Exception as e:
             logger.debug(f"DingTalk: stream_token patch failed: {e}")
+
+    async def stream_thinking(
+        self,
+        chat_id: str,
+        thinking_text: str,
+        *,
+        thread_id: str | None = None,
+        is_group: bool = False,
+        duration_ms: int = 0,
+    ) -> None:
+        """实时将思考内容写入互动卡片。"""
+        sk = self._make_session_key(chat_id, thread_id)
+        card_state = self._thinking_cards.get(sk)
+        if not card_state:
+            return
+
+        self._streaming_thinking[sk] = thinking_text
+        if duration_ms:
+            self._streaming_thinking_ms[sk] = duration_ms
+        self._typing_status[sk] = "深度思考"
+
+        now = time.time() * 1000
+        last = self._streaming_last_patch.get(sk, 0)
+        if now - last < self._streaming_throttle_ms:
+            return
+
+        self._streaming_last_patch[sk] = now
+        display = self._compose_thinking_display(sk)
+        footer = self._build_footer_note(sk)
+        try:
+            await self._patch_card_content(card_state, display + footer)
+        except Exception as e:
+            logger.debug(f"DingTalk: stream_thinking patch failed: {e}")
+
+    async def stream_chain_text(
+        self,
+        chat_id: str,
+        text: str,
+        *,
+        thread_id: str | None = None,
+        is_group: bool = False,
+    ) -> None:
+        """追加工具调用链描述并更新卡片。"""
+        sk = self._make_session_key(chat_id, thread_id)
+        card_state = self._thinking_cards.get(sk)
+        if not card_state:
+            return
+
+        chain = self._streaming_chain.setdefault(sk, [])
+        chain.append(text)
+        self._typing_status[sk] = "调用工具"
+
+        now = time.time() * 1000
+        last = self._streaming_last_patch.get(sk, 0)
+        if now - last < self._streaming_throttle_ms:
+            return
+
+        self._streaming_last_patch[sk] = now
+        display = self._compose_thinking_display(sk)
+        footer = self._build_footer_note(sk)
+        try:
+            await self._patch_card_content(card_state, display + footer)
+        except Exception as e:
+            logger.debug(f"DingTalk: stream_chain_text patch failed: {e}")
 
     async def finalize_stream(
         self,
@@ -270,17 +356,26 @@ class DingTalkAdapter(ChannelAdapter):
         sk = self._make_session_key(chat_id, thread_id)
         card_state = self._thinking_cards.pop(sk, None)
 
+        has_timing = sk in self._typing_start_time
+        footer = self._build_footer_note(sk, final=True) if has_timing else ""
+
         self._streaming_buffers.pop(sk, None)
         self._streaming_last_patch.pop(sk, None)
+        self._streaming_thinking.pop(sk, None)
+        self._streaming_thinking_ms.pop(sk, None)
+        self._streaming_chain.pop(sk, None)
+        self._typing_status.pop(sk, None)
+        self._typing_start_time.pop(sk, None)
 
         if not card_state:
             return False
 
         try:
+            final_content = final_text + footer
             if card_state.is_ai_card:
-                await self._stream_ai_card(card_state.card_id, final_text, finished=True)
+                await self._stream_ai_card(card_state.card_id, final_content, finished=True)
             else:
-                await self._update_interactive_card(card_state.card_id, final_text)
+                await self._update_interactive_card(card_state.card_id, final_content)
             self._streaming_finalized.add(sk)
             return True
         except Exception as e:
@@ -293,7 +388,25 @@ class DingTalkAdapter(ChannelAdapter):
         _import_dingtalk_stream()
 
         self._http_client = httpx.AsyncClient()
-        await self._refresh_token()
+        try:
+            await self._refresh_token()
+        except Exception as e:
+            err_str = str(e)
+            err_type = type(e).__name__
+            if "ConnectError" in err_type or "ConnectError" in err_str:
+                raise ConnectionError(
+                    "无法连接钉钉 API (oapi.dingtalk.com / api.dingtalk.com)，请检查网络连接。"
+                ) from e
+            if "ConnectTimeout" in err_type or "TimeoutException" in err_type:
+                raise ConnectionError(
+                    "连接钉钉 API 超时，请检查网络连接。"
+                ) from e
+            if "Failed to get" in err_str or "accessToken" in err_str:
+                raise ConnectionError(
+                    f"钉钉 AppKey 或 AppSecret 无效，请在钉钉开放平台检查应用凭据。"
+                    f"（错误详情: {err_str}）"
+                ) from e
+            raise
 
         self._running = True
 
@@ -605,6 +718,11 @@ class DingTalkAdapter(ChannelAdapter):
                     is_mentioned = True
                     break
 
+        # NOTE: 钉钉 Stream 回调不提供引用/回复目标信息（无 parentMsgId 等字段），
+        # 因此无法像飞书/Telegram/OneBot 那样检测"回复机器人消息"作为隐式 mention。
+        # 如果需要在群聊中响应非 @ 消息，请在开发者后台开启"接收群聊中所有消息"，
+        # 并将 group_response_mode 设置为 smart 或 always。
+
         unified = UnifiedMessage.create(
             channel=self.channel_name,
             channel_message_id=msg_id,
@@ -818,6 +936,8 @@ class DingTalkAdapter(ChannelAdapter):
         try:
             card_state = await self._create_card(chat_id)
             self._thinking_cards[sk] = card_state
+            self._typing_start_time[sk] = time.time()
+            self._typing_status[sk] = "思考中"
         except Exception as e:
             logger.debug(f"DingTalk: send_typing card failed: {e}")
 
@@ -829,6 +949,11 @@ class DingTalkAdapter(ChannelAdapter):
         """
         sk = self._make_session_key(chat_id, thread_id)
         card_state = self._thinking_cards.pop(sk, None)
+        self._streaming_thinking.pop(sk, None)
+        self._streaming_thinking_ms.pop(sk, None)
+        self._streaming_chain.pop(sk, None)
+        self._typing_status.pop(sk, None)
+        self._typing_start_time.pop(sk, None)
         if not card_state:
             return
         with contextlib.suppress(Exception):
@@ -997,13 +1122,68 @@ class DingTalkAdapter(ChannelAdapter):
             raise RuntimeError(f"Card update failed: {result}")
         logger.debug(f"DingTalk: card updated, bizId={card_biz_id}")
 
+    def _compose_thinking_display(self, sk: str) -> str:
+        """根据当前 thinking + chain + reply buffer 构建卡片显示内容。"""
+        thinking = self._streaming_thinking.get(sk, "")
+        reply = self._streaming_buffers.get(sk, "")
+        dur_ms = self._streaming_thinking_ms.get(sk, 0)
+        chain_lines = self._streaming_chain.get(sk, [])
+
+        parts: list[str] = []
+        if thinking:
+            dur_str = f" ({dur_ms / 1000:.1f}s)" if dur_ms else ""
+            preview = thinking.strip()
+            if len(preview) > 600:
+                preview = preview[:600] + "..."
+            parts.append(f"💭 **思考过程**{dur_str}\n> {preview.replace(chr(10), chr(10) + '> ')}")
+
+        if chain_lines:
+            visible = chain_lines[-8:]
+            parts.append("\n".join(visible))
+
+        if reply:
+            if parts:
+                parts.append("---")
+            parts.append(reply + " ▍")
+        elif not thinking and not chain_lines:
+            parts.append("💭 思考中...")
+
+        return "\n".join(parts)
+
+    def _build_footer_note(self, sk: str, *, final: bool = False) -> str:
+        """构建卡片底部状态文本（耗时 + 状态），受 _footer_elapsed / _footer_status 开关控制。"""
+        if not self._footer_elapsed and not self._footer_status:
+            return ""
+
+        start = self._typing_start_time.get(sk)
+        elapsed_s = (time.time() - start) if start else 0.0
+        status = self._typing_status.get(sk, "")
+
+        parts: list[str] = []
+        if final:
+            if self._footer_elapsed:
+                parts.append(f"⏱ 完成 ({elapsed_s:.1f}s)")
+            else:
+                parts.append("✅ 完成")
+        else:
+            if self._footer_elapsed and elapsed_s > 0:
+                parts.append(f"⏱ {elapsed_s:.1f}s")
+            if self._footer_status and status:
+                parts.append(status)
+
+        if not parts:
+            return ""
+        return "\n\n<font color=gray>" + " · ".join(parts) + "</font>"
+
     async def _patch_card_content(
         self, card_state: "_CardState", text: str,
+        sk: str | None = None, *, final: bool = False,
     ) -> bool:
         """将进度/思考文本写入已存在的 thinking 卡片（不消费卡片）。
 
-        gateway 的 _try_patch_progress_to_card 调用此方法，
+        gateway 的 _try_patch_progress_to_card 调用此方法（3 个位置参数 + final 关键字），
         使思考内容直接更新到卡片上，避免发送独立文本消息导致时序错乱。
+        sk/final 参数保持与飞书签名一致，钉钉卡片不需要使用。
         """
         if not card_state or not card_state.card_id:
             return False
@@ -1041,8 +1221,14 @@ class DingTalkAdapter(ChannelAdapter):
             logger.debug(f"DingTalk: send_message skipped (stream finalized): {sk}")
             return f"stream_finalized_{sk}"
 
+        # ---- 清理思考/工具链缓存 ----
+        self._streaming_thinking.pop(sk, None)
+        self._streaming_thinking_ms.pop(sk, None)
+        self._streaming_chain.pop(sk, None)
+        self._typing_status.pop(sk, None)
+        self._typing_start_time.pop(sk, None)
+
         # ---- 思考卡片处理：尝试更新占位卡片为最终回复 ----
-        # 流式/非流式保护期间跳过，避免进度消息消费卡片
         if sk in self._streaming_buffers:
             card_state = None
         else:
@@ -1757,7 +1943,8 @@ class DingTalkAdapter(ChannelAdapter):
         response = await self._http_client.get(download_url, timeout=60.0)
         response.raise_for_status()
 
-        safe_name = Path(media.filename).name or "download"
+        from openakita.channels.base import sanitize_filename
+        safe_name = sanitize_filename(Path(media.filename).name or "download")
         local_path = self.media_dir / safe_name
         with open(local_path, "wb") as f:
             f.write(response.content)

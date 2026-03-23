@@ -48,19 +48,11 @@ def _get_mcp_catalog(request: Request):
     return agent.mcp_catalog if agent else None
 
 
-def _refresh_catalog_text(request: Request):
-    """刷新 Agent 系统提示中的 MCP 清单文本"""
-    agent = _get_agent(request)
-    if agent and hasattr(agent, "_mcp_catalog_text"):
-        agent._mcp_catalog_text = agent.mcp_catalog.generate_catalog()
-
-
 def _sync_tools_to_catalog(request: Request, server_name: str, client):
-    """连接成功后将运行时工具同步到 catalog 并刷新系统提示"""
+    """连接成功后将运行时工具同步到 catalog（MCPCatalog 内部缓存自动失效）"""
     catalog = _get_mcp_catalog(request)
     if catalog:
         sync_tools_after_connect(server_name, client, catalog)
-    _refresh_catalog_text(request)
 
 
 class MCPServerAddRequest(BaseModel):
@@ -70,6 +62,7 @@ class MCPServerAddRequest(BaseModel):
     args: list[str] = []
     env: dict[str, str] = {}
     url: str = ""
+    headers: dict[str, str] = {}
     description: str = ""
     auto_connect: bool = False
 
@@ -255,13 +248,13 @@ async def add_mcp_server(request: Request, body: MCPServerAddRequest):
         description=body.description,
         instructions="",
         auto_connect=body.auto_connect,
+        headers=body.headers or None,
         config_base_dir=settings.mcp_config_path,
         search_bases=[settings.project_root, Path.cwd()],
         client=client,
         catalog=catalog,
     )
 
-    _refresh_catalog_text(request)
     return result
 
 
@@ -283,5 +276,4 @@ async def remove_mcp_server(request: Request, server_name: str):
         catalog=catalog,
     )
 
-    _refresh_catalog_text(request)
     return result

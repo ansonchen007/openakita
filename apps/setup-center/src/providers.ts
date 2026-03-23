@@ -59,7 +59,7 @@ export function inferCapabilities(modelName: string, _providerSlug?: string | nu
   if (["vl", "vision", "visual", "image", "-v-", "4v"].some(kw => m.includes(kw))) caps.vision = true;
   if (["kimi", "gemini"].some(kw => m.includes(kw))) caps.video = true;
   if (["thinking", "r1", "qwq", "qvq", "o1"].some(kw => m.includes(kw))) caps.thinking = true;
-  if (["qwen", "gpt", "claude", "deepseek", "kimi", "glm", "gemini", "moonshot", "minimax"].some(kw => m.includes(kw))) caps.tools = true;
+  if (["qwen", "gpt", "claude", "deepseek", "kimi", "glm", "gemini", "moonshot", "minimax", "doubao"].some(kw => m.includes(kw))) caps.tools = true;
   if (m.includes("minimax") && m.includes("m2")) caps.thinking = true;
 
   return caps;
@@ -89,6 +89,13 @@ export function isDashScopeCodingPlanProvider(providerSlug: string | null, baseU
   const base = (baseUrl || "").toLowerCase();
   const isDash = slug === "dashscope" || slug === "dashscope-intl" || base.includes("dashscope.aliyuncs.com");
   return isDash && base.includes("coding");
+}
+
+export function isQianFanCodingPlanProvider(providerSlug: string | null, baseUrl: string): boolean {
+  const slug = (providerSlug || "").toLowerCase();
+  const base = (baseUrl || "").toLowerCase();
+  const isQf = slug === "qianfan" || base.includes("qianfan.baidubce.com");
+  return isQf && base.includes("coding");
 }
 
 export function miniMaxFallbackModels(providerSlug: string | null): ListedModel[] {
@@ -137,6 +144,20 @@ export function longCatFallbackModels(providerSlug: string | null): ListedModel[
   }));
 }
 
+export function qianFanCodingPlanFallbackModels(providerSlug: string | null): ListedModel[] {
+  const ids = [
+    "kimi-k2.5",
+    "deepseek-v3.2",
+    "glm-5",
+    "minimax-m2.5",
+  ];
+  return ids.map((id) => ({
+    id,
+    name: id,
+    capabilities: inferCapabilities(id, providerSlug),
+  }));
+}
+
 export function dashScopeCodingPlanFallbackModels(providerSlug: string | null): ListedModel[] {
   const ids = [
     "qwen3.5-plus",
@@ -170,6 +191,9 @@ export async function fetchModelsDirectly(params: {
   }
   if (isDashScopeCodingPlanProvider(providerSlug, baseUrl)) {
     return dashScopeCodingPlanFallbackModels(providerSlug);
+  }
+  if (isQianFanCodingPlanProvider(providerSlug, baseUrl)) {
+    return qianFanCodingPlanFallbackModels(providerSlug);
   }
   if (isLongCatProvider(providerSlug, baseUrl)) {
     return longCatFallbackModels(providerSlug);

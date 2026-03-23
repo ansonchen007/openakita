@@ -21,6 +21,7 @@ import hashlib
 import hmac
 import json
 import logging
+import os
 import shutil
 import time
 import uuid
@@ -75,7 +76,7 @@ class QQBotAdapter(ChannelAdapter):
     capabilities = {
         "streaming": False,
         "send_image": True,
-        "send_file": False,
+        "send_file": True,
         "send_voice": False,
         "delete_message": False,
         "edit_message": False,
@@ -100,6 +101,7 @@ class QQBotAdapter(ChannelAdapter):
         bot_id: str | None = None,
         agent_profile_id: str = "default",
         public_api_url: str = "",
+        footer_elapsed: bool | None = None,
     ):
         """
         Args:
@@ -115,6 +117,7 @@ class QQBotAdapter(ChannelAdapter):
             agent_profile_id: 绑定的 agent profile ID
             public_api_url: OpenAkita API 的公网 URL（如 https://example.com），
                 用于将本地图片转为 QQ 可访问的公网 URL。不配置则群/C2C 无法发送本地图片。
+            footer_elapsed: 回复末尾显示处理耗时（默认 True，可通过 QQBOT_FOOTER_ELAPSED 环境变量控制）
         """
         super().__init__(channel_name=channel_name, bot_id=bot_id, agent_profile_id=agent_profile_id)
 
@@ -149,6 +152,13 @@ class QQBotAdapter(ChannelAdapter):
         self._msg_seq_max_entries = 500
         # {chat_id: message_id} — "正在思考中..."提示消息 ID（send_typing 发出，clear_typing 撤回）
         self._typing_msg_ids: dict[str, str] = {}
+        # C2C 使用 msg_type=6 输入状态通知，无需撤回，用此集合标记
+        self._typing_c2c_active: set[str] = set()
+        # {chat_id: start_time} — typing 开始时间，用于计算耗时 footer
+        self._typing_start_time: dict[str, float] = {}
+        self._footer_elapsed = footer_elapsed if footer_elapsed is not None else (
+            os.environ.get("QQBOT_FOOTER_ELAPSED", "true").lower() in ("true", "1", "yes")
+        )
         # Markdown 能力是否可用（自定义 markdown 需内邀开通，首次失败后自动降级）
         self._markdown_available: bool = True
 
@@ -234,9 +244,19 @@ class QQBotAdapter(ChannelAdapter):
 
     async def start(self) -> None:
         """启动 QQ 官方机器人"""
+        if not self.app_id or not self.app_secret:
+            raise ValueError(
+                "QQ 机器人 AppID 或 AppSecret 未配置，请在 q.qq.com 开发设置中获取。"
+            )
+
         self._running = True
 
         if self.mode == "webhook":
+            try:
+                from aiohttp import web  # noqa: F401
+            except ImportError:
+                raise ImportError("aiohttp not installed. Run: pip install aiohttp")
+
             self._task = asyncio.create_task(self._run_webhook_server())
             logger.info(
                 f"QQ Official Bot adapter starting in WEBHOOK mode "
@@ -897,7 +917,7 @@ class QQBotAdapter(ChannelAdapter):
             api: botpy API client
             chat_type: "group" 或 "c2c"
             target_id: group_openid 或 user openid
-            file_type: 1=图片, 2=视频, 3=语音, 4=文件(暂未开放)
+            file_type: 1=图片, 2=视频, 3=语音, 4=文件
             url: 媒体资源 URL (必须为公网可访问的 http/https URL)
             srv_send_msg: True 则服务端直接发送（占主动消息频次）
 
@@ -1001,6 +1021,39 @@ class QQBotAdapter(ChannelAdapter):
             data = resp.json()
             return str(data.get("id", ""))
 
+    async def _send_text_via_http(
+        self,
+        chat_type: str,
+        target_id: str,
+        text: str,
+        msg_id: str | None = None,
+    ) -> str:
+        """Webhook 模式下通过 HTTP 发送纯文本消息。"""
+        import httpx as hx
+
+        headers = await self._build_api_headers()
+        base_url = self._api_base_url()
+
+        if chat_type == "group":
+            url = f"{base_url}/v2/groups/{target_id}/messages"
+        else:
+            url = f"{base_url}/v2/users/{target_id}/messages"
+
+        seq_key = msg_id or target_id
+        payload: dict[str, Any] = {
+            "msg_type": 0,
+            "content": text,
+            "msg_seq": self._next_msg_seq(seq_key),
+        }
+        if msg_id:
+            payload["msg_id"] = msg_id
+
+        async with hx.AsyncClient(timeout=15.0) as client:
+            resp = await client.post(url, json=payload, headers=headers)
+            resp.raise_for_status()
+            data = resp.json()
+            return str(data.get("id", ""))
+
     async def _send_rich_media(
         self,
         api: Any,
@@ -1022,7 +1075,7 @@ class QQBotAdapter(ChannelAdapter):
             api: botpy API client
             chat_type: "group" 或 "c2c"
             target_id: 目标 openid
-            file_type: 1=图片, 2=视频, 3=语音
+            file_type: 1=图片, 2=视频, 3=语音, 4=文件
             url: 公网可访问的媒体 URL
             msg_id: 被动回复的消息 ID（可选）
             local_path: 本地文件路径（可选，与 url 二选一）
@@ -1092,6 +1145,18 @@ class QQBotAdapter(ChannelAdapter):
             return False
         return parse_mode == "markdown" and self._has_markdown_features(text)
 
+    def _append_elapsed_footer(self, text: str, chat_id: str) -> str:
+        """若开启 footer_elapsed，在文本末尾追加耗时信息。"""
+        if not self._footer_elapsed or not text:
+            return text
+        start = self._typing_start_time.pop(chat_id, None)
+        if not start:
+            return text
+        elapsed = time.time() - start
+        if elapsed < 1.0:
+            return text
+        return f"{text}\n\n⏱ 完成 ({elapsed:.1f}s)"
+
     async def send_message(self, message: OutgoingMessage) -> str:
         """
         发送消息
@@ -1100,10 +1165,17 @@ class QQBotAdapter(ChannelAdapter):
         - 文本消息 (msg_type=0)
         - Markdown 消息 (msg_type=2, 需内邀开通，失败自动降级)
         - 图片消息 (频道: content+image/file_image; 群/C2C: 两步富媒体上传)
+        - 文件消息 (群/C2C: file_type=4 两步富媒体上传)
         """
         chat_type = self._resolve_chat_type(message.chat_id, message.metadata)
         msg_id = self._resolve_msg_id(message.chat_id, message.metadata)
         parse_mode = message.parse_mode
+
+        # 拼接耗时 footer
+        if message.content.text:
+            message.content.text = self._append_elapsed_footer(
+                message.content.text, message.chat_id,
+            )
 
         # Webhook 模式使用 HTTP API 发送
         if self.mode == "webhook":
@@ -1163,6 +1235,26 @@ class QQBotAdapter(ChannelAdapter):
             except Exception as e:
                 logger.warning(f"QQ: send extra image failed: {e}")
 
+        # 发送文件附件 (file_type=4, 频道不支持)
+        if chat_type != "channel":
+            for file_media in message.content.files:
+                file_url = file_media.url if file_media.url else None
+                file_path = (
+                    file_media.local_path if not file_url and file_media.local_path else None
+                )
+                if not file_url and not file_path:
+                    continue
+                try:
+                    await self._send_rich_media(
+                        api, chat_type, message.chat_id,
+                        file_type=4,
+                        url=file_url,
+                        msg_id=msg_id,
+                        local_path=file_path if not file_url else None,
+                    )
+                except Exception as e:
+                    logger.warning(f"QQ: send file failed: {e}")
+
         return result_id
 
     async def _send_message_via_http(
@@ -1172,7 +1264,7 @@ class QQBotAdapter(ChannelAdapter):
         msg_id: str | None,
         parse_mode: str | None = None,
     ) -> str:
-        """Webhook 模式：通过 HTTP API 发送消息（文本/Markdown/图片）"""
+        """Webhook 模式：通过 HTTP API 发送消息（文本/Markdown/图片/文件）"""
         try:
             import httpx as hx
         except ImportError:
@@ -1265,6 +1357,26 @@ class QQBotAdapter(ChannelAdapter):
                 local_path=first_image_path if not first_image_url else None,
             )
             result_id = result_id or media_id
+
+        # 发送文件附件 (file_type=4, 频道不支持)
+        if chat_type != "channel":
+            for file_media in message.content.files:
+                file_url = file_media.url if file_media.url else None
+                file_path = (
+                    file_media.local_path if not file_url and file_media.local_path else None
+                )
+                if not file_url and not file_path:
+                    continue
+                try:
+                    await self._send_rich_media(
+                        None, chat_type, target_id,
+                        file_type=4,
+                        url=file_url,
+                        msg_id=msg_id,
+                        local_path=file_path if not file_url else None,
+                    )
+                except Exception as e:
+                    logger.warning(f"QQ HTTP: send file failed: {e}")
 
         return result_id
 
@@ -1454,14 +1566,32 @@ class QQBotAdapter(ChannelAdapter):
         chat_id: str,
         file_path: str,
         caption: str | None = None,
+        **kwargs,
     ) -> str:
-        """
-        发送文件
+        """发送文件（file_type=4），支持群聊和 C2C。"""
+        chat_type = self._resolve_chat_type(chat_id)
+        if chat_type == "channel":
+            raise NotImplementedError("QQ 频道暂不支持通过富媒体 API 发送文件")
+        msg_id = self._resolve_msg_id(chat_id)
 
-        注意: QQ 官方 API 的 file_type=4 (文件) 暂未开放。
-        """
-        raise NotImplementedError(
-            "QQ 官方机器人暂不支持发送文件（file_type=4 API 未开放）"
+        if caption:
+            try:
+                if self._client and self._client.api:
+                    await self._send_to_target(
+                        self._client.api, chat_type, chat_id,
+                        msg_type=0, content=caption, msg_id=msg_id,
+                    )
+                else:
+                    await self._send_text_via_http(chat_type, chat_id, caption, msg_id)
+            except Exception as e:
+                logger.warning(f"QQ: send file caption failed: {e}")
+
+        api = self._client.api if self._client and self._client.api else None
+        return await self._send_rich_media(
+            api, chat_type, chat_id,
+            file_type=4,
+            msg_id=msg_id,
+            local_path=file_path,
         )
 
     async def send_voice(
@@ -1483,17 +1613,31 @@ class QQBotAdapter(ChannelAdapter):
     # ==================== Typing 提示 ====================
 
     async def send_typing(self, chat_id: str, thread_id: str | None = None) -> None:
-        """发送"正在思考中..."提示消息（QQ 官方无 typing API，用文本消息替代）。
+        """发送输入状态提示。
 
-        幂等：同一 chat_id 只发一次，后续调用（_keep_typing 循环）直接跳过。
+        C2C 单聊使用 msg_type=6 原生输入状态通知（每次调用都续期，不幂等）。
+        群聊/频道使用 msg_type=0 文本消息"正在思考中..."（幂等，只发一次）。
         """
+        # 记录 typing 开始时间（仅首次）
+        if chat_id not in self._typing_start_time:
+            self._typing_start_time[chat_id] = time.time()
+
+        chat_type = self._resolve_chat_type(chat_id)
+
+        # C2C: 使用 msg_type=6 输入状态通知，每 4 秒续期一次
+        if chat_type == "c2c":
+            self._typing_c2c_active.add(chat_id)
+            try:
+                await self._send_input_notify(chat_id)
+            except Exception as e:
+                logger.debug(f"QQ Official Bot: send_typing (input_notify) failed: {e}")
+            return
+
+        # 群聊/频道: 幂等发送文本消息
         if chat_id in self._typing_msg_ids:
             return
 
-        # 立即占位，防止 _keep_typing 循环在 await 期间重入
         self._typing_msg_ids[chat_id] = ""
-
-        chat_type = self._resolve_chat_type(chat_id)
         msg_id = self._resolve_msg_id(chat_id)
 
         try:
@@ -1513,6 +1657,28 @@ class QQBotAdapter(ChannelAdapter):
                 self._typing_msg_ids[chat_id] = sent_id
         except Exception as e:
             logger.debug(f"QQ Official Bot: send_typing failed: {e}")
+
+    async def _send_input_notify(self, chat_id: str) -> None:
+        """C2C 发送 msg_type=6 输入状态通知（QQ 客户端显示"对方正在输入..."）。"""
+        import httpx as hx
+
+        headers = await self._build_api_headers()
+        base_url = self._api_base_url()
+        msg_id = self._resolve_msg_id(chat_id)
+        seq_key = msg_id or chat_id
+
+        body: dict[str, Any] = {
+            "msg_type": 6,
+            "input_notify": {"input_type": 1, "input_second": 10},
+            "msg_seq": self._next_msg_seq(seq_key),
+        }
+        if msg_id:
+            body["msg_id"] = msg_id
+
+        url = f"{base_url}/v2/users/{chat_id}/messages"
+        async with hx.AsyncClient(timeout=15.0) as client:
+            resp = await client.post(url, json=body, headers=headers)
+            resp.raise_for_status()
 
     async def _send_typing_via_http(
         self, chat_id: str, chat_type: str, msg_id: str | None,
@@ -1546,7 +1712,14 @@ class QQBotAdapter(ChannelAdapter):
             return str(data.get("id", ""))
 
     async def clear_typing(self, chat_id: str, thread_id: str | None = None) -> None:
-        """撤回之前发送的"正在思考中..."消息（2 分钟内有效）"""
+        """清除输入状态提示。
+
+        C2C: msg_type=6 自动过期，只需清理内部状态。
+        群聊/频道: 撤回之前发送的"正在思考中..."消息（2 分钟内有效）。
+        """
+        self._typing_c2c_active.discard(chat_id)
+        self._typing_start_time.pop(chat_id, None)
+
         sent_id = self._typing_msg_ids.pop(chat_id, None)
         if not sent_id:
             return
@@ -1561,10 +1734,6 @@ class QQBotAdapter(ChannelAdapter):
                 if chat_type == "group":
                     await api.recall_group_message(
                         group_openid=chat_id, message_id=sent_id,
-                    )
-                elif chat_type == "c2c":
-                    await api.recall_c2c_message(
-                        openid=chat_id, message_id=sent_id,
                     )
                 elif chat_type == "channel":
                     await api.recall_message(
@@ -1612,7 +1781,8 @@ class QQBotAdapter(ChannelAdapter):
                 response = await client.get(media.url)
                 response.raise_for_status()
 
-                safe_name = Path(media.filename).name or "download"
+                from openakita.channels.base import sanitize_filename
+                safe_name = sanitize_filename(Path(media.filename).name or "download")
                 local_path = self.media_dir / safe_name
                 with open(local_path, "wb") as f:
                     f.write(response.content)

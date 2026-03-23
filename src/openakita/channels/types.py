@@ -253,11 +253,13 @@ class MessageContent:
             else:
                 parts.append(f"[图片: {img.filename}]")
 
+        _stt_failed = ("[语音识别失败]", "[语音处理超时]")
         for voice in self.voices:
-            if voice.transcription:
+            if voice.transcription and voice.transcription not in _stt_failed:
                 parts.append(f"[语音转文字: {voice.transcription}]")
             else:
-                parts.append(f"[语音: {voice.duration or '未知'}秒]")
+                dur = f"{voice.duration}秒" if voice.duration else "未知时长"
+                parts.append(f"[语音消息: {dur}, 未成功转写]")
 
         for video in self.videos:
             parts.append(f"[视频: {video.filename}, {video.duration or '未知'}秒]")

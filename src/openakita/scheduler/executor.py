@@ -130,8 +130,12 @@ class TaskExecutor:
                     text=message,
                 )
                 if msg_id is None:
-                    raise RuntimeError(
-                        f"Reminder send failed (no message_id) for {task.channel_id}/{task.chat_id}"
+                    # 部分 IM 平台（如 QQ 官方机器人）可能实际已送达但未返回 message_id，
+                    # 不视为硬失败，避免重试导致重复消息
+                    logger.warning(
+                        f"TaskExecutor: reminder {task.id} sent but no message_id returned "
+                        f"(message may have been delivered) for "
+                        f"{task.channel_id}/{task.chat_id}"
                     )
                 message_sent = True
                 logger.info(f"TaskExecutor: reminder {task.id} message sent (message_id={msg_id})")

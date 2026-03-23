@@ -328,12 +328,16 @@ class TaskScheduler:
                 task.mark_completed(next_run)
                 logger.info(f"Task {task.id} completed successfully")
             else:
-                # 失败：标记失败并尽量推进下一次运行时间（避免 next_run 停留在过去）
+                # 失败：标记失败并推进到下一次运行时间
                 error_msg = execution.error or "Unknown error"
                 task.mark_failed(error_msg)
                 trigger = self._triggers.get(task.id)
                 next_run = trigger.get_next_run_time(datetime.now()) if trigger else None
                 if next_run:
+                    # 确保 next_run 在当前 advance 窗口之后，防止同一触发窗口内快速重试
+                    min_next = datetime.now() + timedelta(seconds=self.advance_seconds + 5)
+                    if next_run <= min_next:
+                        next_run = trigger.get_next_run_time(min_next)
                     task.next_run = next_run
                 logger.warning(f"Task {task.id} reported failure: {error_msg}")
 
@@ -341,6 +345,13 @@ class TaskScheduler:
             error_msg = str(e)
             execution.finish(False, error=error_msg)
             task.mark_failed(error_msg)
+            # 异常路径同样需要确保 next_run 跳过当前触发窗口
+            trigger = self._triggers.get(task.id)
+            if trigger:
+                min_next = datetime.now() + timedelta(seconds=self.advance_seconds + 5)
+                next_run = trigger.get_next_run_time(min_next)
+                if next_run:
+                    task.next_run = next_run
             logger.error(f"Task {task.id} failed: {error_msg}", exc_info=True)
 
         # 保存执行记录

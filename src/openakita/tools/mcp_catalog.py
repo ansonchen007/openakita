@@ -11,6 +11,8 @@ MCP 目录 (MCP Catalog)
 
 import json
 import logging
+import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -40,8 +42,29 @@ class MCPServerInfo:
     env: dict[str, str] = field(default_factory=dict)
     transport: str = "stdio"  # "stdio" | "streamable_http" | "sse"
     url: str = ""  # streamable_http / sse 模式使用
+    headers: dict[str, str] = field(default_factory=dict)
     auto_connect: bool = False
     config_dir: str = ""  # 配置文件所在目录（用作 stdio 的 cwd 回退）
+
+
+_ENV_VAR_RE = re.compile(r"\$\{(\w+)\}")
+
+
+def _resolve_env_vars(value: str) -> str:
+    """Replace ``${VAR_NAME}`` patterns with ``os.environ`` values."""
+    return _ENV_VAR_RE.sub(lambda m: os.environ.get(m.group(1), ""), value)
+
+
+def _resolve_headers(raw: dict) -> dict[str, str]:
+    """Resolve env-var placeholders in header values, dropping empty ones."""
+    resolved: dict[str, str] = {}
+    for k, v in raw.items():
+        val = _resolve_env_vars(str(v))
+        if val:
+            resolved[k] = val
+        else:
+            logger.warning("MCP header %s resolved to empty (env var not set?), skipping", k)
+    return resolved
 
 
 class MCPCatalog:
@@ -188,6 +211,7 @@ Use `connect_mcp_server(server)` to connect a server and discover its tools.
             elif stype == "sse":
                 transport = "sse"
             url = metadata.get("url", "")
+            headers = _resolve_headers(metadata.get("headers") or {})
             auto_connect = metadata.get("autoConnect", False)
 
             # 加载工具
@@ -215,6 +239,7 @@ Use `connect_mcp_server(server)` to connect a server and discover its tools.
                 env=env,
                 transport=transport,
                 url=url,
+                headers=headers,
                 auto_connect=auto_connect,
                 config_dir=str(server_dir),
             )

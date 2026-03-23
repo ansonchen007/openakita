@@ -949,7 +949,8 @@
     "botTypeOnebotReverse": "OneBot (Reverse WS)",
     "botTypeOnebot": "OneBot",
     "botTypeQQBot": "QQ",
-    "botTypeWechat": "WeChat"
+    "botTypeWechat": "WeChat",
+    "adapterStartFailed": "Channel {{name}} failed to start"
   },
   "llm": {
     "title": "LLM Endpoints",
@@ -1689,7 +1690,20 @@
     "groupModeHint_mention_only": "Only reply when @mentioned, safest option",
     "groupModeHint_smart": "AI decides whether to reply",
     "groupModeHint_always": "Reply to all messages in group (use with caution)",
-    "groupModeHint": "Requires enabling the sensitive permission \"Get all group messages\" (im:message.group_msg) under App → Bot → Permissions, otherwise the bot only receives @mentions"
+    "groupModeHint": "Requires enabling the sensitive permission \"Get all group messages\" (im:message.group_msg) under App → Bot → Permissions, otherwise the bot only receives @mentions",
+    "footerTitle": "Card footer",
+    "footerElapsed": "Show elapsed time",
+    "footerStatus": "Show processing status"
+  },
+  "telegram": {
+    "footerTitle": "Thinking card footer",
+    "footerElapsed": "Show elapsed time",
+    "footerStatus": "Show processing status"
+  },
+  "dingtalk": {
+    "footerTitle": "Card footer",
+    "footerElapsed": "Show elapsed time",
+    "footerStatus": "Show processing status"
   },
   "security": {
     "title": "Security Policy",
@@ -1749,7 +1763,9 @@
     "qrInitFailed": "Initialization failed, check network",
     "qrLoginOk": "Login successful, creating bot...",
     "qrCreateFailed": "Failed to create bot",
-    "qrNeedBrowser": "This API requires browser login, please create manually in browser"
+    "qrNeedBrowser": "This API requires browser login, please create manually in browser",
+    "footerTitle": "Reply footer",
+    "footerElapsed": "Show elapsed time"
   },
   "wechat": {
     "qrScanLogin": "Scan QR to login",
@@ -1766,7 +1782,9 @@
     "qrExpired": "QR code expired, click to refresh",
     "qrInitFailed": "Initialization failed, check network",
     "hint": "WeChat personal account bot via iLink Bot API. Scan the QR code to login and obtain the access token. No public IP required.",
-    "tokenHint": "Obtained via QR scan login"
+    "tokenHint": "Obtained via QR scan login",
+    "footerTitle": "Reply footer",
+    "footerElapsed": "Show elapsed time"
   },
   "wecom": {
     "qrScanConfig": "Scan QR to configure bot",

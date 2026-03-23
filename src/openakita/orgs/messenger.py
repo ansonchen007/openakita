@@ -25,7 +25,12 @@ from .models import (
 logger = logging.getLogger(__name__)
 
 DEFAULT_MSG_TTL = 300
+TASK_MSG_TTL = 1800  # 30 min — deliverables / results must survive long orchestration rounds
 DEADLOCK_CHECK_INTERVAL = 30
+
+_TASK_MSG_TYPES = frozenset({
+    "task_assign", "task_result", "task_delivered", "task_accepted", "task_rejected",
+})
 
 
 class NodeMailbox:
@@ -205,7 +210,13 @@ class OrgMessenger:
                         sent_ts = datetime.fromisoformat(msg.created_at).timestamp()
                     except Exception:
                         continue
-                    ttl = msg.metadata.get("ttl", DEFAULT_MSG_TTL)
+                    default_ttl = (
+                        TASK_MSG_TTL
+                        if getattr(msg, "msg_type", None)
+                        and msg.msg_type.value in _TASK_MSG_TYPES
+                        else DEFAULT_MSG_TTL
+                    )
+                    ttl = msg.metadata.get("ttl", default_ttl)
                     if now - sent_ts > ttl and msg.status in ("sent", "delivered"):
                         msg.status = "expired"
                         expired_ids.append(msg_id)

@@ -127,7 +127,10 @@ class OrgManager:
             org.nodes = [OrgNode.from_dict(n) for n in nodes_raw]
         if edges_raw is not None:
             from .models import OrgEdge
-            org.edges = [OrgEdge.from_dict(e) for e in edges_raw]
+            org.edges = [
+                OrgEdge.from_dict(e) for e in edges_raw
+                if e.get("source") != e.get("target")
+            ]
 
         org.updated_at = _now_iso()
         self._ensure_node_dirs(org)

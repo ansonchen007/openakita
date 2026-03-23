@@ -274,6 +274,68 @@ class TestAutoKickoff:
             await runtime.shutdown()
 
 
+class TestResetOrg:
+    async def test_reset_org_status(self, runtime: OrgRuntime, org_manager: OrgManager):
+        with patch("openakita.orgs.templates.ensure_builtin_templates"):
+            await runtime.start()
+        try:
+            org = org_manager.create(make_org(name="重置测试").to_dict())
+            await runtime.start_org(org.id)
+            await runtime.reset_org(org.id)
+
+            org_manager.invalidate_cache(org.id)
+            loaded = org_manager.get(org.id)
+            assert loaded.status == OrgStatus.DORMANT
+            for node in loaded.nodes:
+                assert node.status == NodeStatus.IDLE
+        finally:
+            await runtime.shutdown()
+
+    async def test_reset_org_clears_blackboard_disk(
+        self, runtime: OrgRuntime, org_manager: OrgManager,
+    ):
+        """Blackboard files on disk must be removed after reset."""
+        with patch("openakita.orgs.templates.ensure_builtin_templates"):
+            await runtime.start()
+        try:
+            org = org_manager.create(make_org(name="黑板清理测试").to_dict())
+            await runtime.start_org(org.id)
+
+            bb = runtime.get_blackboard(org.id)
+            assert bb is not None
+            bb.write_org("测试黑板内容", source_node="node_ceo", importance=0.9)
+
+            bb_file = bb._memory_dir / "blackboard.jsonl"
+            assert bb_file.exists(), "blackboard.jsonl should exist after write"
+
+            await runtime.reset_org(org.id)
+
+            assert not bb_file.exists(), "blackboard.jsonl should be removed after reset"
+
+        finally:
+            await runtime.shutdown()
+
+    async def test_reset_org_clears_event_store(
+        self, runtime: OrgRuntime, org_manager: OrgManager,
+    ):
+        """Event store files on disk must be removed after reset."""
+        with patch("openakita.orgs.templates.ensure_builtin_templates"):
+            await runtime.start()
+        try:
+            org = org_manager.create(make_org(name="事件清理测试").to_dict())
+            await runtime.start_org(org.id)
+
+            es = runtime.get_event_store(org.id)
+            es.emit("test_event", "system", {"data": "value"})
+
+            await runtime.reset_org(org.id)
+
+            assert runtime.get_blackboard(org.id) is None
+            assert org.id not in runtime._active_orgs
+        finally:
+            await runtime.shutdown()
+
+
 class TestStateTransitions:
     async def test_pause_and_resume(self, runtime: OrgRuntime, org_manager: OrgManager):
         with patch("openakita.orgs.templates.ensure_builtin_templates"):
