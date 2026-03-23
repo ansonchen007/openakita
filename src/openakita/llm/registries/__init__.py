@@ -188,9 +188,19 @@ REGISTRY_BY_SLUG = {r.info.slug: r for r in ALL_REGISTRIES}
 
 
 def reload_registries() -> int:
-    """重新加载服务商注册表（合并内置 + 自定义），返回加载数量。"""
+    """重新加载服务商注册表（合并内置 + 自定义 + 插件），返回加载数量。"""
     global ALL_REGISTRIES, REGISTRY_BY_SLUG
     ALL_REGISTRIES = _build_registries()
+
+    try:
+        from ...plugins import PLUGIN_REGISTRY_MAP
+
+        for slug, reg in PLUGIN_REGISTRY_MAP.items():
+            if slug not in {r.info.slug for r in ALL_REGISTRIES}:
+                ALL_REGISTRIES.append(reg)
+    except ImportError:
+        pass
+
     REGISTRY_BY_SLUG = {r.info.slug: r for r in ALL_REGISTRIES}
     _logger.info(f"Reloaded {len(ALL_REGISTRIES)} provider registries")
     return len(ALL_REGISTRIES)

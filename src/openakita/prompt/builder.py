@@ -37,6 +37,52 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+_prompt_hook_registry = None  # set by PluginManager
+
+
+def set_prompt_hook_registry(hook_registry) -> None:
+    """Called by Agent._load_plugins to wire the hook registry."""
+    global _prompt_hook_registry
+    _prompt_hook_registry = hook_registry
+
+
+def _apply_plugin_prompt_hooks(prompt: str) -> str:
+    """Apply on_prompt_build hooks from plugins (sync context).
+
+    This runs hook callbacks synchronously. If a callback is a coroutine function,
+    it is executed in a separate thread to avoid blocking the running event loop.
+    """
+    if _prompt_hook_registry is None:
+        return prompt
+
+    callbacks = _prompt_hook_registry.get_hooks("on_prompt_build")
+    if not callbacks:
+        return prompt
+
+    import asyncio
+
+    error_tracker = getattr(_prompt_hook_registry, "_error_tracker", None)
+
+    for callback in callbacks:
+        plugin_id = getattr(callback, "__plugin_id__", "unknown")
+        if error_tracker and error_tracker.is_disabled(plugin_id):
+            continue
+        timeout = getattr(callback, "__hook_timeout__", 5.0)
+        try:
+            result = callback(prompt=prompt)
+            if asyncio.iscoroutine(result):
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                    future = pool.submit(asyncio.run, result)
+                    result = future.result(timeout=timeout)
+            if isinstance(result, str) and result.strip():
+                prompt += "\n\n" + result
+        except Exception as e:
+            logger.debug(f"on_prompt_build hook from '{plugin_id}' error: {e}")
+            if error_tracker:
+                error_tracker.record_error(plugin_id, "hook:on_prompt_build", str(e))
+    return prompt
+
 
 class PromptMode(Enum):
     """Prompt 注入级别，控制子 agent 的提示词精简程度"""
@@ -354,6 +400,8 @@ def build_system_prompt(
         sections.append("## Tool\n\n" + "\n\n".join(tool_parts))
 
     system_prompt = "\n\n---\n\n".join(sections)
+
+    system_prompt = _apply_plugin_prompt_hooks(system_prompt)
 
     total_tokens = estimate_tokens(system_prompt)
     logger.info(f"System prompt built: {total_tokens} tokens (mode={mode}, prompt_mode={prompt_mode.value})")

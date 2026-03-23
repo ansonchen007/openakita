@@ -265,7 +265,23 @@ class LLMClient:
                 self._providers[ep.name] = provider
 
     def _create_provider(self, config: EndpointConfig) -> LLMProvider | None:
-        """根据配置创建 Provider"""
+        """根据配置创建 Provider — 先查插件注册表，再走内置 fallback"""
+        try:
+            from ..plugins import PLUGIN_PROVIDER_MAP
+
+            plugin_cls = PLUGIN_PROVIDER_MAP.get(config.api_type)
+            if plugin_cls:
+                try:
+                    return plugin_cls(config)
+                except Exception as e:
+                    logger.error(
+                        f"Plugin provider '{config.api_type}' failed to init: {e}, "
+                        f"skipping endpoint '{config.name}'"
+                    )
+                    return None
+        except ImportError:
+            pass
+
         try:
             if config.api_type == "anthropic":
                 return AnthropicProvider(config)

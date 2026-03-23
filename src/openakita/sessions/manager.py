@@ -63,6 +63,8 @@ class SessionManager:
         self._channel_registry: dict[str, dict[str, str]] = {}
         self._load_channel_registry()
 
+        self._plugin_hooks = None
+
         # 用户管理器
         self.user_manager = UserManager(self.storage_path / "users")
 
@@ -92,6 +94,20 @@ class SessionManager:
     def mark_dirty(self) -> None:
         """标记会话数据已修改，需要保存"""
         self._dirty = True
+
+    def _dispatch_hook_fire_and_forget(self, hook_name: str, **kwargs) -> None:
+        """Dispatch a plugin hook from sync context (best-effort, non-blocking)."""
+        if self._plugin_hooks is None:
+            return
+        try:
+            import asyncio
+
+            loop = asyncio.get_running_loop()
+            loop.create_task(self._plugin_hooks.dispatch(hook_name, **kwargs))
+        except RuntimeError:
+            pass
+        except Exception as e:
+            logger.debug(f"Hook '{hook_name}' dispatch error: {e}")
 
     def flush(self) -> None:
         """立即保存所有待写入的会话（绕过防抖延迟）"""
@@ -212,6 +228,9 @@ class SessionManager:
                 )
                 self._sessions[session_key] = session
                 logger.info(f"Created new session: {session_key}")
+                self._dispatch_hook_fire_and_forget(
+                    "on_session_start", session=session, session_key=session_key
+                )
                 return session
 
         return None
@@ -262,14 +281,20 @@ class SessionManager:
 
     def close_session(self, session_key: str) -> bool:
         """关闭会话"""
+        closed_session = None
         with self._sessions_lock:
             if session_key in self._sessions:
-                session = self._sessions[session_key]
-                session.close()
+                closed_session = self._sessions[session_key]
+                closed_session.close()
                 del self._sessions[session_key]
                 self.mark_dirty()
                 logger.info(f"Closed session: {session_key}")
-                return True
+        if closed_session is not None:
+            self._dispatch_hook_fire_and_forget(
+                "on_session_end", session=closed_session, session_key=session_key,
+                reason="close",
+            )
+            return True
         return False
 
     def list_sessions(

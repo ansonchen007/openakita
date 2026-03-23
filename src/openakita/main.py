@@ -609,6 +609,9 @@ async def start_im_channels(agent_or_master):
     if not any_enabled:
         logger.info("No IM channels enabled, SessionManager is still active for Desktop Chat")
         _setup_session_backfill(agent_or_master)
+        if hasattr(agent_or_master, "_plugin_manager") and agent_or_master._plugin_manager:
+            if _session_manager is not None:
+                _session_manager._plugin_hooks = agent_or_master._plugin_manager.hook_registry
         return
 
     # 自动安装缺失的 IM 通道依赖
@@ -942,6 +945,12 @@ async def start_im_channels(agent_or_master):
 
     agent.set_scheduler_gateway(_message_gateway)
     _message_gateway.set_brain(agent.brain)
+
+    if hasattr(agent, "_plugin_manager") and agent._plugin_manager:
+        _message_gateway._plugin_hooks = agent._plugin_manager.hook_registry
+        agent._plugin_manager._host_refs["gateway"] = _message_gateway
+        if _session_manager is not None:
+            _session_manager._plugin_hooks = agent._plugin_manager.hook_registry
 
     _message_gateway.agent_handler = agent_handler
     _message_gateway.agent_handler_stream = agent_handler_stream

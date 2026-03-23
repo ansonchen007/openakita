@@ -934,6 +934,18 @@ class Agent:
         else:
             await self._start_builtin_mcp_servers()
 
+        # === 加载插件 ===
+        try:
+            await self._load_plugins()
+        except Exception as e:
+            logger.error(f"Plugin system failed to initialize: {e}")
+
+        if hasattr(self, "_plugin_manager") and self._plugin_manager:
+            try:
+                await self._plugin_manager.hook_registry.dispatch("on_init", agent=self)
+            except Exception as e:
+                logger.debug(f"on_init hook dispatch error: {e}")
+
         # 启动记忆会话
         session_id = datetime.now().strftime("%Y%m%d_%H%M%S") + "_" + str(uuid.uuid4())[:8]
         self.memory_manager.start_session(session_id)
@@ -1004,6 +1016,70 @@ class Agent:
             f"{total_mcp} MCP servers"
             f"{f' (builtin: {self._builtin_mcp_count})' if self._builtin_mcp_count else ''}"
         )
+
+    async def _load_plugins(self) -> None:
+        """Load plugins from data/plugins/ directory."""
+        from ..plugins.manager import PluginManager
+
+        plugins_dir = Path(settings.project_root) / "data" / "plugins"
+        state_path = Path(settings.project_root) / "data" / "plugin_state.json"
+
+        memory_backends: dict = {}
+        search_backends: dict = {}
+
+        host_refs: dict = {
+            "brain": self.brain,
+            "memory_manager": self.memory_manager,
+            "tool_registry": self.handler_registry,
+            "tool_definitions": self._tools,
+            "tool_catalog": self.tool_catalog,
+            "gateway": None,
+            "skill_loader": getattr(self, "skill_loader", None),
+            "mcp_client": getattr(self, "mcp_client", None),
+            "memory_backends": memory_backends,
+            "search_backends": search_backends,
+            "external_retrieval_sources": (
+                self.memory_manager.retrieval_engine._external_sources
+                if self.memory_manager and hasattr(self.memory_manager, "retrieval_engine")
+                else []
+            ),
+        }
+
+        try:
+            from ..channels.registry import register_adapter
+
+            host_refs["channel_registry"] = register_adapter
+        except ImportError:
+            pass
+
+        self._plugin_manager = PluginManager(
+            plugins_dir=plugins_dir,
+            state_path=state_path,
+            host_refs=host_refs,
+        )
+
+        await self._plugin_manager.load_all()
+
+        try:
+            from ..prompt.builder import set_prompt_hook_registry
+            set_prompt_hook_registry(self._plugin_manager.hook_registry)
+        except Exception as e:
+            logger.debug(f"Could not wire prompt hook registry: {e}")
+
+        if self.memory_manager and hasattr(self.memory_manager, "retrieval_engine"):
+            self.memory_manager.retrieval_engine._plugin_hooks = (
+                self._plugin_manager.hook_registry
+            )
+
+        if hasattr(self, "reasoning_engine") and self.reasoning_engine:
+            self.reasoning_engine._plugin_hooks = self._plugin_manager.hook_registry
+
+        loaded = self._plugin_manager.loaded_count
+        failed = self._plugin_manager.failed_count
+        if failed > 0:
+            logger.warning(f"Plugins: {loaded} loaded, {failed} failed (see plugin logs)")
+        elif loaded > 0:
+            logger.info(f"Plugins: {loaded} loaded successfully")
 
     def _init_handlers(self) -> None:
         """
@@ -1572,6 +1648,11 @@ class Agent:
 
             # 启动调度器
             await self.task_scheduler.start()
+
+            if hasattr(self, "_plugin_manager") and self._plugin_manager:
+                self.task_scheduler._plugin_hooks = (
+                    self._plugin_manager.hook_registry
+                )
 
             # 注册内置系统任务（每日记忆整理 + 每日自检）
             await self._register_system_tasks()

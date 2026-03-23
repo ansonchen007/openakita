@@ -259,6 +259,7 @@ class ReasoningEngine:
         self._response_handler = response_handler
         self._state = agent_state
         self._memory_manager = memory_manager
+        self._plugin_hooks = None
 
         # Agent Harness: Runtime Supervisor + Resource Budget
         self._supervisor = RuntimeSupervisor(enabled=getattr(settings, "supervisor_enabled", True))
@@ -1391,6 +1392,17 @@ class ReasoningEngine:
                     executed_tool_names.extend(executed)
                     state.record_tool_execution(executed)
                     self._budget.record_tool_calls(len(executed))
+
+                if self._plugin_hooks and tool_results:
+                    try:
+                        await self._plugin_hooks.dispatch(
+                            "on_tool_result",
+                            tool_calls=decision.tool_calls,
+                            tool_results=tool_results,
+                            executed=executed,
+                        )
+                    except Exception as _hook_err:
+                        logger.debug(f"on_tool_result hook error: {_hook_err}")
 
                 # 记录工具成功/失败状态 + IM 进度
                 # 使用 decision.tool_calls / tool_results 对齐遍历，

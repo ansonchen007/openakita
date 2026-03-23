@@ -62,6 +62,8 @@ class TaskScheduler:
         self.check_interval = check_interval_seconds
         self.advance_seconds = advance_seconds  # 提前执行秒数
 
+        self._plugin_hooks = None
+
         # 任务存储 {task_id: ScheduledTask}
         self._tasks: dict[str, ScheduledTask] = {}
 
@@ -309,6 +311,14 @@ class TaskScheduler:
 
         logger.info(f"Executing task: {task.id} ({task.name})")
         task.mark_running()
+
+        if self._plugin_hooks:
+            try:
+                await self._plugin_hooks.dispatch(
+                    "on_schedule", task=task, execution=execution
+                )
+            except Exception as e:
+                logger.debug(f"on_schedule hook error: {e}")
 
         try:
             if self.executor:

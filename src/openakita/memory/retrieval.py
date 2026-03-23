@@ -72,6 +72,8 @@ class RetrievalEngine:
         self.store = store
         self.brain = brain
         self._decompose_cache: dict[str, dict] = {}
+        self._external_sources: list = []
+        self._plugin_hooks = None
 
     def retrieve(
         self,
@@ -103,7 +105,13 @@ class RetrievalEngine:
             semantic_results, episode_results, recent_results, attachment_results
         )
 
+        if self._external_sources:
+            external = self._call_external_sources_sync(query)
+            candidates.extend(external)
+
         ranked = self._rerank(candidates, query, active_persona)
+
+        self._dispatch_on_retrieve_sync(query, ranked)
 
         return self._format_within_budget(ranked, max_tokens)
 
@@ -126,8 +134,90 @@ class RetrievalEngine:
         attachments = self._search_attachments(query, search_keywords, intent)
 
         candidates = self._merge_and_deduplicate(semantic, episodes, recent, attachments)
+
+        if self._external_sources:
+            external = self._call_external_sources_sync(query)
+            candidates.extend(external)
+
         ranked = self._rerank(candidates, query)
+        self._dispatch_on_retrieve_sync(query, ranked)
         return ranked[:limit]
+
+    # ==================================================================
+    # External Plugin Sources
+    # ==================================================================
+
+    def _call_external_sources_sync(self, query: str) -> list[RetrievalCandidate]:
+        """Call external retrieval sources (from plugins) with timeout isolation."""
+        results: list[RetrievalCandidate] = []
+        for source in self._external_sources:
+            source_name = getattr(source, "source_name", "unknown")
+            try:
+                try:
+                    loop = asyncio.get_running_loop()
+                except RuntimeError:
+                    loop = None
+
+                if loop and loop.is_running():
+                    import concurrent.futures
+
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                        future = pool.submit(
+                            asyncio.run,
+                            asyncio.wait_for(source.retrieve(query, 5), timeout=3.0),
+                        )
+                        items = future.result(timeout=5.0)
+                else:
+                    items = asyncio.run(
+                        asyncio.wait_for(source.retrieve(query, 5), timeout=3.0)
+                    )
+
+                for item in items or []:
+                    results.append(
+                        RetrievalCandidate(
+                            memory_id=item.get("id", ""),
+                            content=item.get("content", ""),
+                            memory_type="external",
+                            source_type=f"plugin:{source_name}",
+                            relevance=item.get("relevance", 0.5),
+                            score=item.get("relevance", 0.5),
+                            raw_data=item,
+                        )
+                    )
+            except Exception as e:
+                logger.warning(
+                    "External retrieval source '%s' failed: %s, skipped",
+                    source_name, e,
+                )
+        return results
+
+    def _dispatch_on_retrieve_sync(self, query: str, candidates: list) -> None:
+        """Dispatch on_retrieve hook from sync context."""
+        if self._plugin_hooks is None:
+            return
+        callbacks = self._plugin_hooks.get_hooks("on_retrieve")
+        if not callbacks:
+            return
+
+        import concurrent.futures
+
+        error_tracker = getattr(self._plugin_hooks, "_error_tracker", None)
+
+        for callback in callbacks:
+            plugin_id = getattr(callback, "__plugin_id__", "unknown")
+            if error_tracker and error_tracker.is_disabled(plugin_id):
+                continue
+            timeout = getattr(callback, "__hook_timeout__", 5.0)
+            try:
+                result = callback(query=query, candidates=candidates)
+                if asyncio.iscoroutine(result):
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                        future = pool.submit(asyncio.run, result)
+                        future.result(timeout=timeout)
+            except Exception as e:
+                logger.debug(f"on_retrieve hook from '{plugin_id}' error: {e}")
+                if error_tracker:
+                    error_tracker.record_error(plugin_id, "hook:on_retrieve", str(e))
 
     # ==================================================================
     # Multi-way Recall

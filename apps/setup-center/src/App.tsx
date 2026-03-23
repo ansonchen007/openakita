@@ -10,6 +10,7 @@ import { SkillManager } from "./views/SkillManager";
 import { IMView } from "./views/IMView";
 import { TokenStatsView } from "./views/TokenStatsView";
 import { MCPView } from "./views/MCPView";
+import PluginManagerView from "./views/PluginManagerView";
 import { SchedulerView } from "./views/SchedulerView";
 import { MemoryView } from "./views/MemoryView";
 import { IdentityView } from "./views/IdentityView";
@@ -4691,6 +4692,9 @@ export function App() {
       ) : (
         <MCPView serviceRunning={serviceStatus?.running ?? false} apiBaseUrl={apiBaseUrl} />
       );
+    }
+    if (view === "plugins") {
+      return <PluginManagerView visible={true} />;
     }
     if (view === "scheduler") {
       return disabledViews.includes("scheduler") ? (

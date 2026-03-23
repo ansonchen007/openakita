@@ -882,6 +882,8 @@ class MessageGateway:
         self._pre_process_hooks: list[Callable[[UnifiedMessage], Awaitable[UnifiedMessage]]] = []
         self._post_process_hooks: list[Callable[[UnifiedMessage, str], Awaitable[str]]] = []
 
+        self._plugin_hooks = None  # set by start_im_channels() in main.py
+
         # Whisper 语音识别模型（延迟加载或启动时预加载）
         self._whisper_language = whisper_language.lower().strip()
         # 英语且模型尺寸有 .en 变体时，自动切换到更小更快的 .en 模型
@@ -1676,6 +1678,12 @@ class MessageGateway:
 
     async def stop(self) -> None:
         """停止网关（立即停止，不等待进行中任务）"""
+        if self._plugin_hooks:
+            try:
+                await self._plugin_hooks.dispatch("on_shutdown", gateway=self)
+            except Exception as e:
+                logger.debug(f"on_shutdown hook error: {e}")
+
         self._running = False
         self._accepting = False
 
@@ -1871,6 +1879,14 @@ class MessageGateway:
         if not self._accepting:
             logger.debug(f"[Shutdown] Message rejected (drain mode): {message.channel}/{message.user_id}")
             return
+
+        if self._plugin_hooks:
+            try:
+                await self._plugin_hooks.dispatch(
+                    "on_message_received", message=message
+                )
+            except Exception as e:
+                logger.debug(f"on_message_received hook error: {e}")
 
         session_key = self._get_session_key(message)
         _raw_text = (message.plain_text or "").strip()
@@ -3508,6 +3524,14 @@ class MessageGateway:
         """
         import asyncio
         from .media_parser import parse_media_from_text
+
+        if self._plugin_hooks:
+            try:
+                await self._plugin_hooks.dispatch(
+                    "on_message_sending", message=original, response=response
+                )
+            except Exception as e:
+                logger.debug(f"on_message_sending hook error: {e}")
 
         adapter = self._adapters.get(original.channel)
         if not adapter:

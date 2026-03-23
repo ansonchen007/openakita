@@ -46,6 +46,7 @@ from .routes import (
     mcp,
     memory,
     orgs,
+    plugins,
     scheduler,
     sessions,
     skills,
@@ -303,6 +304,11 @@ def create_app(
     app.state.orchestrator = orchestrator
     app.state.agent_pool = agent_pool
 
+    if agent is not None:
+        pm = getattr(agent, "_plugin_manager", None)
+        if pm is not None:
+            pm._host_refs["api_app"] = app
+
     # Initialize OrgManager & OrgRuntime
     from openakita.orgs.manager import OrgManager
     from openakita.orgs.runtime import OrgRuntime
@@ -341,6 +347,7 @@ def create_app(
     app.include_router(identity.router, tags=["身份"])
     app.include_router(orgs.router, tags=["组织编排"])
     app.include_router(orgs.inbox_router, tags=["组织消息中心"])
+    app.include_router(plugins.router)
 
     @app.get("/", tags=["系统"])
     async def root():
