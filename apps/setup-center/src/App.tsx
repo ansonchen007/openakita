@@ -1799,6 +1799,7 @@ export function App() {
           "AGENT_NAME", "MAX_ITERATIONS", "SELFCHECK_AUTOFIX",
           "THINKING_MODE",
           "PROGRESS_TIMEOUT_SECONDS", "HARD_TIMEOUT_SECONDS",
+          "MEMORY_MODE",
           "EMBEDDING_MODEL", "EMBEDDING_DEVICE", "MODEL_DOWNLOAD_SOURCE",
           "MEMORY_HISTORY_DAYS", "MEMORY_MAX_HISTORY_FILES", "MEMORY_MAX_HISTORY_SIZE_MB",
           "PERSONA_NAME",
@@ -3058,6 +3059,7 @@ export function App() {
       "WHISPER_MODEL",
       "WHISPER_LANGUAGE",
       // memory / embedding
+      "MEMORY_MODE",
       "EMBEDDING_MODEL",
       "EMBEDDING_DEVICE",
       "MODEL_DOWNLOAD_SOURCE",

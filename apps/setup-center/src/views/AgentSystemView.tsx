@@ -272,15 +272,29 @@ export function AgentSystemView(props: AgentSystemViewProps) {
             />
           }
         >
-          <Button
-            size="sm"
-            onClick={() => setShowReviewConfirm(true)}
-            disabled={reviewing || !serviceRunning}
-            className="bg-gradient-to-br from-indigo-500 to-purple-500 hover:from-indigo-600 hover:to-purple-600 text-white border-0 w-fit"
-          >
-            {reviewing ? <Loader2 size={14} className="animate-spin" /> : <Brain size={14} />}
-            {reviewing ? t("config.memoryReviewing") : t("config.memoryReviewBtn")}
-          </Button>
+          <div className="space-y-3">
+            <FieldSelect
+              k="MEMORY_MODE"
+              label={t("config.memoryModeLabel")}
+              help={t("config.memoryModeHelp")}
+              options={[
+                { value: "mode1", label: t("config.memoryModeMode1") },
+                { value: "mode2", label: t("config.memoryModeMode2") },
+                { value: "auto", label: t("config.memoryModeAuto") },
+              ]}
+              envDraft={envDraft}
+              onEnvChange={setEnvDraft}
+            />
+            <Button
+              size="sm"
+              onClick={() => setShowReviewConfirm(true)}
+              disabled={reviewing || !serviceRunning}
+              className="bg-gradient-to-br from-indigo-500 to-purple-500 hover:from-indigo-600 hover:to-purple-600 text-white border-0 w-fit"
+            >
+              {reviewing ? <Loader2 size={14} className="animate-spin" /> : <Brain size={14} />}
+              {reviewing ? t("config.memoryReviewing") : t("config.memoryReviewBtn")}
+            </Button>
+          </div>
         </Section>
 
         <AlertDialog open={showReviewConfirm} onOpenChange={setShowReviewConfirm}>
