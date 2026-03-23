@@ -1,0 +1,14 @@
+{
+  "id": "hello-tool",
+  "name": "Hello Tool",
+  "version": "1.0.0",
+  "description": "Simplest plugin demo: registers a hello_world tool",
+  "author": "OpenAkita Team",
+  "license": "MIT",
+  "type": "python",
+  "entry": "plugin.py",
+  "permissions": ["tools.register"],
+  "provides": {"tools": ["hello_world"]},
+  "category": "tool",
+  "tags": ["demo", "starter"]
+}

@@ -1,0 +1,15 @@
+{
+  "id": "qdrant-memory",
+  "name": "Qdrant Memory Backend",
+  "version": "1.0.0",
+  "description": "Memory backend replacement demo: uses Qdrant as vector store",
+  "author": "OpenAkita Team",
+  "license": "MIT",
+  "type": "python",
+  "entry": "plugin.py",
+  "permissions": ["memory.write", "memory.replace", "config.read", "config.write", "hooks.basic"],
+  "provides": {"memory_backend": "qdrant"},
+  "category": "memory",
+  "tags": ["demo", "memory", "qdrant"],
+  "requires": {"pip": ["qdrant-client"]}
+}

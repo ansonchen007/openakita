@@ -1,0 +1,7 @@
+{
+  "type": "object",
+  "properties": {
+    "vault_path": {"type": "string", "description": "Path to Obsidian vault directory"}
+  },
+  "required": ["vault_path"]
+}

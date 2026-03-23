@@ -1,0 +1,14 @@
+{
+  "id": "obsidian-kb",
+  "name": "Obsidian Knowledge Base",
+  "version": "1.0.0",
+  "description": "RAG knowledge base demo: scans Markdown files, injects retrieval results via on_retrieve hook",
+  "author": "OpenAkita Team",
+  "license": "MIT",
+  "type": "python",
+  "entry": "plugin.py",
+  "permissions": ["tools.register", "hooks.retrieve", "retrieval.register", "config.read", "config.write"],
+  "provides": {"tools": ["obsidian_search"], "retrieval_sources": ["obsidian"], "hooks": ["on_retrieve"]},
+  "category": "knowledge",
+  "tags": ["demo", "rag", "obsidian"]
+}

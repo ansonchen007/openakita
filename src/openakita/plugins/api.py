@@ -1,0 +1,483 @@
+"""PluginAPI — the interface handle passed to plugins, and PluginBase."""
+
+from __future__ import annotations
+
+import logging
+from abc import ABC, abstractmethod
+from collections.abc import Callable
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
+
+from .manifest import (
+    BASIC_PERMISSIONS,
+    PluginManifest,
+)
+
+if TYPE_CHECKING:
+    from .hooks import HookRegistry
+    from .protocols import MemoryBackendProtocol, RetrievalSource
+
+logger = logging.getLogger(__name__)
+
+
+class PluginPermissionError(PermissionError):
+    """Raised when a plugin attempts an unauthorized operation."""
+
+
+class PluginAPI:
+    """API handle passed to each plugin — limits interaction to declared permissions.
+
+    Each plugin gets its own PluginAPI instance with:
+    - Isolated logger writing to data/plugins/{id}/logs/
+    - Permission checks before every privileged operation
+    - Access to host subsystems via register_* methods
+    """
+
+    def __init__(
+        self,
+        plugin_id: str,
+        manifest: PluginManifest,
+        granted_permissions: list[str],
+        *,
+        data_dir: Path,
+        host_refs: dict[str, Any] | None = None,
+        hook_registry: HookRegistry | None = None,
+    ) -> None:
+        self._plugin_id = plugin_id
+        self._manifest = manifest
+        self._granted_permissions = set(granted_permissions)
+        self._data_dir = data_dir
+        self._host = host_refs or {}
+        self._hook_registry = hook_registry
+        self._registered_tools: list[str] = []
+        self._registered_channels: list[str] = []
+        self._registered_hooks: list[str] = []
+        self._registered_llm_slugs: list[str] = []
+        self._registered_search_backends: list[str] = []
+
+        self._logger = logging.getLogger(f"openakita.plugin.{plugin_id}")
+        if self._logger.level == logging.NOTSET:
+            self._logger.setLevel(logging.DEBUG)
+        self._setup_file_logging()
+
+    def _setup_file_logging(self) -> None:
+        log_dir = self._data_dir / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        log_path = log_dir / f"{self._plugin_id}.log"
+
+        if not any(
+            isinstance(h, RotatingFileHandler)
+            and getattr(h, "baseFilename", "") == str(log_path)
+            for h in self._logger.handlers
+        ):
+            handler = RotatingFileHandler(
+                log_path, maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8"
+            )
+            handler.setFormatter(
+                logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
+            )
+            self._logger.addHandler(handler)
+
+    def _check_permission(self, required: str) -> None:
+        if required in BASIC_PERMISSIONS:
+            return  # basic permissions are always granted
+        if required not in self._granted_permissions:
+            raise PluginPermissionError(
+                f"Plugin '{self._plugin_id}' requires permission '{required}' "
+                f"which was not granted. Add it to plugin.json permissions."
+            )
+
+    # --- Logging (basic, always available) ---
+
+    def log(self, msg: str, level: str = "info") -> None:
+        getattr(self._logger, level, self._logger.info)(msg)
+
+    def log_error(self, msg: str, exc: Exception | None = None) -> None:
+        self._logger.error(msg, exc_info=exc)
+
+    def log_debug(self, msg: str) -> None:
+        self._logger.debug(msg)
+
+    # --- Config / Data (basic) ---
+
+    def get_config(self) -> dict:
+        self._check_permission("config.read")
+        config_path = self._data_dir / "config.json"
+        if config_path.exists():
+            import json
+
+            return json.loads(config_path.read_text(encoding="utf-8"))
+        return {}
+
+    def set_config(self, updates: dict) -> None:
+        self._check_permission("config.write")
+        import json
+
+        config = self.get_config()
+        config.update(updates)
+        config_path = self._data_dir / "config.json"
+        config_path.write_text(
+            json.dumps(config, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
+
+    def get_data_dir(self) -> Path:
+        self._check_permission("data.own")
+        data = self._data_dir / "data"
+        data.mkdir(parents=True, exist_ok=True)
+        return data
+
+    # --- Tool registration (basic) ---
+
+    def register_tools(
+        self, definitions: list[dict], handler: Callable
+    ) -> None:
+        self._check_permission("tools.register")
+        tool_registry = self._host.get("tool_registry")
+        if tool_registry is None:
+            self.log("No tool_registry available, tools not registered", "warning")
+            return
+
+        handler_name = f"plugin_{self._plugin_id}"
+        tool_names = []
+        valid_defs = []
+        for d in definitions:
+            name = d.get("name", d.get("function", {}).get("name", ""))
+            if not name:
+                self.log(f"Skipping tool definition with no name: {d!r}", "warning")
+                continue
+            tool_names.append(name)
+            valid_defs.append(d)
+
+        if not tool_names:
+            self.log("No valid tool definitions provided", "warning")
+            return
+
+        tool_registry.register(handler_name, handler, tool_names=tool_names)
+        self._registered_tools.extend(tool_names)
+
+        tool_defs = self._host.get("tool_definitions")
+        if tool_defs is not None and hasattr(tool_defs, "extend"):
+            tool_defs.extend(valid_defs)
+
+        tool_catalog = self._host.get("tool_catalog")
+        if tool_catalog is not None and hasattr(tool_catalog, "add_tool"):
+            for defn in valid_defs:
+                try:
+                    tool_catalog.add_tool(defn)
+                except Exception as e:
+                    self.log(f"Failed to add tool to catalog: {e}", "warning")
+
+        self.log(f"Registered {len(tool_names)} tools: {tool_names}")
+
+    # --- Hook registration ---
+
+    def register_hook(self, hook_name: str, callback: Callable) -> None:
+        if not callable(callback):
+            self.log(f"register_hook: callback is not callable: {callback!r}", "error")
+            return
+
+        basic_hooks = {"on_init", "on_shutdown", "on_schedule"}
+        message_hooks = {
+            "on_message_received", "on_message_sending",
+            "on_session_start", "on_session_end",
+        }
+        retrieve_hooks = {"on_retrieve", "on_prompt_build", "on_tool_result"}
+
+        if hook_name in basic_hooks:
+            self._check_permission("hooks.basic")
+        elif hook_name in message_hooks:
+            self._check_permission("hooks.message")
+        elif hook_name in retrieve_hooks:
+            self._check_permission("hooks.retrieve")
+        else:
+            self._check_permission("hooks.all")
+
+        if self._hook_registry is None:
+            self.log("No hook_registry available", "warning")
+            return
+
+        self._hook_registry.register(
+            hook_name, callback, plugin_id=self._plugin_id
+        )
+        timeout = self._manifest.hook_timeout
+        self._hook_registry.set_timeout(hook_name, self._plugin_id, timeout)
+        self._registered_hooks.append(hook_name)
+
+    # --- API routes (advanced) ---
+
+    def register_api_routes(self, router) -> None:
+        self._check_permission("routes.register")
+        api_server = self._host.get("api_app")
+        if api_server is None:
+            self.log("No API app available, routes not registered", "warning")
+            return
+        try:
+            api_server.include_router(router, prefix=f"/api/plugins/{self._plugin_id}")
+            self.log(f"Registered API routes under /api/plugins/{self._plugin_id}")
+        except Exception as e:
+            self.log_error(f"Failed to register API routes: {e}", e)
+
+    # --- Channel registration (advanced) ---
+
+    def register_channel(self, type_name: str, factory: Callable) -> None:
+        self._check_permission("channel.register")
+        if not type_name:
+            self.log("register_channel: type_name cannot be empty", "error")
+            return
+        channel_registry = self._host.get("channel_registry")
+        if channel_registry is not None:
+            try:
+                channel_registry(type_name, factory)
+                self._registered_channels.append(type_name)
+                self.log(f"Registered channel type: {type_name}")
+            except Exception as e:
+                self.log_error(f"Failed to register channel '{type_name}': {e}", e)
+        else:
+            self.log("No channel_registry available", "warning")
+
+    # --- Memory backend (advanced / system) ---
+
+    def register_memory_backend(self, backend: MemoryBackendProtocol) -> None:
+        replace_mode = "memory.replace" in self._granted_permissions
+        if replace_mode:
+            self._check_permission("memory.replace")
+        else:
+            self._check_permission("memory.write")
+
+        memory_backends = self._host.get("memory_backends")
+        if memory_backends is not None:
+            memory_backends[self._plugin_id] = {
+                "backend": backend,
+                "replace": replace_mode,
+            }
+            self.log(
+                f"Registered memory backend (replace={replace_mode})"
+            )
+        else:
+            self.log("No memory_backends registry available", "warning")
+
+    # --- Search backend (advanced) ---
+
+    def register_search_backend(self, name: str, backend) -> None:
+        self._check_permission("search.register")
+        search_backends = self._host.get("search_backends")
+        if search_backends is not None:
+            search_backends[name] = backend
+            self._registered_search_backends.append(name)
+            self.log(f"Registered search backend: {name}")
+        else:
+            self.log("No search_backends registry available", "warning")
+
+    # --- LLM provider dual registration (advanced) ---
+
+    def register_llm_provider(self, api_type: str, provider_class: type) -> None:
+        self._check_permission("llm.register")
+        if not isinstance(provider_class, type):
+            self.log(
+                f"register_llm_provider: expected a class, got {type(provider_class).__name__}",
+                "error",
+            )
+            return
+        from . import PLUGIN_PROVIDER_MAP
+
+        provider_class.__plugin_id__ = self._plugin_id  # type: ignore[attr-defined]
+        PLUGIN_PROVIDER_MAP[api_type] = provider_class
+        self.log(f"Registered LLM provider for api_type: {api_type}")
+
+    def register_llm_registry(self, slug: str, registry) -> None:
+        self._check_permission("llm.register")
+        from . import PLUGIN_REGISTRY_MAP
+
+        PLUGIN_REGISTRY_MAP[slug] = registry
+        self._registered_llm_slugs.append(slug)
+        self.log(f"Registered LLM vendor registry: {slug}")
+
+    # --- Retrieval source (advanced) ---
+
+    def register_retrieval_source(self, source: RetrievalSource) -> None:
+        self._check_permission("retrieval.register")
+        if source is None:
+            self.log("register_retrieval_source: source cannot be None", "error")
+            return
+        external_sources = self._host.get("external_retrieval_sources")
+        if external_sources is not None:
+            try:
+                source._plugin_id = self._plugin_id  # type: ignore[attr-defined]
+            except (AttributeError, TypeError):
+                pass
+            external_sources.append(source)
+            source_name = getattr(source, "source_name", "unknown")
+            self.log(f"Registered retrieval source: {source_name}")
+        else:
+            self.log("No external_retrieval_sources list available", "warning")
+
+    # --- Host access (advanced) ---
+
+    def get_brain(self):
+        self._check_permission("brain.access")
+        return self._host.get("brain")
+
+    def get_memory_manager(self):
+        self._check_permission("memory.read")
+        return self._host.get("memory_manager")
+
+    def get_vector_store(self):
+        self._check_permission("vector.access")
+        mm = self._host.get("memory_manager")
+        if mm and hasattr(mm, "vector_store"):
+            return mm.vector_store
+        return None
+
+    def get_settings(self):
+        self._check_permission("settings.read")
+        try:
+            from ..config import settings
+
+            return settings
+        except ImportError:
+            return None
+
+    def send_message(self, channel: str, chat_id: str, text: str) -> None:
+        self._check_permission("channel.send")
+        gateway = self._host.get("gateway")
+        if gateway is None:
+            self.log("No gateway available for send_message", "warning")
+            return
+        adapter = gateway.get_adapter(channel)
+        if adapter is None:
+            self.log(f"No adapter found for channel '{channel}'", "warning")
+            return
+        import asyncio
+
+        async def _safe_send() -> None:
+            try:
+                await adapter.send_text(chat_id, text)
+            except Exception as e:
+                self.log(f"send_message failed: {e}", "error")
+
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(_safe_send())
+        except RuntimeError:
+            self.log("No event loop for send_message", "warning")
+
+    # --- Cleanup ---
+
+    def _cleanup(self) -> None:
+        """Called by PluginManager during unload.
+
+        Each section is independently guarded — one failure does not block
+        subsequent cleanup steps.
+        """
+        try:
+            if self._hook_registry:
+                removed = self._hook_registry.unregister_plugin(self._plugin_id)
+                if removed:
+                    self.log(f"Unregistered {removed} hooks")
+        except Exception as e:
+            logger.debug("Plugin '%s' hook cleanup error: %s", self._plugin_id, e)
+
+        try:
+            for h in self._logger.handlers[:]:
+                h.flush()
+                h.close()
+                self._logger.removeHandler(h)
+        except Exception:
+            pass
+
+        try:
+            self._cleanup_tools()
+        except Exception as e:
+            logger.debug("Plugin '%s' tool cleanup error: %s", self._plugin_id, e)
+
+        try:
+            memory_backends = self._host.get("memory_backends")
+            if memory_backends is not None:
+                memory_backends.pop(self._plugin_id, None)
+        except Exception:
+            pass
+
+        try:
+            search_backends = self._host.get("search_backends")
+            if search_backends is not None:
+                for name in self._registered_search_backends:
+                    search_backends.pop(name, None)
+        except Exception:
+            pass
+
+        try:
+            external_sources = self._host.get("external_retrieval_sources")
+            if external_sources is not None:
+                to_remove = [
+                    s for s in external_sources
+                    if getattr(s, "_plugin_id", None) == self._plugin_id
+                ]
+                for s in to_remove:
+                    try:
+                        external_sources.remove(s)
+                    except ValueError:
+                        pass
+        except Exception:
+            pass
+
+        try:
+            from . import PLUGIN_PROVIDER_MAP, PLUGIN_REGISTRY_MAP
+
+            for api_type, cls in list(PLUGIN_PROVIDER_MAP.items()):
+                if getattr(cls, "__plugin_id__", "") == self._plugin_id:
+                    del PLUGIN_PROVIDER_MAP[api_type]
+            for slug in self._registered_llm_slugs:
+                PLUGIN_REGISTRY_MAP.pop(slug, None)
+        except Exception:
+            pass
+
+    def _cleanup_tools(self) -> None:
+        """Remove plugin-registered tools from all host registries."""
+        if not self._registered_tools:
+            return
+
+        tool_registry = self._host.get("tool_registry")
+        if tool_registry:
+            handler_name = f"plugin_{self._plugin_id}"
+            try:
+                tool_registry.unregister(handler_name)
+            except Exception:
+                pass
+
+        tool_defs = self._host.get("tool_definitions")
+        if tool_defs is not None:
+            registered = set(self._registered_tools)
+            to_remove = [
+                d for d in tool_defs
+                if d.get("name", d.get("function", {}).get("name", ""))
+                in registered
+            ]
+            for d in to_remove:
+                try:
+                    tool_defs.remove(d)
+                except ValueError:
+                    pass
+
+        tool_catalog = self._host.get("tool_catalog")
+        if tool_catalog is not None and hasattr(tool_catalog, "remove_tool"):
+            for name in self._registered_tools:
+                try:
+                    tool_catalog.remove_tool(name)
+                except Exception:
+                    pass
+
+
+class PluginBase(ABC):
+    """Base class for Python plugins.
+
+    Subclass this and implement ``on_load``.
+    Optionally override ``on_unload`` for cleanup.
+    """
+
+    @abstractmethod
+    def on_load(self, api: PluginAPI) -> None:
+        """Called when the plugin is loaded. Register capabilities here."""
+
+    def on_unload(self) -> None:  # noqa: B027
+        """Called when the plugin is being unloaded. Clean up resources."""
