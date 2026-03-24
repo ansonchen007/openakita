@@ -23,6 +23,9 @@ from .multimodal import convert_content_blocks_to_openai
 # 启用 thinking 时，要求 assistant 消息携带 reasoning_content 的服务商集合
 # 这些服务商的思考模型在响应中返回 reasoning_content，
 # 多轮对话时缺少此字段会返回 400
+#
+# 注意: OpenRouter 使用 reasoning 字段（非 reasoning_content），
+# 由 _convert_single_message_to_openai 单独处理
 _REASONING_CONTENT_PROVIDERS = frozenset({
     "moonshot",         # legacy Kimi
     "kimi-cn",          # Kimi 中国区
@@ -97,17 +100,24 @@ def _convert_single_message_to_openai(
         if msg.role == "assistant" and _needs_reasoning_content(provider):
             if msg.reasoning_content:
                 converted["reasoning_content"] = msg.reasoning_content
-                # 文本中可能残留 <thinking> 标签，需清理
                 _, clean = _extract_thinking_content(converted["content"])
                 converted["content"] = clean
             else:
-                # 尝试从文本中提取 reasoning_content
                 extracted, clean = _extract_thinking_content(converted["content"])
                 if extracted:
                     converted["reasoning_content"] = extracted
                     converted["content"] = clean
                 else:
                     converted["reasoning_content"] = ""
+        elif msg.role == "assistant" and provider == "openrouter" and enable_thinking:
+            # OpenRouter 使用 reasoning 字段（非 reasoning_content）
+            _rc = msg.reasoning_content
+            if not _rc:
+                _rc, clean = _extract_thinking_content(converted["content"])
+                if _rc:
+                    converted["content"] = clean
+            if _rc:
+                converted["reasoning"] = _rc
         elif msg.reasoning_content:
             converted["reasoning_content"] = msg.reasoning_content
         return converted
@@ -173,6 +183,12 @@ def _convert_single_message_to_openai(
                     reasoning_content = "..." if tool_uses else ""
 
                 assistant_msg["reasoning_content"] = reasoning_content
+            elif provider == "openrouter" and enable_thinking:
+                _rc = msg.reasoning_content
+                if not _rc and text_content:
+                    _rc, text_content = _extract_thinking_content(text_content)
+                if _rc:
+                    assistant_msg["reasoning"] = _rc
             elif msg.reasoning_content:
                 assistant_msg["reasoning_content"] = msg.reasoning_content
 

@@ -685,7 +685,25 @@ class OpenAIProvider(LLMProvider):
             if request.enable_thinking:
                 body["enable_thinking"] = True
 
-        # OpenAI 兼容端点思考模式（火山引擎/DeepSeek/vLLM/OpenRouter 等）
+        # OpenRouter 思考模式
+        #
+        # OpenRouter 使用独立的 reasoning API（不兼容 OpenAI thinking / DashScope enable_thinking）：
+        #   请求: reasoning: {"effort": "high"} 或 {"enabled": true}
+        #   响应: message.reasoning (str) 包含推理过程
+        # 文档: https://openrouter.ai/docs/use-cases/reasoning-tokens
+        elif self.config.provider == "openrouter" and self.config.has_capability("thinking"):
+            body.pop("enable_thinking", None)
+            body.pop("thinking", None)
+            body.pop("reasoning_effort", None)
+
+            if request.enable_thinking or is_always_thinking:
+                depth_map = {"low": "low", "medium": "medium", "high": "high"}
+                effort = depth_map.get(request.thinking_depth or "medium", "medium")
+                body["reasoning"] = {"effort": effort}
+            else:
+                body.pop("reasoning", None)
+
+        # OpenAI 兼容端点思考模式（火山引擎/DeepSeek/vLLM 等）
         #
         # 背景：
         # - 原生 OpenAI o1/o3 系列天然就是思考模型，只需 reasoning_effort 控制深度
@@ -694,29 +712,22 @@ class OpenAIProvider(LLMProvider):
         # - 如果只传 reasoning_effort 而不启用 thinking，火山引擎等 API 会返回 400:
         #   "Invalid combination of reasoning_effort and thinking type: medium + disabled"
         #
-        # 排除: DashScope（上面已处理）、SiliconFlow（上面已处理）、本地端点（上面已处理）
+        # 排除: DashScope、SiliconFlow、本地端点、OpenRouter（上面已各自处理）
         elif (
             self.config.has_capability("thinking")
             and not is_local
         ):
-            # 清理 DashScope 风格参数（可能由 extra_params 泄漏）
-            # 此分支使用 OpenAI 风格 thinking: {"type": "enabled"}，不使用 enable_thinking
             body.pop("enable_thinking", None)
 
             if request.enable_thinking or is_always_thinking:
-                # 显式启用思考（DeepSeek/vLLM/火山引擎等 OpenAI-compatible 标准）
-                # 对于原生 OpenAI o1/o3 模型，此参数会被忽略（它们天然就是思考模型）
-                # thinking-only 模型在 fallback 降级后也必须保持启用
                 if "thinking" not in body:
                     body["thinking"] = {"type": "enabled"}
-                # 思考深度控制（可选）
                 if request.thinking_depth:
                     depth_map = {"low": "low", "medium": "medium", "high": "high"}
                     effort = depth_map.get(request.thinking_depth)
                     if effort:
                         body["reasoning_effort"] = effort
             else:
-                # 显式关闭思考（避免 extra_params 中的残留设置）
                 body.pop("reasoning_effort", None)
                 if "thinking" in body:
                     body["thinking"] = {"type": "disabled"}
@@ -809,7 +820,15 @@ class OpenAIProvider(LLMProvider):
         # 同时检查 reasoning_content 中是否嵌入了工具调用
         _tool_calls_from_reasoning = False
         combined_for_check = text_content
+        # reasoning_content: DeepSeek/Kimi 等使用 reasoning_content 字段
+        # reasoning: OpenRouter 使用 reasoning 字段（字符串或包含 content 的对象）
         reasoning_content = message.get("reasoning_content") or ""
+        if not reasoning_content:
+            _or_reasoning = message.get("reasoning")
+            if isinstance(_or_reasoning, str) and _or_reasoning:
+                reasoning_content = _or_reasoning
+            elif isinstance(_or_reasoning, dict):
+                reasoning_content = _or_reasoning.get("content", "") or ""
         if not has_tool_calls and not text_content and reasoning_content:
             if has_text_tool_calls(reasoning_content):
                 combined_for_check = reasoning_content
