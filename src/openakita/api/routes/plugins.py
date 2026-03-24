@@ -123,10 +123,14 @@ def _build_plugin_list(pm, plugins_dir: Path) -> tuple[list[dict[str, Any]], dic
 
 @router.get("/list")
 async def list_plugins(request: Request) -> dict[str, Any]:
-    pm = _get_plugin_manager(request)
-    plugins_dir = _plugins_dir()
-    plugins, failed = _build_plugin_list(pm, plugins_dir)
-    return {"plugins": plugins, "failed": failed}
+    try:
+        pm = _get_plugin_manager(request)
+        plugins_dir = _plugins_dir()
+        plugins, failed = _build_plugin_list(pm, plugins_dir)
+        return {"plugins": plugins, "failed": failed}
+    except Exception as e:
+        logger.exception("Failed to list plugins")
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @router.post("/install")

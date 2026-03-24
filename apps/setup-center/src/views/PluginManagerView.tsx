@@ -29,7 +29,14 @@ async function fetchPlugins(): Promise<PluginListResponse> {
   const resp = await fetch(`${httpApiBase()}/api/plugins/list`, {
     headers: { Authorization: `Bearer ${(window as any).__API_TOKEN__ || ""}` },
   });
-  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  if (!resp.ok) {
+    let detail = "";
+    try {
+      const body = await resp.json();
+      detail = body.detail || "";
+    } catch { /* ignore */ }
+    throw new Error(detail ? `HTTP ${resp.status}: ${detail}` : `HTTP ${resp.status}`);
+  }
   return resp.json();
 }
 
@@ -97,7 +104,7 @@ export default function PluginManagerView({ visible }: { visible: boolean }) {
       setFailed(data.failed || {});
     } catch (e: any) {
       const msg = e.message || "";
-      if (msg.includes("404") || msg.includes("Not Found")) {
+      if (msg.includes("404") || msg.includes("Not Found") || msg.includes("Failed to fetch")) {
         setNotAvailable(true);
       } else {
         setError(msg || t("plugins.failedToLoad"));

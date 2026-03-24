@@ -46,7 +46,6 @@ from .routes import (
     mcp,
     memory,
     orgs,
-    plugins,
     scheduler,
     sessions,
     skills,
@@ -54,6 +53,11 @@ from .routes import (
     upload,
     workspace_io,
 )
+try:
+    from .routes import plugins as plugins_routes
+except ImportError:
+    plugins_routes = None
+    logging.getLogger(__name__).debug("Plugin routes not available")
 from .routes import (
     auth as auth_routes,
 )
@@ -347,7 +351,8 @@ def create_app(
     app.include_router(identity.router, tags=["身份"])
     app.include_router(orgs.router, tags=["组织编排"])
     app.include_router(orgs.inbox_router, tags=["组织消息中心"])
-    app.include_router(plugins.router)
+    if plugins_routes is not None:
+        app.include_router(plugins_routes.router)
 
     @app.get("/", tags=["系统"])
     async def root():
