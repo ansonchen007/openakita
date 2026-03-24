@@ -340,7 +340,6 @@ class Agent:
         self.mcp_catalog = _shared_mcp_catalog
         self.browser_manager = None  # 在 _start_builtin_mcp_servers 中启动
         self.pw_tools = None
-        self.bu_runner = None
         self._builtin_mcp_count = 0
 
         # 恢复运行时状态（必须在工具目录构建之前，否则 multi_agent_enabled 等可能还是旧值）
@@ -824,7 +823,6 @@ class Agent:
         self._context.system = self._build_system_prompt(base_prompt, use_compiled=True)
 
         if lightweight:
-            self._inject_browser_use_llm_config()
             self._initialized = True
             return
 
@@ -867,9 +865,6 @@ class Agent:
         except Exception as e:
             logger.debug(f"[Persona] trait loading skipped: {e}")
 
-        # === browser_task 依赖的 LLM 配置注入 ===
-        self._inject_browser_use_llm_config()
-
         self._initialized = True
         total_mcp = self.mcp_catalog.server_count + self._builtin_mcp_count
         logger.info(
@@ -905,11 +900,18 @@ class Agent:
             "browser",
             create_browser_handler(self),
             [
-                "browser_task",
                 "browser_open",
                 "browser_navigate",
+                "browser_click",
+                "browser_type",
+                "browser_scroll",
+                "browser_wait",
+                "browser_execute_js",
                 "browser_get_content",
                 "browser_screenshot",
+                "browser_list_tabs",
+                "browser_switch_tab",
+                "browser_new_tab",
                 "browser_close",
                 "view_image",
             ],
@@ -1320,45 +1322,13 @@ class Agent:
             if pw_hint:
                 logger.warning(f"浏览器自动化不可用: {pw_hint}")
             else:
-                from ..tools.browser import BrowserManager, BrowserUseRunner, PlaywrightTools
+                from ..tools.browser import BrowserManager, PlaywrightTools
 
                 self.browser_manager = BrowserManager()
                 self.pw_tools = PlaywrightTools(self.browser_manager)
-                self.bu_runner = BrowserUseRunner(self.browser_manager)
                 logger.info("Initialized browser service (Playwright)")
         except Exception as e:
             logger.warning(f"Failed to start browser service: {e}")
-
-    def _inject_browser_use_llm_config(self) -> None:
-        """将当前 LLM 端点配置注入 BrowserUseRunner（browser_task 依赖 OpenAI-compatible LLM）。"""
-        try:
-            bu_runner = getattr(self, "bu_runner", None)
-            if not bu_runner:
-                return
-            llm_client = getattr(self.brain, "_llm_client", None)
-            if not llm_client:
-                return
-            provider = None
-            current = llm_client.get_current_model()
-            if current and current.name in llm_client.providers:
-                p = llm_client.providers[current.name]
-                if getattr(p.config, "api_type", "") == "openai" and p.is_healthy:
-                    provider = p
-            if provider is None:
-                for p in llm_client.providers.values():
-                    if getattr(p.config, "api_type", "") == "openai" and p.is_healthy:
-                        provider = p
-                        break
-            if provider:
-                api_key = provider.config.get_api_key()
-                if api_key:
-                    bu_runner.set_llm_config({
-                        "model": provider.config.model,
-                        "api_key": api_key,
-                        "base_url": provider.config.base_url.rstrip("/"),
-                    })
-        except Exception as e:
-            logger.debug(f"[BrowserUseRunner] LLM config injection skipped/failed: {e}")
 
     async def _start_scheduler(self) -> None:
         """启动定时任务调度器"""
@@ -1799,7 +1769,7 @@ search_github → install_skill → 使用
 
 **示例**：
 用户："打开百度搜索天气并截图发我"
-→ create_plan → browser_task("打开百度搜索天气并截图") + update_plan_step → deliver_artifacts + complete_plan
+→ create_plan → browser_navigate("https://www.baidu.com/s?wd=天气") + browser_screenshot + update_plan_step → deliver_artifacts + complete_plan
 
 ### 工具调用
 - 工具直接使用工具名调用，不需要任何前缀
@@ -2155,9 +2125,10 @@ create_agent(name="名称", description="描述", skills=["技能"], custom_prom
             ],
             "Memory Management": ["add_memory", "search_memory", "get_memory_stats"],
             "Browser Automation": [
-                "browser_task",
                 "browser_open",
                 "browser_navigate",
+                "browser_click",
+                "browser_type",
                 "browser_get_content",
                 "browser_screenshot",
                 "browser_close",
@@ -4635,7 +4606,7 @@ create_agent(name="名称", description="描述", skills=["技能"], custom_prom
 
 ### 任务类消息
 - 如果已执行 write_file 工具，说明文件已保存，保存任务完成
-- 如果已执行 browser_task/browser_navigate 等浏览器工具，说明浏览器操作已执行
+- 如果已执行 browser_navigate/browser_click 等浏览器工具，说明浏览器操作已执行
 - 工具执行成功即表示该操作完成，不要求响应文本中包含文件内容
 - 如果响应只是说"现在开始..."、"让我..."且没有工具执行，说明任务还在进行中
 - 如果响应包含明确的操作确认（如"已完成"、"已发送"、"已保存"），任务完成

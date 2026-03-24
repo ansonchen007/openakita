@@ -160,7 +160,7 @@ class TestImportHelper:
         # 模块 → 需要映射的 import names
         required_mappings = {
             "vector-memory": ["sentence_transformers", "chromadb"],
-            "browser": ["playwright", "browser_use", "langchain_openai"],
+            "browser": ["playwright"],
             "whisper": ["whisper", "static_ffmpeg"],
         }
 

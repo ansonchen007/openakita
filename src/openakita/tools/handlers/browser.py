@@ -1,12 +1,17 @@
 """
 浏览器处理器
 
-处理浏览器相关的系统技能：
-- browser_task: 【推荐优先使用】智能浏览器任务
+处理浏览器相关的系统技能（全部基于 Playwright）：
 - browser_open: 启动浏览器 + 状态查询
 - browser_navigate: 导航到 URL
+- browser_click: 点击页面元素
+- browser_type: 输入文本
+- browser_scroll: 滚动页面
+- browser_wait: 等待元素出现
+- browser_execute_js: 执行 JavaScript
 - browser_get_content: 获取页面内容（支持 max_length 截断）
 - browser_screenshot: 截取页面截图
+- browser_list_tabs / browser_switch_tab / browser_new_tab: 标签页管理
 - browser_close: 关闭浏览器
 - view_image: 查看/分析本地图片
 """
@@ -36,9 +41,8 @@ _BROWSER_LOCK_TIMEOUT = 300.0  # seconds
 
 # Operations that mutate page state or are long-running.
 # Read-only helpers (get_content, screenshot, status, list_tabs, wait) are
-# intentionally excluded to avoid blocking while browser_task runs.
+# intentionally excluded to avoid blocking during page-mutating operations.
 _LOCKED_BROWSER_OPS = frozenset({
-    "browser_task",
     "browser_navigate",
     "browser_click",
     "browser_type",
@@ -54,15 +58,22 @@ class BrowserHandler:
     """
     浏览器处理器
 
-    通过 BrowserManager / PlaywrightTools / BrowserUseRunner 路由浏览器工具调用
+    通过 BrowserManager / PlaywrightTools 路由浏览器工具调用
     """
 
     TOOLS = [
-        "browser_task",
         "browser_open",
         "browser_navigate",
+        "browser_click",
+        "browser_type",
+        "browser_scroll",
+        "browser_wait",
+        "browser_execute_js",
         "browser_get_content",
         "browser_screenshot",
+        "browser_list_tabs",
+        "browser_switch_tab",
+        "browser_new_tab",
         "browser_close",
         "view_image",
     ]
@@ -148,7 +159,6 @@ class BrowserHandler:
         """将工具调用路由到对应的组件。"""
         manager = self.agent.browser_manager
         pw = self.agent.pw_tools
-        bu = self.agent.bu_runner
 
         try:
             if tool_name == "browser_open":
@@ -167,11 +177,6 @@ class BrowserHandler:
                 return await pw.get_content(
                     selector=params.get("selector"),
                     format=params.get("format", "text"),
-                )
-            elif tool_name == "browser_task":
-                return await bu.run_task(
-                    task=params.get("task", ""),
-                    max_steps=params.get("max_steps", 15),
                 )
             elif tool_name == "browser_click":
                 return await pw.click(

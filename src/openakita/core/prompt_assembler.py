@@ -191,7 +191,8 @@ class PromptAssembler:
             ],
             "Memory Management": ["add_memory", "search_memory", "get_memory_stats"],
             "Browser Automation": [
-                "browser_navigate", "browser_task", "browser_open",
+                "browser_navigate", "browser_click", "browser_type",
+                "browser_scroll", "browser_open",
                 "browser_get_content", "browser_screenshot", "view_image",
                 "browser_close",
             ],

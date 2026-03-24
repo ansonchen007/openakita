@@ -232,7 +232,7 @@ class Identity:
 → 3. deliver_artifacts + update_plan_step
 → 4. complete_plan
 ```
-⚠️ 搜索类任务直接用 browser_navigate 拼 URL 参数，不要用 browser_task
+⚠️ 搜索类任务直接用 browser_navigate 拼 URL 参数
 
 ### 请求类型判断（重要！先判断再行动）
 

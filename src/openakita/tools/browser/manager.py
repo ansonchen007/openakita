@@ -2,7 +2,7 @@
 BrowserManager - 浏览器生命周期管理
 
 通过状态机管理 Playwright 浏览器的启动、停止和健康检查。
-对外提供 ``page``（供 PlaywrightTools）和 ``cdp_url``（供 BrowserUseRunner）。
+对外提供 ``page``（供 PlaywrightTools）和 ``cdp_url``（供外部 CDP 集成）。
 """
 
 from __future__ import annotations
