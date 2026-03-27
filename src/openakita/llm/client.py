@@ -939,10 +939,8 @@ class LLMClient:
             eligible.insert(0, override_provider)
         elif override_provider and override_provider not in eligible:
             # 用户显式选择的端点因能力推断被排除。
-            # 设计原则：能力推断可能不准确（静态表/关键词匹配固有局限），
-            # 而用户的显式选择是最高优先级的意图信号。
-            # 因此仍然将端点加入列表（优先尝试），让 API 错误自然暴露，
-            # 这比静默替换到另一个模型对用户更友好。
+            # 只有当缺失的仅是 thinking 能力时才追加为 fallback（thinking 推断最不可靠）。
+            # 缺失 tools/vision 等硬能力时不追加，避免每次请求都先失败再 fallback 导致延迟。
             missing = []
             cfg = override_provider.config
             if require_tools and not cfg.has_capability("tools"):
@@ -958,16 +956,29 @@ class LLMClient:
             if require_pdf and not cfg.has_capability("pdf"):
                 missing.append("pdf")
 
-            if eligible:
-                eligible.insert(0, override_provider)
-            else:
+            hard_missing = [m for m in missing if m != "thinking"]
+            if not hard_missing:
+                # 仅缺 thinking — 追加为 fallback（末尾），不影响正常端点优先级
                 eligible.append(override_provider)
-
-            logger.warning(
-                f"[LLM] User-selected endpoint {override_provider.name} "
-                f"may lack capability: {', '.join(missing)}. "
-                f"Including it anyway (user intent > capability inference)."
-            )
+                logger.info(
+                    f"[LLM] User-selected endpoint {override_provider.name} "
+                    f"lacks thinking capability; appended as non-thinking fallback"
+                )
+            elif not eligible:
+                # 无其他可用端点，只能用这个
+                eligible.append(override_provider)
+                logger.warning(
+                    f"[LLM] User-selected endpoint {override_provider.name} "
+                    f"may lack capability: {', '.join(missing)}. "
+                    f"No alternatives available, using it as last resort."
+                )
+            else:
+                logger.warning(
+                    f"[LLM] User-selected endpoint {override_provider.name} "
+                    f"lacks hard capabilities: {', '.join(hard_missing)}. "
+                    f"Skipping to avoid unnecessary API failures. "
+                    f"Using {eligible[0].name} instead."
+                )
 
         return eligible
 

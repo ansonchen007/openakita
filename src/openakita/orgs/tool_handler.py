@@ -866,14 +866,8 @@ class OrgToolHandler:
             return f"节点未找到: {target_id}"
         if target.status != NodeStatus.FROZEN:
             return f"{target.role_title} 未处于冻结状态"
-        target.status = NodeStatus.IDLE
-        target.frozen_by = None
-        target.frozen_reason = None
-        target.frozen_at = None
+        self._runtime.unfreeze_node(org, target)
         await self._runtime._save_org(org)
-        messenger = self._runtime.get_messenger(org_id)
-        if messenger:
-            messenger.unfreeze_mailbox(target.id)
         self._runtime.get_event_store(org_id).emit(
             "node_unfrozen", node_id, {"target": target.id},
         )
