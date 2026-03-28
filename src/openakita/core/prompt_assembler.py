@@ -39,6 +39,7 @@ class PromptAssembler:
         self._tool_catalog = tool_catalog
         self._skill_catalog = skill_catalog
         self._mcp_catalog = mcp_catalog
+        self._plugin_catalog: Any = None
         self._memory_manager = memory_manager
         self._profile_manager = profile_manager
         self._brain = brain
@@ -77,6 +78,14 @@ class PromptAssembler:
         # MCP 清单（从 MCPCatalog 获取，内部自动缓存和失效）
         mcp_catalog = self._mcp_catalog.get_catalog() if self._mcp_catalog else ""
 
+        # 插件清单
+        plugin_catalog = ""
+        if self._plugin_catalog is not None:
+            try:
+                plugin_catalog = self._plugin_catalog.get_catalog()
+            except Exception:
+                pass
+
         # 相关记忆
         memory_context = self._memory_manager.get_injection_context(task_description)
 
@@ -107,6 +116,7 @@ class PromptAssembler:
 {system_info}
 {env_snapshot}
 {skill_catalog}
+{plugin_catalog}
 {mcp_catalog}
 {memory_context}
 
@@ -164,6 +174,7 @@ class PromptAssembler:
             tool_catalog=self._tool_catalog if tools_enabled else None,
             skill_catalog=self._skill_catalog if tools_enabled else None,
             mcp_catalog=self._mcp_catalog if tools_enabled else None,
+            plugin_catalog=self._plugin_catalog if tools_enabled else None,
             memory_manager=self._memory_manager,
             task_description=task_description,
             budget_config=budget_config,
@@ -204,6 +215,7 @@ class PromptAssembler:
             tool_catalog=self._tool_catalog,
             skill_catalog=self._skill_catalog,
             mcp_catalog=self._mcp_catalog,
+            plugin_catalog=self._plugin_catalog,
             memory_manager=self._memory_manager,
             task_description=task_description,
             budget_config=budget_config,

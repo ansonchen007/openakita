@@ -65,6 +65,7 @@ from ..tools.handlers.opencli import create_handler as create_opencli_handler
 from ..tools.handlers.opencli import is_available as opencli_available
 from ..tools.handlers.persona import create_handler as create_persona_handler
 from ..tools.handlers.plan import create_todo_handler
+from ..tools.handlers.plugins import create_handler as create_plugins_handler
 from ..tools.handlers.profile import create_handler as create_profile_handler
 from ..tools.handlers.scheduled import create_handler as create_scheduled_handler
 from ..tools.handlers.search import create_handler as create_search_handler
@@ -571,6 +572,9 @@ class Agent:
             on_skill_loaded=self._on_skill_manager_loaded,
         )
 
+        # 插件目录（在 _load_plugins 中设置）
+        self.plugin_catalog = None
+
         # 提示词组装器（委托自 _build_system_prompt 等）
         self.prompt_assembler = PromptAssembler(
             tool_catalog=self.tool_catalog,
@@ -603,6 +607,7 @@ class Agent:
         "Plan",         # create_plan_file, exit_plan_mode — plan mode tools
         "File System",  # read_file, write_file, list_directory — fundamental I/O
         "Skills",       # list_skills, run_skill_script — capability discovery
+        "Plugin",       # list_plugins, get_plugin_info — plugin discovery
         "Skill Store",  # search/install skills from store
         "MCP",          # call_mcp_tool, list_mcp_servers — external integrations
     })
@@ -1083,6 +1088,10 @@ class Agent:
         if hasattr(self, "reasoning_engine") and self.reasoning_engine:
             self.reasoning_engine._plugin_hooks = self._plugin_manager.hook_registry
 
+        from ..plugins.catalog import PluginCatalog
+        self.plugin_catalog = PluginCatalog(self._plugin_manager)
+        self.prompt_assembler._plugin_catalog = self.plugin_catalog
+
         loaded = self._plugin_manager.loaded_count
         failed = self._plugin_manager.failed_count
         if failed > 0:
@@ -1279,6 +1288,13 @@ class Agent:
             "config",
             create_config_handler(self),
             ["system_config"],
+        )
+
+        # 插件查询
+        self.handler_registry.register(
+            "plugins",
+            create_plugins_handler(self),
+            ["list_plugins", "get_plugin_info"],
         )
 
         # Agent 包（导入/导出）

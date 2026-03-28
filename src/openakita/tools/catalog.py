@@ -86,6 +86,7 @@ Use `get_tool_info(tool_name)` to see full parameters before calling.
         "File System",
         "Agent",
         "Skills",
+        "Plugin",
         "Memory",
         "Web Search",
         "Browser",
@@ -106,6 +107,7 @@ Use `get_tool_info(tool_name)` to see full parameters before calling.
     CATEGORY_DISPLAY_NAMES = {
         "Desktop": "Desktop (Windows)",
         "Skills": "Skills Management",
+        "Plugin": "Plugin Management",
         "Scheduled": "Scheduled Tasks",
         "Profile": "User Profile",
     }
@@ -141,6 +143,7 @@ Use `get_tool_info(tool_name)` to see full parameters before calling.
                 [list(t.keys())[:5] for t in nameless[:3]],
             )
         self._tools = {t["name"]: t for t in tools if t.get("name")}
+        self._tool_sources: dict[str, str] = {}
         self._cached_catalog: str | None = None
 
     def generate_catalog(self, exclude_high_freq: bool = True) -> str:
@@ -171,6 +174,8 @@ Use `get_tool_info(tool_name)` to see full parameters before calling.
             cat = tool.get("category")
             if not cat:
                 cat = infer_category(name)  # fallback 到 base.py 的推断
+            if not cat and name in self._tool_sources:
+                cat = "Plugin"
             if cat:
                 categories.setdefault(cat, []).append((name, tool))
             else:
@@ -258,7 +263,9 @@ Use `get_tool_info(tool_name)` to see full parameters before calling.
             desc = tool.get("short_description") or self._get_short_description(
                 tool.get("description", "")
             )
-            entry = self._safe_format(self.TOOL_ENTRY_TEMPLATE, name=name, description=desc)
+            source = self._tool_sources.get(name, "")
+            suffix = f" _(from {source})_" if source else ""
+            entry = self._safe_format(self.TOOL_ENTRY_TEMPLATE, name=name, description=desc) + suffix
             entries.append(entry)
 
         return self._safe_format(
@@ -469,19 +476,23 @@ Use `get_tool_info(tool_name)` to see full parameters before calling.
                 [list(t.keys())[:5] for t in nameless[:3]],
             )
         self._tools = {t["name"]: t for t in tools if t.get("name")}
+        self._tool_sources.clear()
         self._cached_catalog = None
 
-    def add_tool(self, tool: dict) -> None:
+    def add_tool(self, tool: dict, source: str | None = None) -> None:
         """
         添加单个工具
 
         Args:
             tool: 工具定义（支持 Anthropic 和 OpenAI 格式）
+            source: 工具来源标识（如 ``"plugin:lark-cli-tool"``）
         """
         name = tool.get("name") or tool.get("function", {}).get("name", "")
         if not name:
             raise ValueError("Tool definition must have a 'name'")
         self._tools[name] = tool
+        if source:
+            self._tool_sources[name] = source
         self._cached_catalog = None
 
     def remove_tool(self, tool_name: str) -> bool:
@@ -496,6 +507,7 @@ Use `get_tool_info(tool_name)` to see full parameters before calling.
         """
         if tool_name in self._tools:
             del self._tools[tool_name]
+            self._tool_sources.pop(tool_name, None)
             self._cached_catalog = None
             return True
         return False

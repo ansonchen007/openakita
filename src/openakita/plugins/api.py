@@ -216,9 +216,10 @@ class PluginAPI:
 
         tool_catalog = self._host.get("tool_catalog")
         if tool_catalog is not None and hasattr(tool_catalog, "add_tool"):
+            source = f"plugin:{self._plugin_id}"
             for defn in normalized_defs:
                 try:
-                    tool_catalog.add_tool(defn)
+                    tool_catalog.add_tool(defn, source=source)
                 except Exception as e:
                     self.log(f"Failed to add tool to catalog: {e}", "warning")
 

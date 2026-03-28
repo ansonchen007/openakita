@@ -31,6 +31,7 @@ from .retriever import retrieve_memory
 if TYPE_CHECKING:
     from ..core.persona import PersonaManager
     from ..memory import MemoryManager
+    from ..plugins.catalog import PluginCatalog
     from ..skills.catalog import SkillCatalog
     from ..tools.catalog import ToolCatalog
     from ..tools.mcp_catalog import MCPCatalog
@@ -226,6 +227,7 @@ def build_system_prompt(
     tool_catalog: Optional["ToolCatalog"] = None,
     skill_catalog: Optional["SkillCatalog"] = None,
     mcp_catalog: Optional["MCPCatalog"] = None,
+    plugin_catalog: Optional["PluginCatalog"] = None,
     memory_manager: Optional["MemoryManager"] = None,
     task_description: str = "",
     budget_config: BudgetConfig | None = None,
@@ -358,6 +360,7 @@ def build_system_prompt(
         tool_catalog=tool_catalog,
         skill_catalog=skill_catalog,
         mcp_catalog=mcp_catalog,
+        plugin_catalog=plugin_catalog,
         budget_tokens=budget_config.catalogs_budget,
         include_tools_guide=include_tools_guide,
         mode=mode,
@@ -956,11 +959,12 @@ def _build_catalogs_section(
     tool_catalog: Optional["ToolCatalog"],
     skill_catalog: Optional["SkillCatalog"],
     mcp_catalog: Optional["MCPCatalog"],
-    budget_tokens: int,
+    plugin_catalog: Optional["PluginCatalog"] = None,
+    budget_tokens: int = 8000,
     include_tools_guide: bool = False,
     mode: str = "agent",
 ) -> str:
-    """构建 Catalogs 层（工具/技能/MCP 清单）
+    """构建 Catalogs 层（工具/技能/插件/MCP 清单）
 
     每个 catalog 用 try/except 隔离，确保单个 catalog 构建失败不会击穿整个系统提示。
     """
@@ -1013,6 +1017,17 @@ def _build_catalogs_section(
         except Exception as e:
             logger.error(
                 "[PromptBuilder] skill catalog build failed, skipping: %s", e,
+                exc_info=True,
+            )
+
+    if plugin_catalog:
+        try:
+            plugin_text = plugin_catalog.get_catalog()
+            if plugin_text:
+                parts.append(plugin_text)
+        except Exception as e:
+            logger.error(
+                "[PromptBuilder] plugin catalog build failed, skipping: %s", e,
                 exc_info=True,
             )
 

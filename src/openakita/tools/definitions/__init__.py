@@ -62,6 +62,7 @@ from .opencli import OPENCLI_TOOLS
 from .org_setup import ORG_SETUP_TOOLS
 from .persona import PERSONA_TOOLS
 from .plan import PLAN_TOOLS
+from .plugins import PLUGIN_TOOLS
 from .profile import PROFILE_TOOLS
 from .scheduled import SCHEDULED_TOOLS
 from .search import SEARCH_TOOLS
@@ -94,6 +95,7 @@ BASE_TOOLS = (
     + STICKER_TOOLS
     + CONFIG_TOOLS
     + AGENT_PACKAGE_TOOLS
+    + PLUGIN_TOOLS
 )
 
 # 平台连接工具（Agent Hub + Skill Store），仅在 hub_enabled=True 时注册
@@ -143,4 +145,5 @@ __all__ = [
     "CONFIG_TOOLS",
     "OPENCLI_TOOLS",
     "CLI_ANYTHING_TOOLS",
+    "PLUGIN_TOOLS",
 ]

@@ -86,6 +86,7 @@ ToolCategory = Literal[
     "Desktop",
     "Memory",
     "Skills",
+    "Plugin",
     "Scheduled",
     "IM Channel",
     "Profile",
@@ -126,6 +127,7 @@ CATEGORY_PREFIXES = {
     "Plan": ("create_plan_file", "exit_plan_mode"),
     "Web Search": ("web_search", "news_search"),
     "Config": ("system_config",),
+    "Plugin": ("list_plugins", "get_plugin_info"),
 }
 
 
