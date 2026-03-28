@@ -36,6 +36,18 @@ Use `get_skill_info(skill_name)` to load full instructions when needed.
 
     SKILL_ENTRY_TEMPLATE = "- **{name}**: {description}"
 
+    @staticmethod
+    def _safe_format(template: str, **kwargs: str) -> str:
+        """str.format that won't crash on {/} in values."""
+        try:
+            return template.format(**kwargs)
+        except (KeyError, ValueError, IndexError) as e:
+            logger.warning(
+                "[SkillCatalog] str.format failed (template=%r, keys=%s): %s",
+                template[:60], list(kwargs.keys()), e,
+            )
+            return template + " " + " | ".join(f"{k}={v}" for k, v in kwargs.items())
+
     def __init__(self, registry: SkillRegistry):
         self.registry = registry
         self._cached_catalog: str | None = None
@@ -59,11 +71,11 @@ Use `get_skill_info(skill_name)` to load full instructions when needed.
 
         skill_entries = []
         for skill in skills:
-            # 获取描述第一行
             desc = skill.description or ""
             first_line = desc.split("\n")[0].strip()
 
-            entry = self.SKILL_ENTRY_TEMPLATE.format(
+            entry = self._safe_format(
+                self.SKILL_ENTRY_TEMPLATE,
                 name=skill.name,
                 description=first_line,
             )
@@ -71,7 +83,7 @@ Use `get_skill_info(skill_name)` to load full instructions when needed.
 
         skill_list = "\n".join(skill_entries)
 
-        catalog = self.CATALOG_TEMPLATE.format(skill_list=skill_list)
+        catalog = self._safe_format(self.CATALOG_TEMPLATE, skill_list=skill_list)
         self._cached_catalog = catalog
 
         logger.info(f"Generated skill catalog with {len(skills)} skills")

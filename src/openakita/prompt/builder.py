@@ -960,57 +960,74 @@ def _build_catalogs_section(
     include_tools_guide: bool = False,
     mode: str = "agent",
 ) -> str:
-    """构建 Catalogs 层（工具/技能/MCP 清单）"""
+    """构建 Catalogs 层（工具/技能/MCP 清单）
+
+    每个 catalog 用 try/except 隔离，确保单个 catalog 构建失败不会击穿整个系统提示。
+    """
     parts = []
 
-    # 工具清单（预算的 30%）
-    # 高频工具 (run_shell, read_file, write_file, list_directory, ask_user) 已通过
-    # LLM tools 参数直接注入完整 schema，文本清单默认排除以节省 token
     if tool_catalog:
-        tools_text = tool_catalog.get_catalog()  # exclude_high_freq=True by default
-        # Plan/Ask 模式下，给工具清单加"仅供参考"标注，避免 LLM 误调不可用工具
-        if mode in ("plan", "ask"):
-            mode_note = (
-                "\n> ⚠️ **当前为 {} 模式** — 以下工具清单仅供规划参考。\n"
-                "> 你只能调用工具列表（tools）中实际提供给你的工具。\n"
-                "> 如果某个工具不在你的可调用列表中，不要尝试调用它。\n"
-            ).format("Plan" if mode == "plan" else "Ask")
-            tools_text = mode_note + tools_text
-        tools_result = apply_budget(tools_text, budget_tokens // 3, "tools")
-        parts.append(tools_result.content)
+        try:
+            tools_text = tool_catalog.get_catalog()
+            if mode in ("plan", "ask"):
+                mode_note = (
+                    "\n> ⚠️ **当前为 {} 模式** — 以下工具清单仅供规划参考。\n"
+                    "> 你只能调用工具列表（tools）中实际提供给你的工具。\n"
+                    "> 如果某个工具不在你的可调用列表中，不要尝试调用它。\n"
+                ).format("Plan" if mode == "plan" else "Ask")
+                tools_text = mode_note + tools_text
+            tools_result = apply_budget(tools_text, budget_tokens // 3, "tools")
+            parts.append(tools_result.content)
+        except Exception as e:
+            logger.error(
+                "[PromptBuilder] tool catalog build failed, skipping: %s", e,
+                exc_info=True,
+            )
 
-    # 技能清单（预算的 50%）— 统一三级渐进式披露
     if skill_catalog:
-        # Level 1: 全量索引（仅名称，保证所有技能名可见）+ 预算内详情（名称+描述）
-        # Level 2: get_skill_info → 完整 SKILL.md 指令（按需加载）
-        # Level 3: 资源文件（按需加载）
-        skills_budget = budget_tokens * 50 // 100
-        skills_index = skill_catalog.get_index_catalog()
+        try:
+            skills_budget = budget_tokens * 50 // 100
+            skills_index = skill_catalog.get_index_catalog()
 
-        index_tokens = estimate_tokens(skills_index)
-        remaining = max(0, skills_budget - index_tokens)
+            index_tokens = estimate_tokens(skills_index)
+            remaining = max(0, skills_budget - index_tokens)
 
-        skills_detail = skill_catalog.get_catalog()
-        skills_detail_result = apply_budget(skills_detail, remaining, "skills", truncate_strategy="end")
+            skills_detail = skill_catalog.get_catalog()
+            skills_detail_result = apply_budget(
+                skills_detail, remaining, "skills", truncate_strategy="end"
+            )
 
-        skills_rule = (
-            "### 技能使用规则（必须遵守）\n"
-            "- 执行任务前**必须先检查**已有技能清单，优先使用已有技能\n"
-            "- 没有合适技能时，搜索安装或使用 skill-creator 创建，然后加载使用\n"
-            "- 同类操作重复出现时，**必须**封装为永久技能\n"
-            "- Shell 命令仅用于一次性简单操作，不是默认选择\n"
-        )
+            skills_rule = (
+                "### 技能使用规则（必须遵守）\n"
+                "- 执行任务前**必须先检查**已有技能清单，优先使用已有技能\n"
+                "- 没有合适技能时，搜索安装或使用 skill-creator 创建，然后加载使用\n"
+                "- 同类操作重复出现时，**必须**封装为永久技能\n"
+                "- Shell 命令仅用于一次性简单操作，不是默认选择\n"
+            )
 
-        parts.append("\n\n".join([skills_index, skills_rule, skills_detail_result.content]).strip())
+            parts.append(
+                "\n\n".join(
+                    [skills_index, skills_rule, skills_detail_result.content]
+                ).strip()
+            )
+        except Exception as e:
+            logger.error(
+                "[PromptBuilder] skill catalog build failed, skipping: %s", e,
+                exc_info=True,
+            )
 
-    # MCP 清单（预算的 20%）
     if mcp_catalog:
-        mcp_text = mcp_catalog.get_catalog()
-        if mcp_text:
-            mcp_result = apply_budget(mcp_text, budget_tokens * 20 // 100, "mcp")
-            parts.append(mcp_result.content)
+        try:
+            mcp_text = mcp_catalog.get_catalog()
+            if mcp_text:
+                mcp_result = apply_budget(mcp_text, budget_tokens * 20 // 100, "mcp")
+                parts.append(mcp_result.content)
+        except Exception as e:
+            logger.error(
+                "[PromptBuilder] MCP catalog build failed, skipping: %s", e,
+                exc_info=True,
+            )
 
-    # 工具使用指南（可选，向后兼容）
     if include_tools_guide:
         parts.append(_get_tools_guide_short())
 

@@ -110,8 +110,20 @@ Use `get_tool_info(tool_name)` to see full parameters before calling.
         "Profile": "User Profile",
     }
 
-    TOOL_ENTRY_TEMPLATE = "- **{name}**: {description}"
-    CATEGORY_TEMPLATE = "\n### {category}\n{tools}"
+    TOOL_ENTRY_TEMPLATE = "- **{name}**: {description}"  # only used with _safe_format
+    CATEGORY_TEMPLATE = "\n### {category}\n{tools}"     # only used with _safe_format
+
+    @staticmethod
+    def _safe_format(template: str, **kwargs: str) -> str:
+        """str.format that won't crash on {/} in values."""
+        try:
+            return template.format(**kwargs)
+        except (KeyError, ValueError, IndexError) as e:
+            logger.warning(
+                "[ToolCatalog] str.format failed (template=%r, keys=%s): %s",
+                template[:60], list(kwargs.keys()), e,
+            )
+            return template + " " + " | ".join(f"{k}={v}" for k, v in kwargs.items())
 
     def __init__(self, tools: list[dict]):
         """
@@ -120,7 +132,15 @@ Use `get_tool_info(tool_name)` to see full parameters before calling.
         Args:
             tools: 工具定义列表，每个工具包含 name, short_description, description, input_schema
         """
-        self._tools = {t["name"]: t for t in tools}
+        nameless = [t for t in tools if not t.get("name")]
+        if nameless:
+            logger.warning(
+                "[ToolCatalog] __init__: skipped %d tool(s) without a name, "
+                "keys present: %s",
+                len(nameless),
+                [list(t.keys())[:5] for t in nameless[:3]],
+            )
+        self._tools = {t["name"]: t for t in tools if t.get("name")}
         self._cached_catalog: str | None = None
 
     def generate_catalog(self, exclude_high_freq: bool = True) -> str:
@@ -186,7 +206,7 @@ Use `get_tool_info(tool_name)` to see full parameters before calling.
                 category_sections.append(section)
 
         tool_list = "\n".join(category_sections)
-        catalog = self.CATALOG_TEMPLATE.format(tool_list=tool_list)
+        catalog = self._safe_format(self.CATALOG_TEMPLATE, tool_list=tool_list)
         self._cached_catalog = catalog
 
         logger.info(f"Generated tool catalog with {len(self._tools)} tools")
@@ -238,11 +258,11 @@ Use `get_tool_info(tool_name)` to see full parameters before calling.
             desc = tool.get("short_description") or self._get_short_description(
                 tool.get("description", "")
             )
-            entry = self.TOOL_ENTRY_TEMPLATE.format(name=name, description=desc)
+            entry = self._safe_format(self.TOOL_ENTRY_TEMPLATE, name=name, description=desc)
             entries.append(entry)
 
-        return self.CATEGORY_TEMPLATE.format(
-            category=display_name, tools="\n".join(entries)
+        return self._safe_format(
+            self.CATEGORY_TEMPLATE, category=display_name, tools="\n".join(entries)
         )
 
     def _get_short_description(self, description: str) -> str:
@@ -440,7 +460,15 @@ Use `get_tool_info(tool_name)` to see full parameters before calling.
         Args:
             tools: 新的工具定义列表
         """
-        self._tools = {t["name"]: t for t in tools}
+        nameless = [t for t in tools if not t.get("name")]
+        if nameless:
+            logger.warning(
+                "[ToolCatalog] update_tools: skipped %d tool(s) without a name, "
+                "keys present: %s",
+                len(nameless),
+                [list(t.keys())[:5] for t in nameless[:3]],
+            )
+        self._tools = {t["name"]: t for t in tools if t.get("name")}
         self._cached_catalog = None
 
     def add_tool(self, tool: dict) -> None:

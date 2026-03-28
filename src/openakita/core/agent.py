@@ -612,6 +612,7 @@ class Agent:
         """Tools available for the current call context.
 
         Filtering layers (applied in order):
+        0. Sanity: drop entries without a valid name (e.g. malformed plugin defs)
         1. Sub-agent restriction: remove delegation tools
         2. Intent-driven: filter by IntentResult.tool_hints (category-based),
            but always keep infrastructure categories (System, Memory, Plan,
@@ -619,7 +620,14 @@ class Agent:
            plans, invoke skills/MCP, and use meta tools regardless of intent.
         3. Context window: reduce set for small models
         """
-        tools = self._tools
+        tools = [t for t in self._tools if t.get("name")]
+        dropped = len(self._tools) - len(tools)
+        if dropped:
+            logger.warning(
+                "[Agent] _effective_tools: dropped %d tool(s) without a valid name "
+                "(total=%d, valid=%d)",
+                dropped, len(self._tools), len(tools),
+            )
         if self._is_sub_agent_call:
             tools = [t for t in tools if t.get("name") not in self._agent_tool_names]
 

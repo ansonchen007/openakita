@@ -767,24 +767,45 @@ class Brain:
         return result
 
     def _convert_tools_to_llm(self, tools: list[ToolParam] | None) -> list[Tool] | None:
-        """将 Anthropic ToolParam 转换为 LLMClient Tool
+        """将工具定义转换为 LLMClient Tool，兼容 Anthropic / OpenAI 两种格式。
 
-        支持渐进式披露：
-        - description: 简短清单描述
-        - detail: 详细使用说明（传给 LLM API）
+        防御性设计：插件可能提交非标准格式的工具定义，此方法在边界层
+        做格式兼容和无效过滤，确保不会因为坏工具定义导致 LLM 调用失败。
+
+        支持的格式：
+        - Anthropic (内部): {"name": ..., "description": ..., "input_schema": {...}}
+        - OpenAI:          {"type": "function", "function": {"name": ..., ...}}
         """
         if not tools:
             return None
 
-        return [
-            Tool(
-                name=tool.get("name", ""),
-                # 优先使用 detail 字段（详细说明），否则 fallback 到 description
-                description=tool.get("detail") or tool.get("description", ""),
-                input_schema=tool.get("input_schema", {}),
+        result: list[Tool] = []
+        skipped = 0
+        for tool in tools:
+            name = tool.get("name", "")
+            description = tool.get("detail") or tool.get("description", "")
+            schema = tool.get("input_schema", {})
+
+            if not name:
+                func = tool.get("function")
+                if isinstance(func, dict):
+                    name = func.get("name", "")
+                    description = description or func.get("description", "")
+                    schema = schema or func.get("parameters", {})
+
+            if not name:
+                skipped += 1
+                continue
+
+            result.append(Tool(name=name, description=description, input_schema=schema))
+
+        if skipped:
+            logger.warning(
+                "[Brain] _convert_tools_to_llm: skipped %d tool(s) with empty name "
+                "(total=%d, valid=%d)", skipped, len(tools), len(result),
             )
-            for tool in tools
-        ]
+
+        return result if result else None
 
     def _convert_response_to_anthropic(self, response: LLMResponse) -> AnthropicMessage:
         """将 LLMClient Response 转换为 Anthropic Message
