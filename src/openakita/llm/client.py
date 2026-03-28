@@ -10,7 +10,6 @@ LLM 统一客户端
 """
 
 import asyncio
-import json
 import logging
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
@@ -1637,20 +1636,20 @@ class LLMClient:
         if not self._config_path:
             return
 
-        # 读取原配置
-        with open(self._config_path, encoding="utf-8") as f:
-            config_data = json.load(f)
+        from ..utils.atomic_io import read_json_safe, safe_json_write
 
-        # 更新端点优先级
+        config_data = read_json_safe(self._config_path)
+        if config_data is None:
+            logger.warning("Cannot save config: no existing config to update")
+            return
+
         name_to_priority = {ep.name: ep.priority for ep in self._endpoints}
         for ep_data in config_data.get("endpoints", []):
             name = ep_data.get("name")
             if name in name_to_priority:
                 ep_data["priority"] = name_to_priority[name]
 
-        # 写回文件
-        with open(self._config_path, "w", encoding="utf-8") as f:
-            json.dump(config_data, f, indent=2, ensure_ascii=False)
+        safe_json_write(self._config_path, config_data)
 
     async def close(self):
         """关闭所有 Provider"""
