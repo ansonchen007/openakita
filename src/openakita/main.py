@@ -403,53 +403,78 @@ def _ensure_channel_deps() -> None:
         except Exception as e:
             logger.warning(f"离线 wheels 安装异常，回退在线镜像: {e}")
 
-    for idx, (index_url, trusted_host) in enumerate(_mirror_sources):
-        if installed:
-            break
-        source_label = trusted_host or index_url
-        if idx == 0:
-            console.print(
-                f"[yellow]⏳[/yellow] 自动安装 IM 通道依赖: [bold]{pkg_list}[/bold] "
-                f"(源: {source_label}) ..."
-            )
-        else:
-            console.print(
-                f"[yellow]⏳[/yellow] 切换镜像源重试: {source_label} ..."
-            )
-
-        pip_cmd = [
-            py, "-m", "pip", "install",
-            "--target", str(target_dir),
-            "-i", index_url,
-            "--prefer-binary",
-            "--timeout", "60",
-            *missing,
-        ]
-        if trusted_host:
-            pip_cmd.extend(["--trusted-host", trusted_host])
-
-        try:
-            result = subprocess.run(
-                pip_cmd,
-                env=pip_env,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=120,
-                **extra,
-            )
-            if result.returncode == 0:
-                _on_install_success(source_label)
-                installed = True
-                break
+    def _pip_install_via_mirrors(
+        packages: list[str], label_prefix: str = "",
+    ) -> bool:
+        """Try installing *packages* through all mirror sources. Return True on success."""
+        for idx, (index_url, trusted_host) in enumerate(_mirror_sources):
+            source_label = trusted_host or index_url
+            if idx == 0:
+                console.print(
+                    f"[yellow]⏳[/yellow] {label_prefix}自动安装 IM 通道依赖: "
+                    f"[bold]{', '.join(packages)}[/bold] (源: {source_label}) ..."
+                )
             else:
-                err_tail = (result.stderr or result.stdout or "").strip()[-300:]
-                logger.warning(f"镜像源 {source_label} 安装失败 (exit {result.returncode}): {err_tail}")
-        except subprocess.TimeoutExpired:
-            logger.warning(f"镜像源 {source_label} 安装超时")
-        except Exception as e:
-            logger.warning(f"镜像源 {source_label} 安装异常: {e}")
+                console.print(
+                    f"[yellow]⏳[/yellow] 切换镜像源重试: {source_label} ..."
+                )
+
+            pip_cmd = [
+                py, "-m", "pip", "install",
+                "--target", str(target_dir),
+                "-i", index_url,
+                "--prefer-binary",
+                "--timeout", "60",
+                *packages,
+            ]
+            if trusted_host:
+                pip_cmd.extend(["--trusted-host", trusted_host])
+
+            try:
+                result = subprocess.run(
+                    pip_cmd,
+                    env=pip_env,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    timeout=120,
+                    **extra,
+                )
+                if result.returncode == 0:
+                    _on_install_success(source_label)
+                    return True
+                else:
+                    err_tail = (result.stderr or result.stdout or "").strip()[-300:]
+                    logger.warning(f"镜像源 {source_label} 安装失败 (exit {result.returncode}): {err_tail}")
+            except subprocess.TimeoutExpired:
+                logger.warning(f"镜像源 {source_label} 安装超时")
+            except Exception as e:
+                logger.warning(f"镜像源 {source_label} 安装异常: {e}")
+        return False
+
+    if not installed:
+        installed = _pip_install_via_mirrors(missing)
+
+    # 批量安装失败且有多个包时，逐个重试——避免一个 C 扩展编译失败拖垮纯 Python 包
+    if not installed and len(missing) > 1:
+        logger.info("批量安装失败，尝试逐个安装 ...")
+        per_pkg_ok: list[str] = []
+        per_pkg_fail: list[str] = []
+        for pkg in missing:
+            if _pip_install_via_mirrors([pkg], label_prefix=f"[逐个] "):
+                per_pkg_ok.append(pkg)
+            else:
+                per_pkg_fail.append(pkg)
+        if per_pkg_ok:
+            installed = True
+            if per_pkg_fail:
+                fail_list = ", ".join(per_pkg_fail)
+                logger.warning(f"部分依赖安装失败（不影响已安装的包）: {fail_list}")
+                console.print(
+                    f"[yellow]⚠[/yellow] 部分依赖安装失败: {fail_list}\n"
+                    f"  相关功能（如语音转码）可能不可用，核心 IM 通道不受影响"
+                )
 
     if not installed:
         logger.error(f"所有镜像源均安装失败: {pkg_list}")

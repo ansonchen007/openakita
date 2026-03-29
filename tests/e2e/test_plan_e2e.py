@@ -1,23 +1,24 @@
 """L4 E2E Tests: Plan system end-to-end — create, step management, complete, cancel."""
 
-import pytest
 import sys
 from pathlib import Path
-from unittest.mock import MagicMock, AsyncMock
+from unittest.mock import MagicMock
+
+import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "fixtures"))
-from mock_llm import MockLLMClient, MockBrain
+from mock_llm import MockBrain, MockLLMClient
 
 from openakita.tools.handlers.plan import (
+    cancel_plan,
+    clear_session_plan_state,
+    get_active_plan_prompt,
+    get_plan_handler_for_session,
     has_active_plan,
     register_active_plan,
-    unregister_active_plan,
-    clear_session_plan_state,
-    cancel_plan,
     register_plan_handler,
-    get_plan_handler_for_session,
-    get_active_plan_prompt,
     should_require_plan,
+    unregister_active_plan,
 )
 
 
@@ -75,6 +76,34 @@ class TestPlanWithHandler:
         clear_session_plan_state(sid)
         prompt = get_active_plan_prompt(sid)
         assert isinstance(prompt, str)
+
+    @pytest.mark.asyncio
+    async def test_create_plan_accepts_stringified_steps(self):
+        from openakita.core.tool_executor import ToolExecutor
+        from openakita.tools.handlers import SystemHandlerRegistry
+        from openakita.tools.handlers.plan import PlanHandler
+
+        agent = _make_mock_agent()
+        handler = PlanHandler(agent)
+        registry = SystemHandlerRegistry()
+        registry.register("plan", handler.handle, tool_names=PlanHandler.TOOLS)
+        executor = ToolExecutor(handler_registry=registry, max_parallel=1)
+
+        result = await executor.execute_tool(
+            "create_plan",
+            {
+                "task_summary": "demo",
+                "steps": '[{"id":"step_1","description":"first"},{"id":"step_2","description":"second"}]',
+            },
+        )
+
+        assert "create" in result.lower() or "计划已创建" in result
+        plan = handler.get_plan_for("plan-test-conv")
+        assert plan is not None
+        assert len(plan["steps"]) == 2
+        assert plan["steps"][0]["description"] == "first"
+        assert plan["steps"][1]["description"] == "second"
+        clear_session_plan_state("plan-test-conv")
 
 
 class TestPlanDetection:

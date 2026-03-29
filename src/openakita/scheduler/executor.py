@@ -30,13 +30,13 @@ class TaskExecutor:
         self,
         agent_factory: Callable[[], Any] | None = None,
         gateway: Any | None = None,
-        timeout_seconds: int = 600,  # 10 分钟超时
+        timeout_seconds: int = 1200,  # 20 分钟超时
     ):
         """
         Args:
             agent_factory: Agent 工厂函数
             gateway: 消息网关（用于发送结果通知）
-            timeout_seconds: 执行超时（秒），默认 600 秒（10分钟）
+            timeout_seconds: 执行超时（秒），默认 1200 秒（20分钟）
         """
         self.agent_factory = agent_factory
         self.gateway = gateway
@@ -99,6 +99,17 @@ class TaskExecutor:
         logger.info(
             f"TaskExecutor: executing task {task.id} ({task.name}) [type={task.task_type.value}]"
         )
+
+        # Resolve chat_id at runtime if the task has a channel but no chat_id
+        if task.channel_id and not task.chat_id and self.gateway:
+            sm = getattr(self.gateway, "session_manager", None)
+            if sm:
+                target = sm.get_known_channel_target(task.channel_id)
+                if target:
+                    task.chat_id = target[1]
+                    logger.info(
+                        f"TaskExecutor: resolved chat_id for {task.channel_id} → {task.chat_id}"
+                    )
 
         # 根据任务类型选择执行策略
         if task.is_reminder:
@@ -262,13 +273,22 @@ class TaskExecutor:
             # 3. 构建执行 prompt（简化版，不让 Agent 自己发消息）
             prompt = self._build_prompt(task, suppress_send_to_chat=True)
 
-            # 4. 执行（带超时）
+            # 4. 执行（带超时，支持任务级 metadata.timeout_seconds 覆盖）
+            task_timeout = self.timeout_seconds
+            if task.metadata and isinstance(task.metadata, dict):
+                custom_timeout = task.metadata.get("timeout_seconds")
+                if custom_timeout and isinstance(custom_timeout, (int, float)) and custom_timeout > 0:
+                    task_timeout = int(custom_timeout)
+                    logger.info(
+                        f"TaskExecutor: using task-level timeout {task_timeout}s "
+                        f"(default: {self.timeout_seconds}s)"
+                    )
             try:
                 result = await asyncio.wait_for(
-                    self._run_agent(agent, prompt), timeout=self.timeout_seconds
+                    self._run_agent(agent, prompt), timeout=task_timeout
                 )
             except TimeoutError:
-                error_msg = f"Task execution timed out after {self.timeout_seconds}s"
+                error_msg = f"Task execution timed out after {task_timeout}s"
                 logger.error(f"TaskExecutor: {error_msg}")
                 if not skip_end_notification:
                     await self._send_end_notification(task, success=False, message=error_msg)
@@ -425,6 +445,8 @@ class TaskExecutor:
         # 优先使用 Ralph 模式（execute_task_from_message）
         if hasattr(agent, "execute_task_from_message"):
             result = await agent.execute_task_from_message(prompt)
+            if isinstance(result, str):
+                return result
             return result.data if result.success else result.error
         # 降级到普通 chat
         elif hasattr(agent, "chat"):
@@ -455,7 +477,7 @@ class TaskExecutor:
         # 系统任务也需要超时保护，避免 selfcheck 等任务无限运行
         SYSTEM_TASK_TIMEOUTS = {
             "system:daily_selfcheck": 300,  # 5 分钟
-            "system:daily_memory": 600,  # 10 分钟
+            "system:daily_memory": 1800,  # 30 分钟（含 LLM review 大量记忆）
             "system:workspace_backup": 300,  # 5 分钟
         }
         timeout = SYSTEM_TASK_TIMEOUTS.get(action)
@@ -939,7 +961,7 @@ class TaskExecutor:
 # 便捷函数：创建默认执行器
 def create_default_executor(
     gateway: Any | None = None,
-    timeout_seconds: int = 600,  # 10 分钟超时
+    timeout_seconds: int = 1200,  # 20 分钟超时
 ) -> Callable[[ScheduledTask], Awaitable[tuple[bool, str]]]:
     """
     创建默认执行器函数

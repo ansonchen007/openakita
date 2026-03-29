@@ -248,6 +248,8 @@ class Agent:
         "中止",
         "终止",
         "不要了",
+        "/stop", "/停止", "/取消", "/cancel", "/abort",
+        "kill", "kill all",
     }
 
     SKIP_COMMANDS = {
@@ -260,6 +262,7 @@ class Agent:
         "skip this",
         "换个方法",
         "太慢了",
+        "/skip", "/跳过",
     }
 
     # ---- Task-local properties ----
@@ -2543,6 +2546,416 @@ create_agent(name="名称", description="描述", skills=["技能"], custom_prom
             source="cancellable_await",
         )
 
+    async def _llm_compress_text(
+        self, text: str, target_tokens: int, context_type: str = "general"
+    ) -> str:
+        """
+        使用 LLM 压缩一段文本到目标 token 数
+
+        Args:
+            text: 要压缩的文本
+            target_tokens: 目标 token 数
+            context_type: 上下文类型（tool_result/tool_input/conversation）
+
+        Returns:
+            压缩后的文本
+        """
+        # 如果文本本身超出 LLM 上下文能处理的范围，先做硬截断
+        max_input = CHUNK_MAX_TOKENS * CHARS_PER_TOKEN
+        if len(text) > max_input:
+            # 保留头尾，中间截断
+            head_size = int(max_input * 0.6)
+            tail_size = int(max_input * 0.3)
+            text = text[:head_size] + "\n...(中间内容过长已省略)...\n" + text[-tail_size:]
+
+        target_chars = target_tokens * CHARS_PER_TOKEN
+
+        if context_type == "tool_result":
+            system_prompt = (
+                "你是一个信息压缩助手。请将以下工具执行结果压缩为简洁摘要，"
+                "保留关键数据、状态码、错误信息和重要输出，去掉冗余细节。"
+            )
+        elif context_type == "tool_input":
+            system_prompt = (
+                "你是一个信息压缩助手。请将以下工具调用参数压缩为简洁摘要，"
+                "保留关键参数名和值，去掉冗余内容。"
+            )
+        else:
+            system_prompt = (
+                "你是一个对话压缩助手。请将以下对话内容压缩为简洁摘要，"
+                "保留用户意图、关键决策、执行结果和当前状态。"
+            )
+
+        _tt = set_tracking_context(TokenTrackingContext(
+            operation_type="context_compress",
+            operation_detail=context_type,
+        ))
+        try:
+            response = await self._cancellable_await(
+                self.brain.messages_create_async(
+                    model=self.brain.model,
+                    max_tokens=target_tokens,
+                    system=system_prompt,
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": f"请将以下内容压缩到 {target_chars} 字以内:\n\n{text}",
+                        }
+                    ],
+                    use_thinking=False,
+                )
+            )
+
+            summary = ""
+            for block in response.content:
+                if block.type == "text":
+                    summary += block.text
+                elif block.type == "thinking" and hasattr(block, "thinking"):
+                    # thinking 块 fallback：当模型把摘要放在 thinking 中时
+                    if not summary:
+                        summary = block.thinking if isinstance(block.thinking, str) else str(block.thinking)
+
+            # 如果仍然为空，记录警告并回退到硬截断
+            if not summary.strip():
+                logger.warning(
+                    f"[Compress] LLM returned empty summary (tokens_out={response.usage.output_tokens}), "
+                    f"falling back to hard truncation"
+                )
+                if len(text) > target_chars:
+                    head = int(target_chars * 0.7)
+                    tail = int(target_chars * 0.2)
+                    return text[:head] + "\n...(压缩失败，已截断)...\n" + text[-tail:]
+                return text
+
+            return summary.strip()
+
+        except UserCancelledError:
+            raise
+        except Exception as e:
+            logger.warning(f"LLM compression failed: {e}")
+            if len(text) > target_chars:
+                head = int(target_chars * 0.7)
+                tail = int(target_chars * 0.2)
+                return text[:head] + "\n...(压缩失败，已截断)...\n" + text[-tail:]
+            return text
+        finally:
+            reset_tracking_context(_tt)
+
+    def _extract_message_text(self, msg: dict) -> str:
+        """
+        从消息中提取文本内容（包括 tool_use/tool_result 结构化信息）
+
+        Args:
+            msg: 消息字典
+
+        Returns:
+            提取的文本内容
+        """
+        role = "用户" if msg["role"] == "user" else "助手"
+        content = msg.get("content", "")
+
+        if isinstance(content, str):
+            return f"{role}: {content}\n"
+
+        if isinstance(content, list):
+            texts = []
+            for item in content:
+                if isinstance(item, dict):
+                    if item.get("type") == "text":
+                        texts.append(item.get("text", ""))
+                    elif item.get("type") == "tool_use":
+                        from .tool_executor import smart_truncate as _st
+                        name = item.get("name", "unknown")
+                        input_data = item.get("input", {})
+                        input_summary = json.dumps(input_data, ensure_ascii=False)
+                        input_summary, _ = _st(input_summary, 3000, save_full=False, label="compress_input")
+                        texts.append(f"[调用工具: {name}, 参数: {input_summary}]")
+                    elif item.get("type") == "tool_result":
+                        from .tool_executor import smart_truncate as _st
+                        raw_content = item.get("content", "")
+                        if isinstance(raw_content, list):
+                            text_parts = [
+                                p.get("text", "")
+                                for p in raw_content
+                                if isinstance(p, dict) and p.get("type") == "text"
+                            ]
+                            result_text = "\n".join(text_parts)
+                        else:
+                            result_text = str(raw_content)
+                        result_text, _ = _st(result_text, 10000, save_full=False, label="compress_result")
+                        is_error = item.get("is_error", False)
+                        status = "错误" if is_error else "成功"
+                        texts.append(f"[工具结果({status}): {result_text}]")
+            if texts:
+                return f"{role}: {' '.join(texts)}\n"
+
+        return ""
+
+    async def _summarize_messages_chunked(
+        self, messages: list[dict], target_tokens: int
+    ) -> str:
+        """
+        分块 LLM 摘要消息列表
+
+        将消息按 CHUNK_MAX_TOKENS 分块，每块独立调 LLM 压缩，
+        最后将所有块的摘要拼接。如果摘要拼接后还很长，再做一次汇总压缩。
+
+        Args:
+            messages: 要摘要的消息列表
+            target_tokens: 最终目标 token 数
+
+        Returns:
+            摘要文本
+        """
+        if not messages:
+            return ""
+
+        # 将消息转换为文本并分块
+        chunks: list[str] = []
+        current_chunk = ""
+        current_chunk_tokens = 0
+
+        for msg in messages:
+            msg_text = self._extract_message_text(msg)
+            msg_tokens = self._estimate_tokens(msg_text)
+
+            if current_chunk_tokens + msg_tokens > CHUNK_MAX_TOKENS and current_chunk:
+                chunks.append(current_chunk)
+                current_chunk = msg_text
+                current_chunk_tokens = msg_tokens
+            else:
+                current_chunk += msg_text
+                current_chunk_tokens += msg_tokens
+
+        if current_chunk:
+            chunks.append(current_chunk)
+
+        if not chunks:
+            return ""
+
+        logger.info(f"Splitting {len(messages)} messages into {len(chunks)} chunks for compression")
+
+        # 每块独立压缩
+        chunk_summaries = []
+        for i, chunk in enumerate(chunks):
+            chunk_tokens = self._estimate_tokens(chunk)
+            # 每块的目标 = 总目标 / 块数（均分）
+            chunk_target = max(int(target_tokens / len(chunks)), 100)
+
+            _tt2 = set_tracking_context(TokenTrackingContext(
+                operation_type="context_compress",
+                operation_detail=f"chunk_{i}",
+            ))
+            try:
+                response = await self._cancellable_await(
+                    self.brain.messages_create_async(
+                        model=self.brain.model,
+                        max_tokens=chunk_target,
+                        system=(
+                            "你是一个对话压缩助手。请将以下对话片段压缩为简洁摘要。\n"
+                            "要求：\n"
+                            "1. 保留用户的原始意图和关键指令\n"
+                            "2. 保留工具调用的名称、关键参数和执行结果（成功/失败/关键输出）\n"
+                            "3. 保留重要的状态变化和决策\n"
+                            "4. 去掉重复信息、冗余输出和中间过程细节\n"
+                            "5. 使用简练的描述，不需要保留原文格式"
+                        ),
+                        messages=[
+                            {
+                                "role": "user",
+                                "content": (
+                                    f"请将以下对话片段（第 {i + 1}/{len(chunks)} 块，"
+                                    f"约 {chunk_tokens} tokens）压缩到 {chunk_target * CHARS_PER_TOKEN} 字以内:\n\n"
+                                    f"{chunk}"
+                                ),
+                            }
+                        ],
+                        use_thinking=False,
+                    )
+                )
+
+                summary = ""
+                for block in response.content:
+                    if block.type == "text":
+                        summary += block.text
+                    elif block.type == "thinking" and hasattr(block, "thinking"):
+                        # thinking 块 fallback：当模型把摘要放在 thinking 中时
+                        if not summary:
+                            summary = block.thinking if isinstance(block.thinking, str) else str(block.thinking)
+
+                if not summary.strip():
+                    # 摘要为空，回退到硬截断
+                    logger.warning(f"[Compress] Chunk {i + 1} returned empty summary, using hard truncation")
+                    max_chars = chunk_target * CHARS_PER_TOKEN
+                    if len(chunk) > max_chars:
+                        chunk_summaries.append(
+                            chunk[:max_chars // 2] + "\n...(摘要失败，已截断)...\n"
+                        )
+                    else:
+                        chunk_summaries.append(chunk)
+                else:
+                    chunk_summaries.append(summary.strip())
+                    logger.info(
+                        f"Chunk {i + 1}/{len(chunks)}: {chunk_tokens} -> "
+                        f"~{self._estimate_tokens(summary)} tokens"
+                    )
+
+            except UserCancelledError:
+                raise
+            except Exception as e:
+                logger.warning(f"Failed to summarize chunk {i + 1}: {e}")
+                max_chars = chunk_target * CHARS_PER_TOKEN
+                if len(chunk) > max_chars:
+                    chunk_summaries.append(
+                        chunk[:max_chars // 2] + "\n...(摘要失败，已截断)...\n"
+                    )
+                else:
+                    chunk_summaries.append(chunk)
+            finally:
+                reset_tracking_context(_tt2)
+
+        # 拼接所有块摘要
+        combined = "\n---\n".join(chunk_summaries)
+        combined_tokens = self._estimate_tokens(combined)
+
+        # 如果拼接后还超过目标的 2 倍，再做一次汇总压缩
+        if combined_tokens > target_tokens * 2 and len(chunks) > 1:
+            logger.info(
+                f"Combined summary still large ({combined_tokens} tokens), "
+                f"doing final consolidation..."
+            )
+            combined = await self._llm_compress_text(
+                combined, target_tokens, context_type="conversation"
+            )
+
+        return combined
+
+    async def _compress_further(self, messages: list[dict], max_tokens: int) -> list[dict]:
+        """
+        递归压缩：减少保留的最近组数量，继续压缩（保证 tool 配对完整性）
+
+        Args:
+            messages: 当前消息列表
+            max_tokens: 目标 token 上限
+
+        Returns:
+            压缩后的消息列表
+        """
+        current_tokens = self._estimate_messages_tokens(messages)
+
+        if current_tokens <= max_tokens:
+            return messages
+
+        # 按组边界切割，保留最近 2 组（比 _compress_context 的 MIN_RECENT_TURNS 更少）
+        groups = self._group_messages(messages)
+        recent_group_count = min(2, len(groups))
+
+        if len(groups) <= recent_group_count:
+            # 只有最近的几个组了，做最后一次 tool_result 压缩
+            logger.warning("Cannot compress further, attempting final tool_result compression")
+            return await self._compress_large_tool_results(messages, threshold=1000)
+
+        early_groups = groups[:-recent_group_count]
+        recent_groups = groups[-recent_group_count:]
+
+        early_messages = [msg for group in early_groups for msg in group]
+        recent_messages = [msg for group in recent_groups for msg in group]
+
+        # 用 LLM 压缩早期消息
+        early_tokens = self._estimate_messages_tokens(early_messages)
+        target = max(int(early_tokens * COMPRESSION_RATIO), 100)
+        summary = await self._summarize_messages_chunked(early_messages, target)
+
+        compressed = ContextManager._inject_summary_into_recent(summary, recent_messages)
+
+        compressed_tokens = self._estimate_messages_tokens(compressed)
+        logger.info(
+            f"Further compressed context from {current_tokens} to {compressed_tokens} tokens"
+        )
+        return compressed
+
+    def _hard_truncate_if_needed(self, messages: list[dict], hard_limit: int) -> list[dict]:
+        """
+        硬保底：当 LLM 压缩后仍超过 hard_limit，直接硬截断保证能提交到 API
+
+        策略：
+        1. 从最早的消息开始丢弃，保留最近的消息
+        2. 将丢弃的消息入队到提取队列避免永久丢失
+        3. 对剩余消息中仍然过大的单条内容做字符级截断
+        4. 添加截断提示让模型知道上下文不完整
+        """
+        current_tokens = self._estimate_messages_tokens(messages)
+        if current_tokens <= hard_limit:
+            return messages
+
+        logger.error(
+            f"[HardTruncate] LLM compression insufficient! "
+            f"Still {current_tokens} tokens > hard_limit {hard_limit}. "
+            f"Applying hard truncation to guarantee API submission."
+        )
+
+        truncated = list(messages)
+        dropped_messages: list[dict] = []
+        while len(truncated) > 2 and self._estimate_messages_tokens(truncated) > hard_limit:
+            removed = truncated.pop(0)
+            dropped_messages.append(removed)
+            removed_role = removed.get("role", "?")
+            logger.warning(f"[HardTruncate] Dropped earliest message (role={removed_role})")
+
+        if dropped_messages:
+            from .context_manager import ContextManager
+            ContextManager._enqueue_dropped_for_extraction(dropped_messages, self.memory_manager)
+
+        # 策略二：如果只剩 2 条还是超限，对单条消息内容做字符级截断
+        if self._estimate_messages_tokens(truncated) > hard_limit:
+            max_chars_per_msg = (hard_limit * CHARS_PER_TOKEN) // max(len(truncated), 1)
+            for i, msg in enumerate(truncated):
+                content = msg.get("content", "")
+                if isinstance(content, str) and len(content) > max_chars_per_msg:
+                    keep_head = int(max_chars_per_msg * 0.7)
+                    keep_tail = int(max_chars_per_msg * 0.2)
+                    truncated[i] = {
+                        **msg,
+                        "content": (
+                            content[:keep_head]
+                            + "\n\n...[内容过长已硬截断]...\n\n"
+                            + content[-keep_tail:]
+                        ),
+                    }
+                elif isinstance(content, list):
+                    # 对 list 类型内容，截断其中过大的文本块
+                    new_content = []
+                    for item in content:
+                        if isinstance(item, dict):
+                            for key in ("text", "content"):
+                                val = item.get(key, "")
+                                if isinstance(val, str) and len(val) > max_chars_per_msg:
+                                    keep_h = int(max_chars_per_msg * 0.7)
+                                    keep_t = int(max_chars_per_msg * 0.2)
+                                    item = dict(item)
+                                    item[key] = (
+                                        val[:keep_h]
+                                        + "\n...[硬截断]...\n"
+                                        + val[-keep_t:]
+                                    )
+                        new_content.append(item)
+                    truncated[i] = {**msg, "content": new_content}
+
+        truncated.insert(0, {
+            "role": "user",
+            "content": (
+                "[context_note: 早期对话已自动整理] "
+                "请正常回复，保持详细程度和输出质量不变。"
+            ),
+        })
+
+        final_tokens = self._estimate_messages_tokens(truncated)
+        logger.warning(
+            f"[HardTruncate] Final: {final_tokens} tokens "
+            f"(hard_limit={hard_limit}, messages={len(truncated)})"
+        )
+        return truncated
+
     async def chat(self, message: str, session_id: str | None = None) -> str:
         """
         对话接口 - 委托给 chat_with_session() 复用完整处理链路
@@ -3001,12 +3414,23 @@ create_agent(name="名称", description="描述", skills=["技能"], custom_prom
                 att_url = getattr(att, "url", None) or ""
                 att_name = getattr(att, "name", None) or "file"
                 att_mime = getattr(att, "mime_type", None) or att_type
-                if att_type == "image" and att_url:
+
+                is_image = (
+                    att_type == "image"
+                    or (att_mime or "").startswith("image/")
+                    or (att_url or "").startswith("data:image/")
+                )
+                is_video = (
+                    att_type == "video"
+                    or (att_mime or "").startswith("video/")
+                    or (att_url or "").startswith("data:video/")
+                )
+
+                if is_image and att_url:
                     content_blocks.append({"type": "image_url", "image_url": {"url": att_url}})
-                elif att_type == "video" and att_url:
+                elif is_video and att_url:
                     content_blocks.append({"type": "video_url", "video_url": {"url": att_url}})
                 elif att_type == "document" and att_url:
-                    # PDF 等文档 — 通过 URL 下载后交给后端处理
                     content_blocks.append({
                         "type": "text",
                         "text": f"[文档: {att_name} ({att_mime})] URL: {att_url}",
@@ -4317,7 +4741,7 @@ NEXT: 建议的下一步（如有）"""
         ))
         try:
             llm_task = asyncio.create_task(
-                self.brain.messages_create_async(**kwargs)
+                self.brain.messages_create_async(cancel_event=cancel_event, **kwargs)
             )
             cancel_waiter = asyncio.create_task(cancel_event.wait())
 
@@ -5845,8 +6269,10 @@ NEXT: 建议的下一步（如有）"""
         # Plan 模式强制检查
         # ============================================
         # 如果当前 session 被标记为需要 Plan（compound 任务），
-        # 但还没有创建 Plan，则拒绝执行其他工具
-        if tool_name != "create_plan":
+        # 但还没有创建 Plan，则拒绝执行其他工具。
+        # 计划管理工具始终放行，避免死锁。
+        _PLAN_TOOLS = {"create_plan", "update_plan_step", "complete_plan", "get_plan_status"}
+        if tool_name not in _PLAN_TOOLS:
             from ..tools.handlers.plan import has_active_plan, is_plan_required
 
             session_id = getattr(self, "_current_session_id", None)
@@ -6400,8 +6826,7 @@ NEXT: 建议的下一步（如有）"""
                     ))
                     try:
                         summary_response = await self._cancellable_await(
-                            asyncio.to_thread(
-                                self.brain.messages_create,
+                            self.brain.messages_create_async(
                                 max_tokens=1000,
                                 system=_build_effective_system_prompt_task(),
                                 messages=messages,

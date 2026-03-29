@@ -23,6 +23,9 @@
 """
 
 # 基础模块
+from .agent import AGENT_TOOLS
+from .agent_hub import AGENT_HUB_TOOLS
+from .agent_package import AGENT_PACKAGE_TOOLS
 from .base import (
     Prerequisite,
     RelatedTool,
@@ -50,14 +53,11 @@ from .persona import PERSONA_TOOLS
 from .plan import PLAN_TOOLS
 from .profile import PROFILE_TOOLS
 from .scheduled import SCHEDULED_TOOLS
+from .skill_store import SKILL_STORE_TOOLS
 from .skills import SKILLS_TOOLS
 from .sticker import STICKER_TOOLS
 from .system import SYSTEM_TOOLS
-from .agent import AGENT_TOOLS
-from .agent_hub import AGENT_HUB_TOOLS
 from .org_setup import ORG_SETUP_TOOLS
-from .agent_package import AGENT_PACKAGE_TOOLS
-from .skill_store import SKILL_STORE_TOOLS
 from .web_search import WEB_SEARCH_TOOLS
 
 # 合并所有工具定义（不含平台连接类工具，后者由 agent 根据 hub_enabled 动态加载）
@@ -81,6 +81,21 @@ BASE_TOOLS = (
 
 # 平台连接工具（Agent Hub + Skill Store），仅在 hub_enabled=True 时注册
 HUB_TOOLS = AGENT_HUB_TOOLS + SKILL_STORE_TOOLS
+
+_ALL_TOOLS = list(BASE_TOOLS) + list(HUB_TOOLS)
+_TOOL_DEFINITIONS_BY_NAME = {tool["name"]: tool for tool in _ALL_TOOLS}
+
+
+def get_tool_definition(tool_name: str) -> dict | None:
+    """Return the static tool definition for a tool name, if known."""
+    return _TOOL_DEFINITIONS_BY_NAME.get(tool_name)
+
+
+def get_tool_input_schema(tool_name: str) -> dict:
+    """Return a tool's input schema or an empty dict when unavailable."""
+    tool = get_tool_definition(tool_name)
+    schema = tool.get("input_schema") if tool else None
+    return schema if isinstance(schema, dict) else {}
 
 __all__ = [
     # 基础类型和工具
@@ -119,4 +134,6 @@ __all__ = [
     "PERSONA_TOOLS",
     "STICKER_TOOLS",
     "CONFIG_TOOLS",
+    "get_tool_definition",
+    "get_tool_input_schema",
 ]

@@ -319,9 +319,21 @@ class BrowserHandler:
 
             from openakita.runtime_env import IS_FROZEN
             if IS_FROZEN:
+                chrome_running_hint = ""
+                try:
+                    from ..browser.manager import BrowserManager
+                    if BrowserManager._is_chrome_process_running():
+                        chrome_running_hint = (
+                            "检测到 Chrome 浏览器正在运行，这可能导致配置文件冲突。"
+                            "请尝试关闭 Chrome 后重试，或直接使用内置浏览器。"
+                        )
+                except Exception:
+                    pass
                 error_msg = (
-                    "无法启动浏览器。浏览器组件已内置，请尝试重启应用。"
-                    "如仍有问题，请检查杀毒软件是否拦截 Chromium 启动。"
+                    "❌ 无法启动浏览器。"
+                    + (chrome_running_hint or
+                       "浏览器组件已内置，请尝试重启应用。"
+                       "如仍有问题，请检查杀毒软件是否拦截 Chromium 启动。")
                 )
             else:
                 error_msg = "无法启动浏览器。请安装: pip install playwright && playwright install chromium"
@@ -400,12 +412,22 @@ class BrowserHandler:
         return prepare_image_file_for_context(p)
 
     async def _handle_view_image(self, params: dict[str, Any]) -> str | list:
-        """view_image 工具处理：读取图片并返回多模态 tool result。"""
+        """view_image 工具处理：读取图片并返回多模态 tool result。支持本地路径和 HTTP(S) URL。"""
         path_str = params.get("path", "")
         question = params.get("question", "")
 
         if not path_str:
             return "❌ view_image 缺少必要参数 'path'。"
+
+        # HTTP(S) URL → 下载到临时文件后按本地文件处理
+        if path_str.startswith(("http://", "https://")):
+            loaded = await self._download_and_load_image(path_str)
+            if loaded is None:
+                return f"❌ 无法读取图片: {path_str}（文件不存在或格式不支持）"
+            b64_data, media_type, w, h = loaded
+            return await self._build_view_image_result(
+                path_str, b64_data, media_type, w, h, question,
+            )
 
         p = Path(path_str)
         if not p.is_file():
@@ -425,9 +447,16 @@ class BrowserHandler:
             )
 
         b64_data, media_type, w, h = loaded
+        return await self._build_view_image_result(
+            path_str, b64_data, media_type, w, h, question,
+        )
 
+    async def _build_view_image_result(
+        self, path_str: str, b64_data: str, media_type: str,
+        w: int, h: int, question: str,
+    ) -> str | list:
+        """根据模型 vision 能力构建 view_image 结果。"""
         if self._model_supports_vision():
-            # 模型支持 vision → 直接嵌入图片
             content: list[dict] = [
                 {"type": "text", "text": f"✅ 已加载图片: {path_str} ({w}x{h})"},
                 {
@@ -439,9 +468,51 @@ class BrowserHandler:
                 content.append({"type": "text", "text": f"请回答: {question}"})
             return content
 
-        # 模型不支持 vision → 用 VL 模型生成文字描述
         description = await self._describe_image_with_vl(b64_data, media_type, question)
         return f"✅ 图片: {path_str} ({w}x{h})\n\n{description}"
+
+    @staticmethod
+    async def _download_and_load_image(url: str) -> tuple[str, str, int, int] | None:
+        """下载 HTTP(S) 图片到临时文件并加载为 base64。"""
+        import tempfile
+        try:
+            import httpx
+        except ImportError:
+            try:
+                import urllib.request
+                with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+                    urllib.request.urlretrieve(url, tmp.name)
+                    tmp_path = tmp.name
+            except Exception:
+                return None
+        else:
+            try:
+                async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+                    resp = await client.get(url)
+                    if resp.status_code != 200:
+                        return None
+                    content_type = resp.headers.get("content-type", "")
+                    if not content_type.startswith("image/"):
+                        return None
+                    ext = {
+                        "image/png": ".png", "image/jpeg": ".jpg",
+                        "image/gif": ".gif", "image/webp": ".webp",
+                    }.get(content_type.split(";")[0].strip(), ".png")
+                    with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmp:
+                        tmp.write(resp.content)
+                        tmp_path = tmp.name
+            except Exception:
+                return None
+
+        try:
+            from ...channels.media.image_prep import prepare_image_file_for_context
+            result = prepare_image_file_for_context(Path(tmp_path))
+        finally:
+            try:
+                Path(tmp_path).unlink(missing_ok=True)
+            except Exception:
+                pass
+        return result
 
     async def _describe_image_with_vl(
         self, b64_data: str, media_type: str, question: str = "",

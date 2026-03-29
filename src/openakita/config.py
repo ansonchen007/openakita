@@ -33,7 +33,11 @@ class Settings(BaseSettings):
 
     # Agent 配置
     agent_name: str = Field(default="OpenAkita", description="Agent 名称")
-    max_iterations: int = Field(default=300, description="Ralph 循环最大迭代次数")
+    max_iterations: int = Field(
+        default=300,
+        ge=15,
+        description="Ralph 循环最大迭代次数（最小值 15，推荐 100~300）",
+    )
 
     # 自检配置
     selfcheck_autofix: bool = Field(
@@ -234,7 +238,7 @@ class Settings(BaseSettings):
     # === 调度器配置 ===
     scheduler_timezone: str = Field(default="Asia/Shanghai", description="调度器时区")
     scheduler_task_timeout: int = Field(
-        default=600, description="定时任务执行超时时间（秒），默认 600 秒（10分钟）"
+        default=1200, description="定时任务执行超时时间（秒），默认 1200 秒（20分钟）"
     )
 
     # === 记忆整理配置 ===
@@ -456,6 +460,18 @@ class Settings(BaseSettings):
     # === 评估配置 ===
     evaluation_enabled: bool = Field(default=False, description="是否启用每日自动评估")
     evaluation_output_dir: str = Field(default="data/evaluation", description="评估报告输出目录")
+
+    @model_validator(mode="after")
+    def _enforce_min_max_iterations(self) -> "Settings":
+        MIN_ITERATIONS = 15
+        if self.max_iterations < MIN_ITERATIONS:
+            logger.warning(
+                "[Config] max_iterations=%d is too low (minimum %d). "
+                "Resetting to %d. Please update your .env file.",
+                self.max_iterations, MIN_ITERATIONS, MIN_ITERATIONS,
+            )
+            self.max_iterations = MIN_ITERATIONS
+        return self
 
     @model_validator(mode="before")
     @classmethod

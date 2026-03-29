@@ -269,6 +269,13 @@ class ContextManager:
         _threshold = _settings.context_compression_threshold
         soft_limit = int(hard_limit * _threshold)
 
+        _overhead_bytes = len(system_prompt.encode("utf-8")) if system_prompt else 0
+        if tools:
+            try:
+                _overhead_bytes += len(json.dumps(tools, ensure_ascii=False, default=str).encode("utf-8"))
+            except Exception:
+                _overhead_bytes += len(tools) * 800
+
         current_tokens = self.estimate_messages_tokens(messages)
 
         logger.info(
@@ -341,7 +348,9 @@ class ContextManager:
 
         if len(groups) <= recent_group_count:
             messages = await self._compress_large_tool_results(messages, threshold=2000)
-            return _end_ctx_span(self._hard_truncate_if_needed(messages, hard_limit, memory_manager))
+            return _end_ctx_span(self._hard_truncate_if_needed(
+                messages, hard_limit, memory_manager, overhead_bytes=_overhead_bytes,
+            ))
 
         early_groups = groups[:-recent_group_count]
         recent_groups = groups[-recent_group_count:]
@@ -371,7 +380,9 @@ class ContextManager:
         compressed = await self._compress_further(compressed, soft_limit)
 
         # Step 5: 硬保底
-        return _end_ctx_span(self._hard_truncate_if_needed(compressed, hard_limit, memory_manager))
+        return _end_ctx_span(self._hard_truncate_if_needed(
+            compressed, hard_limit, memory_manager, overhead_bytes=_overhead_bytes,
+        ))
 
     @staticmethod
     def _find_last_boundary_index(messages: list[dict]) -> int:
@@ -926,7 +937,8 @@ class ContextManager:
     MAX_PAYLOAD_BYTES = 1_800_000  # 1.8MB — 大多数 API 限制在 2MB
 
     def _hard_truncate_if_needed(
-        self, messages: list[dict], hard_limit: int, memory_manager: object | None = None
+        self, messages: list[dict], hard_limit: int, memory_manager: object | None = None,
+        overhead_bytes: int = 0,
     ) -> list[dict]:
         """硬保底：当 LLM 压缩后仍超过 hard_limit，直接硬截断"""
         current_tokens = self.estimate_messages_tokens(messages)
@@ -934,7 +946,7 @@ class ContextManager:
 
         if not need_token_truncation:
             # token 预算内，仍需检查 payload 大小（base64 图片可能导致 payload 超限）
-            return self._strip_oversized_payload(messages)
+            return self._strip_oversized_payload(messages, overhead_bytes=overhead_bytes)
 
         logger.error(
             f"[HardTruncate] Still {current_tokens} tokens > hard_limit {hard_limit}. "
@@ -988,23 +1000,35 @@ class ContextManager:
             f"[HardTruncate] Final: {final_tokens} tokens "
             f"(hard_limit={hard_limit}, messages={len(truncated)})"
         )
-        return self._strip_oversized_payload(truncated)
+        return self._strip_oversized_payload(truncated, overhead_bytes=overhead_bytes)
 
-    def _strip_oversized_payload(self, messages: list[dict]) -> list[dict]:
-        """检查序列化 payload 大小，超过 API 限制时移除媒体内容。"""
+    def _strip_oversized_payload(
+        self, messages: list[dict], *, overhead_bytes: int = 0,
+    ) -> list[dict]:
+        """检查序列化 payload 大小，超过 API 限制时移除媒体内容。
+
+        Args:
+            overhead_bytes: system prompt + tools 等非 message 部分的 byte 大小,
+                           从 MAX_PAYLOAD_BYTES 预算中扣除。
+        """
+        effective_limit = self.MAX_PAYLOAD_BYTES - overhead_bytes
+        if effective_limit < 200_000:
+            effective_limit = 200_000
+
         payload_size = sum(
             len(json.dumps(msg, ensure_ascii=False, default=str).encode("utf-8"))
             for msg in messages
         )
-        if payload_size <= self.MAX_PAYLOAD_BYTES:
+        if payload_size <= effective_limit:
             return messages
 
         logger.warning(
             f"[PayloadGuard] Serialized payload ~{payload_size} bytes "
-            f"> {self.MAX_PAYLOAD_BYTES} limit. Stripping media from history."
+            f"> {effective_limit} limit (overhead={overhead_bytes}). "
+            f"Stripping media from history."
         )
         result = list(messages)
-        budget_per_msg = self.MAX_PAYLOAD_BYTES // max(len(result), 1)
+        budget_per_msg = effective_limit // max(len(result), 1)
         for i, msg in enumerate(result):
             content = msg.get("content", "")
             if isinstance(content, list):

@@ -176,6 +176,34 @@ def cancel_plan(session_id: str) -> bool:
     return True
 
 
+def force_close_plan(session_id: str) -> bool:
+    """
+    强制关闭指定 session 的 Plan 状态（死锁恢复用）。
+
+    无条件清除所有与该 session 关联的 Plan 模块级状态，
+    无论 handler 实例或 plan 数据是否可达。
+    用于打破 plan_required=True + has_active_plan=False 的死锁。
+
+    Returns:
+        True 如果清理了任何状态
+    """
+    had_state = False
+    if session_id in _session_active_plans:
+        plan_id = _session_active_plans.pop(session_id)
+        logger.warning(f"[Plan] Force-closed active plan {plan_id} for {session_id}")
+        had_state = True
+    if session_id in _session_plan_required:
+        del _session_plan_required[session_id]
+        had_state = True
+    handler = _session_handlers.pop(session_id, None)
+    if handler:
+        handler._plans_by_session.pop(session_id, None)
+        had_state = True
+    if had_state:
+        logger.warning(f"[Plan] Force-closed all plan state for session {session_id}")
+    return had_state
+
+
 def register_plan_handler(session_id: str, handler: "PlanHandler") -> None:
     """注册 PlanHandler 实例"""
     _session_handlers[session_id] = handler
@@ -294,10 +322,25 @@ class PlanHandler:
         )
 
     def _get_current_plan(self) -> dict | None:
-        """获取当前会话的 Plan（会话隔离）"""
+        """获取当前会话的 Plan（会话隔离）。
+
+        如果本实例没有数据但模块级 _session_handlers 中有旧 handler
+        持有该 plan（工具系统热重载后的典型场景），自动恢复到本实例。
+        """
         cid = self._get_conversation_id()
         if cid:
-            return self._plans_by_session.get(cid)
+            plan = self._plans_by_session.get(cid)
+            if plan is not None:
+                return plan
+            # 尝试从旧 handler 恢复（热重载后 self 是新实例）
+            old_handler = _session_handlers.get(cid)
+            if old_handler is not None and old_handler is not self:
+                old_plan = old_handler._plans_by_session.get(cid)
+                if old_plan is not None:
+                    self._plans_by_session[cid] = old_plan
+                    logger.info(f"[Plan] Recovered plan {old_plan.get('id')} from previous handler for {cid}")
+                    return old_plan
+            return None
         return self.current_plan
 
     def _set_current_plan(self, plan: dict | None) -> None:
@@ -340,6 +383,12 @@ class PlanHandler:
                 f"⚠️ 已有活跃计划 {plan_id}，不允许重复创建。\n"
                 f"请使用 update_plan_step 继续执行当前计划。\n\n{status}"
             )
+
+        # 状态不一致兜底：_session_active_plans 有记录但本实例无 plan 数据
+        cid = self._get_conversation_id()
+        if cid and has_active_plan(cid) and _plan is None:
+            logger.warning(f"[Plan] Inconsistent state: active_plan registered but no plan data for {cid}, force-closing")
+            force_close_plan(cid)
 
         plan_id = f"plan_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{secrets.token_hex(3)}"
 
@@ -419,6 +468,10 @@ class PlanHandler:
         """更新步骤状态"""
         _plan = self._get_current_plan()
         if not _plan:
+            cid = self._get_conversation_id()
+            if cid and has_active_plan(cid):
+                logger.warning(f"[Plan] update_step: plan data lost for {cid}, force-closing stale registration")
+                force_close_plan(cid)
             return "❌ 当前没有活动的计划，请先调用 create_plan"
 
         step_id = params.get("step_id", "")
@@ -541,6 +594,11 @@ class PlanHandler:
         """完成计划"""
         _plan = self._get_current_plan()
         if not _plan:
+            cid = self._get_conversation_id()
+            if cid and has_active_plan(cid):
+                logger.warning(f"[Plan] complete_plan: plan data lost for {cid}, force-closing stale registration")
+                force_close_plan(cid)
+                return "⚠️ 旧计划数据已丢失，已强制清除死锁状态。可以开始新任务。"
             return "❌ 当前没有活动的计划"
 
         summary = params.get("summary", "")

@@ -12,6 +12,7 @@
 """
 
 import asyncio
+import json
 import logging
 import time
 from datetime import datetime
@@ -21,6 +22,7 @@ from typing import Any
 from ..config import settings
 from ..tools.errors import ToolError, classify_error
 from ..tools.handlers import SystemHandlerRegistry
+from ..tools.input_normalizer import normalize_tool_input
 from ..tracing.tracer import get_tracer
 from .agent_state import TaskState
 
@@ -242,6 +244,9 @@ class ToolExecutor:
         Returns:
             工具执行结果字符串
         """
+        if isinstance(tool_input, dict):
+            tool_input = normalize_tool_input(tool_name, tool_input)
+
         logger.info(f"Executing tool: {tool_name} with {tool_input}")
 
         # ★ 拦截 JSON 解析失败的工具调用（参数被 API 截断）
@@ -433,6 +438,14 @@ class ToolExecutor:
                 if isinstance(tool_input, dict) and PARSE_ERROR_KEY in tool_input:
                     success = False
 
+                if success and isinstance(result_str, str) and result_str.lstrip().startswith("{"):
+                    try:
+                        payload, _ = json.JSONDecoder().raw_decode(result_str.lstrip())
+                        if isinstance(payload, dict) and payload.get("error") is True:
+                            success = False
+                    except Exception:
+                        pass
+
                 # 终端输出工具返回结果（便于调试与观察）
                 _preview = result_str if len(result_str) <= 800 else result_str[:800] + "\n... (已截断)"
                 try:
@@ -554,17 +567,22 @@ class ToolExecutor:
         )
         return truncated + hint
 
+    _PLAN_MANAGEMENT_TOOLS = frozenset({
+        "create_plan", "update_plan_step", "complete_plan", "get_plan_status",
+    })
+
     def _check_plan_required(self, tool_name: str, session_id: str | None) -> str | None:
         """
         检查是否需要先创建 Plan。
 
         如果当前 session 被标记为需要 Plan（compound 任务），
         但还没有创建 Plan，则拒绝执行其他工具。
+        计划管理工具始终放行，避免死锁。
 
         Returns:
             阻止消息字符串，或 None（允许执行）
         """
-        if tool_name == "create_plan":
+        if tool_name in self._PLAN_MANAGEMENT_TOOLS:
             return None
 
         try:

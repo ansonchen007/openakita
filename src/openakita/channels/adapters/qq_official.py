@@ -337,6 +337,7 @@ class QQBotAdapter(ChannelAdapter):
 
     # 不可重试的配置类错误关键词（遇到后大幅延长重试间隔）
     _FATAL_KEYWORDS = ("不在白名单", "invalid appid", "invalid secret", "鉴权失败")
+    _FATAL_GIVE_UP_THRESHOLD = 5
 
     async def _run_client(self) -> None:
         """在后台运行 botpy 客户端 (带自动重连) — WebSocket 模式"""
@@ -376,7 +377,6 @@ class QQBotAdapter(ChannelAdapter):
                 if is_fatal:
                     consecutive_fatal += 1
                     cap = fatal_max_delay
-                    # 首次报错详细日志，后续只在间隔翻倍时提醒
                     if consecutive_fatal == 1:
                         logger.error(
                             f"QQ Official Bot 配置错误: {err_msg}\n"
@@ -387,6 +387,16 @@ class QQBotAdapter(ChannelAdapter):
                         logger.warning(
                             f"QQ Official Bot 仍无法连接 (已重试 {consecutive_fatal} 次): {err_msg}"
                         )
+
+                    if consecutive_fatal >= self._FATAL_GIVE_UP_THRESHOLD:
+                        reason = (
+                            f"连续 {consecutive_fatal} 次认证失败: {err_msg}。"
+                            "请检查 QQ 开放平台 AppID / AppSecret / IP 白名单配置"
+                        )
+                        logger.error(f"QQ Official Bot: {reason}")
+                        self._running = False
+                        self._report_failure(reason)
+                        return
                 else:
                     consecutive_fatal = 0
                     cap = max_delay
