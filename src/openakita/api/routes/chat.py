@@ -218,6 +218,7 @@ async def _stream_chat(
     _reply_chars = 0
     _reply_preview = ""
     _full_reply = ""  # 完整回复文本（用于 session 保存）
+    _chain_reply = ""  # chain_text 累积（仅在无 text_delta 时 fallback 使用）
     _done_sent = False
     _client_disconnected = False
     _ask_user_question = ""
@@ -240,7 +241,7 @@ async def _stream_chat(
         return False
 
     def _sse(event_type: str, data: dict | None = None) -> str:
-        nonlocal _reply_chars, _reply_preview, _full_reply, _done_sent
+        nonlocal _reply_chars, _reply_preview, _full_reply, _chain_reply, _done_sent
         if event_type == "done":
             if _done_sent:
                 return ""
@@ -254,12 +255,16 @@ async def _stream_chat(
             except (UnicodeEncodeError, OSError):
                 pass
         payload = {"type": event_type, **(data or {})}
-        if event_type in ("text_delta", "chain_text") and data and "content" in data:
+        if event_type == "text_delta" and data and "content" in data:
             chunk = data["content"]
             _reply_chars += len(chunk)
             _full_reply += chunk
             if len(_reply_preview) < 120:
                 _reply_preview += chunk
+        elif event_type == "chain_text" and data and "content" in data:
+            chunk = data["content"]
+            _reply_chars += len(chunk)
+            _chain_reply += chunk
         return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
     _disconnect_watcher_task: asyncio.Task | None = None
@@ -538,9 +543,9 @@ async def _stream_chat(
                 for o in _ask_user_options:
                     parts.append(f"  - {o.get('id', '')}: {o.get('label', '')}")
             ask_text = "\n".join(parts)
-            assistant_text_to_save = ask_text if ask_text.strip() else _full_reply
+            assistant_text_to_save = ask_text if ask_text.strip() else (_full_reply or _chain_reply)
         else:
-            assistant_text_to_save = _full_reply
+            assistant_text_to_save = _full_reply or _chain_reply
 
         # Collect tool execution summary as structured metadata
         _tool_summary = None
@@ -666,16 +671,17 @@ async def _stream_chat(
             except Exception:
                 pass
             # Deferred session save
-            if session and _full_reply:
+            _deferred_text = _full_reply or _chain_reply
+            if session and _deferred_text:
                 try:
                     _deferred_meta: dict = {}
                     if _collected_artifacts:
                         _deferred_meta["artifacts"] = _collected_artifacts
-                    session.add_message("assistant", _full_reply, **_deferred_meta)
+                    session.add_message("assistant", _deferred_text, **_deferred_meta)
                     if session_manager:
                         session_manager.mark_dirty()
                     logger.info(
-                        f"[Chat API] Deferred save: {len(_full_reply)} chars "
+                        f"[Chat API] Deferred save: {len(_deferred_text)} chars "
                         f"(client_disconnected={_client_disconnected})"
                     )
                 except Exception as e:
