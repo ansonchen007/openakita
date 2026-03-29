@@ -1286,9 +1286,12 @@ class Agent:
             } & all_server_names
 
         if auto_connect_ids:
+            from ..tools.mcp_workspace import prepare_chrome_devtools_args
+
             synced_any = False
             for server_name in auto_connect_ids:
                 try:
+                    await prepare_chrome_devtools_args(self.mcp_client, server_name)
                     result = await self.mcp_client.connect(server_name)
                     if result.success:
                         logger.info(f"Auto-connected MCP server: {server_name} ({result.tool_count} tools)")

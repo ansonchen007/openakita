@@ -2,7 +2,6 @@
 OpenAkita 配置模块
 """
 
-import json
 import logging
 from pathlib import Path
 
@@ -645,26 +644,27 @@ class RuntimeState:
         return self._state_file
 
     def save(self) -> None:
-        """把当前 settings 中的可持久化字段写入 JSON 文件。"""
+        """把当前 settings 中的可持久化字段写入 JSON 文件（原子写入 + 备份）。"""
+        from .utils.atomic_io import safe_json_write
+
         data: dict = {}
         for key in _PERSISTABLE_KEYS:
             data[key] = getattr(settings, key)
         try:
-            self.state_file.parent.mkdir(parents=True, exist_ok=True)
-            with open(self.state_file, "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
+            safe_json_write(self.state_file, data)
             logger.info(f"[RuntimeState] Saved: {data}")
         except Exception as e:
             logger.error(f"[RuntimeState] Failed to save: {e}")
 
     def load(self) -> None:
-        """从 JSON 文件恢复设置到 settings 单例，仅覆盖可持久化字段。"""
-        if not self.state_file.exists():
+        """从 JSON 文件恢复设置到 settings 单例，仅覆盖可持久化字段（支持 .bak 回退）。"""
+        from .utils.atomic_io import read_json_safe
+
+        data = read_json_safe(self.state_file)
+        if data is None:
             logger.info("[RuntimeState] No saved state found, using defaults.")
             return
         try:
-            with open(self.state_file, encoding="utf-8") as f:
-                data = json.load(f)
             applied = []
             for key in _PERSISTABLE_KEYS:
                 if key in data:

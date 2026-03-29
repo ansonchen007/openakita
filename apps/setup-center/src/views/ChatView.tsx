@@ -1780,6 +1780,7 @@ export function ChatView({
     abort: AbortController;
     reader: ReadableStreamDefaultReader<Uint8Array> | null;
     isStreaming: boolean;
+    userStopped: boolean;
     messages: ChatMessage[];
     activeSubAgents: SubAgentEntry[];
     subAgentTasks: SubAgentTask[];
@@ -1926,9 +1927,9 @@ export function ChatView({
   // ── APP 后台恢复：中断已断开的 SSE 流 ──
   // Tauri / Capacitor / mobile browsers kill HTTP streams when the app/tab is
   // in the background.  Desktop browsers keep fetch streams alive across tab
-  // switches, so we only skip the abort for desktop web.
-  // Abort reason "app_resumed" tells the catch handler to attempt recovery from
-  // backend session history instead of marking the conversation as user-cancelled.
+  // switches, so we only register this handler for non-desktop-web platforms.
+  // The catch handler uses sctx.userStopped (positive flag) to decide whether
+  // to show "已中止" vs. attempt recovery — no reliance on abort reason strings.
   useEffect(() => {
     if (IS_WEB && !IS_MOBILE_BROWSER) return;
     const handler = () => {
@@ -2156,10 +2157,18 @@ export function ChatView({
     return () => document.removeEventListener("mousedown", handler);
   }, [agentMenuOpen]);
 
-  // Restore conversations from backend when localStorage is empty (e.g. after Tauri restart)
-
   // 启动后后台对账会话列表：本地先展示，后端异步增量合并，避免"今天新会话缺失"
+  // 同时检测 data_epoch 是否变化（factory reset / 数据重置）
   const sessionRestoreAttempted = useRef(false);
+
+  // 后端断开时重置对账标志，使重连后能重新对账 + 检测 epoch 变化
+  // （覆盖 factory reset 后不刷新页面的场景）
+  useEffect(() => {
+    if (!serviceRunning) {
+      sessionRestoreAttempted.current = false;
+    }
+  }, [serviceRunning]);
+
   useEffect(() => {
     if (!serviceRunning || sessionRestoreAttempted.current) return;
     sessionRestoreAttempted.current = true;
@@ -2173,13 +2182,13 @@ export function ChatView({
         const backendSessions: { id: string; title: string; lastMessage: string; timestamp: number; messageCount: number; agentProfileId?: string }[] = data.sessions || [];
         if (cancelled) return;
 
-        // ── Factory reset / data wipe detection ──
-        // Two complementary checks:
-        // 1) data_epoch mismatch: backend's data/ was recreated (epoch changed)
-        // 2) ready + 0 sessions: backend is fully initialized but has nothing —
-        //    local conversations are orphaned (handles bootstrap: first time the
-        //    epoch code runs, cached is null so #1 cannot fire).
-        const backendReady = data.ready !== false;
+        // ── Factory reset detection (epoch-based only) ──
+        // Only clear local data when data_epoch actually changes, which signals
+        // that the backend's data/ directory was recreated (true factory reset).
+        // We intentionally do NOT wipe localStorage when "ready + 0 sessions",
+        // because that can be a false positive: e.g. a version upgrade changes
+        // Session serialisation and _load_sessions silently skips all old
+        // sessions, yet sessions.json on disk is still intact.
         const epoch = data.data_epoch as string | undefined;
         const EPOCH_KEY = "openakita_data_epoch";
 
@@ -2197,19 +2206,6 @@ export function ChatView({
             setMessages([]);
             return;
           }
-        }
-
-        if (backendReady && backendSessions.length === 0) {
-          setConversations((prev) => {
-            if (prev.length === 0) return prev;
-            for (const c of prev) {
-              try { localStorage.removeItem(STORAGE_KEY_MSGS_PREFIX + c.id); } catch {}
-            }
-            return [];
-          });
-          setActiveConvId(null);
-          setMessages([]);
-          return;
         }
         if (backendSessions.length === 0) return;
 
@@ -2273,14 +2269,17 @@ export function ChatView({
     return () => { cancelled = true; clearInterval(timer); };
   }, [serviceRunning, apiBaseUrl, getClientId]);
 
+  // ── Cross-device sync: conversation lifecycle events via WebSocket ──
+  // onWsEvent handles platform detection internally (no-op for Tauri local,
+  // active for Web / Capacitor / Tauri-remote).
   useEffect(() => {
-    if (!IS_WEB) return;
     const myId = getClientId();
     return onWsEvent((event, data) => {
       const d = data as Record<string, unknown> | null;
       if (!d) return;
       const convId = d.conversation_id as string | undefined;
       if (!convId) return;
+
       if (event === "chat:busy") {
         const clientId = d.client_id as string;
         if (clientId !== myId) {
@@ -2289,11 +2288,43 @@ export function ChatView({
       } else if (event === "chat:idle") {
         setBusyConversations((prev) => { const m = new Map(prev); m.delete(convId); return m; });
       } else if (event === "chat:message_update") {
+        const clientId = d.client_id as string | undefined;
+        if (clientId && clientId === myId) return;
         if (convId === activeConvIdRef.current) {
           safeFetch(`${apiBaseUrl}/api/sessions/${encodeURIComponent(convId)}/history`)
             .then((r) => r.json())
             .then((d2) => { if (d2?.messages?.length) setMessages((prev) => patchMessagesWithBackend(prev, d2.messages)); })
             .catch(() => {});
+        }
+        const preview = (d.last_message_preview as string) || "";
+        const ts = ((d.timestamp as number) || 0) * 1000 || Date.now();
+        setConversations((prev) => {
+          const idx = prev.findIndex(c => c.id === convId);
+          if (idx >= 0) {
+            const updated = [...prev];
+            updated[idx] = { ...updated[idx], lastMessage: preview || updated[idx].lastMessage, timestamp: Math.max(updated[idx].timestamp || 0, ts), messageCount: (updated[idx].messageCount || 0) + 1 };
+            return updated;
+          }
+          return [{ id: convId, title: preview.slice(0, 20) || "对话", lastMessage: preview, timestamp: ts, messageCount: 1 }, ...prev];
+        });
+      } else if (event === "chat:conversation_deleted") {
+        setConversations((prev) => {
+          const filtered = prev.filter(c => c.id !== convId);
+          if (filtered.length < prev.length) {
+            try { localStorage.removeItem(STORAGE_KEY_MSGS_PREFIX + convId); } catch {}
+          }
+          return filtered;
+        });
+        if (activeConvIdRef.current === convId) {
+          setActiveConvId(null);
+          setMessages([]);
+        }
+      } else if (event === "chat:title_update") {
+        const title = d.title as string;
+        if (title) {
+          setConversations((prev) => prev.map(c =>
+            c.id === convId ? { ...c, title, titleGenerated: true } : c
+          ));
         }
       }
     });
@@ -2522,7 +2553,8 @@ export function ChatView({
     setMessageQueue(prev => prev.filter(m => m.convId !== convId));
     const ctx = streamContexts.current.get(convId);
     if (ctx) {
-      try { ctx.abort.abort(); } catch {}
+      ctx.userStopped = true;
+      try { ctx.abort.abort("user_stop"); } catch {}
       try { ctx.reader?.cancel().catch(() => {}); } catch {}
       if (ctx.pollingTimer) clearInterval(ctx.pollingTimer);
       streamContexts.current.delete(convId);
@@ -2670,6 +2702,7 @@ export function ChatView({
       abort,
       reader: null,
       isStreaming: true,
+      userStopped: false,
       messages: [...fallbackMessages, userMsg, assistantMsg],
       activeSubAgents: [],
       subAgentTasks: [],
@@ -2728,7 +2761,11 @@ export function ChatView({
     const resetIdleTimer = () => {
       if (idleTimer) clearTimeout(idleTimer);
       idleTimer = setTimeout(() => {
-        abort.abort();
+        if (document.hidden) {
+          resetIdleTimer();
+          return;
+        }
+        abort.abort("idle_timeout");
         const c = streamContexts.current.get(thisConvId);
         c?.reader?.cancel().catch(() => {});
       }, IDLE_TIMEOUT_MS);
@@ -3376,19 +3413,17 @@ export function ChatView({
 
       // ── 循环结束后：判断是正常完成还是被用户中止 ──
       if (abort.signal.aborted) {
-        const isAppResume = abort.signal.reason === "app_resumed";
-        if (isAppResume) {
-          // App returned from background — preserve content, attempt recovery
-          updateMessages((prev) => prev.map((m) =>
-            m.id === assistantMsg.id ? { ...m, streaming: false } : m
-          ));
-          attemptRecovery(4000);
-        } else {
+        if (sctx.userStopped) {
           updateMessages((prev) => prev.map((m) =>
             m.id === assistantMsg.id
               ? { ...m, content: m.content || "（已中止）", streaming: false }
               : m
           ));
+        } else {
+          updateMessages((prev) => prev.map((m) =>
+            m.id === assistantMsg.id ? { ...m, streaming: false } : m
+          ));
+          attemptRecovery(4000);
         }
       } else {
         updateMessages((prev) => prev.map((m) =>
@@ -3434,51 +3469,35 @@ export function ChatView({
         }
       }
     } catch (e: unknown) {
-      // Distinguish three abort scenarios:
-      // 1. User clicked stop → abort.signal.aborted && reason !== "app_resumed"
-      // 2. App resumed from background → abort.signal.reason === "app_resumed"
-      // 3. Browser/OS killed connection → DOMException AbortError without our signal
-      const isOurAbort = abort.signal.aborted;
-      const isAppResumeAbort = isOurAbort && abort.signal.reason === "app_resumed";
-      const isUserStop = isOurAbort && !isAppResumeAbort;
-
-      if (isUserStop) {
+      if (sctx.userStopped) {
         updateMessages((prev) => prev.map((m) =>
           m.id === assistantMsg.id ? { ...m, content: m.content || "（已中止）", streaming: false } : m
         ));
       } else {
-        if (isAppResumeAbort) {
-          // App returned from background — the stream is dead but the backend may
-          // still be running.  Preserve whatever content we already received and
-          // attempt recovery below.
+        const isAbortLike =
+          abort.signal.aborted ||
+          (e instanceof DOMException && e.name === "AbortError") ||
+          (e instanceof Error && e.name === "AbortError");
+
+        if (isAbortLike) {
           updateMessages((prev) => prev.map((m) =>
             m.id === assistantMsg.id ? { ...m, streaming: false } : m
           ));
         } else {
-          const isBrowserAbort =
-            (e instanceof DOMException && e.name === "AbortError") ||
-            (e instanceof Error && e.name === "AbortError");
-
-          if (isBrowserAbort) {
-            updateMessages((prev) => prev.map((m) =>
-              m.id === assistantMsg.id ? { ...m, streaming: false } : m
-            ));
-          } else {
-            const errMsg = e instanceof Error ? e.message : String(e);
-            let guidance = t("chat.backendServiceHint");
-            try {
-              const healthRes = await fetch(`${apiBase}/api/health`, { signal: AbortSignal.timeout(5000) });
-              if (healthRes.ok) {
-                guidance = t("chat.backendOnlineUpstreamHint");
-              }
-            } catch { /* health probe failed -> keep backend guidance */ }
-            updateMessages((prev) => prev.map((m) =>
-              m.id === assistantMsg.id ? { ...m, content: m.content || `连接失败：${errMsg}\n\n${guidance}`, streaming: false } : m
-            ));
-          }
+          const errMsg = e instanceof Error ? e.message : String(e);
+          let guidance = t("chat.backendServiceHint");
+          try {
+            const healthRes = await fetch(`${apiBase}/api/health`, { signal: AbortSignal.timeout(5000) });
+            if (healthRes.ok) {
+              guidance = t("chat.backendOnlineUpstreamHint");
+            }
+          } catch { /* health probe failed -> keep backend guidance */ }
+          updateMessages((prev) => prev.map((m) =>
+            m.id === assistantMsg.id ? { ...m, content: m.content || `连接失败：${errMsg}\n\n${guidance}`, streaming: false } : m
+          ));
         }
 
-        attemptRecovery(isAppResumeAbort ? 4000 : 3000);
+        attemptRecovery(abort.signal.aborted ? 4000 : 3000);
       }
     } finally {
       if (idleTimer) clearTimeout(idleTimer);
@@ -3512,7 +3531,7 @@ export function ChatView({
               const res = await safeFetch(`${apiBase}/api/sessions/generate-title`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ message: text }),
+                body: JSON.stringify({ message: text, conversation_id: thisConvId }),
                 signal: AbortSignal.timeout(15000),
               });
               const data = await res.json();
@@ -3551,7 +3570,8 @@ export function ChatView({
     if (!id) return;
     const ctx = streamContexts.current.get(id);
     if (ctx) {
-      ctx.abort.abort();
+      ctx.userStopped = true;
+      ctx.abort.abort("user_stop");
       try { ctx.reader?.cancel().catch(() => {}); } catch {}
       ctx.reader = null;
     }

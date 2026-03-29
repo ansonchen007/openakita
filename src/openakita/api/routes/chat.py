@@ -696,6 +696,7 @@ async def _stream_chat(
             if _full_reply:
                 await _broadcast_chat_event("chat:message_update", {
                     "conversation_id": _conv_id,
+                    "client_id": getattr(chat_request, "client_id", "") or "",
                     "last_message_preview": _full_reply[:100],
                     "timestamp": time.time(),
                 })

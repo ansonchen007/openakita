@@ -11,6 +11,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from ..utils.atomic_io import read_json_safe, safe_write
 from .types import ConfigurationError, EndpointConfig
 
 logger = logging.getLogger(__name__)
@@ -150,17 +151,10 @@ def load_endpoints_config(
 
     config_path = Path(config_path)
 
-    if not config_path.exists():
+    data = read_json_safe(config_path)
+    if data is None:
         logger.warning(f"Config file not found: {config_path}, using empty config")
         return [], [], [], {}
-
-    try:
-        with open(config_path, encoding="utf-8") as f:
-            data = json.load(f)
-    except json.JSONDecodeError as e:
-        raise ConfigurationError(f"Invalid JSON in config file: {e}")
-    except Exception as e:
-        raise ConfigurationError(f"Failed to read config file: {e}")
 
     def _parse_endpoint_list(key: str) -> list[EndpointConfig]:
         result = []
@@ -230,7 +224,6 @@ def save_endpoints_config(
         config_path = get_default_config_path()
 
     config_path = Path(config_path)
-    config_path.parent.mkdir(parents=True, exist_ok=True)
 
     data: dict = {
         "endpoints": [ep.to_dict() for ep in endpoints],
@@ -249,8 +242,8 @@ def save_endpoints_config(
         "fallback_on_error": True,
     }
 
-    with open(config_path, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+    content = json.dumps(data, ensure_ascii=False, indent=2) + "\n"
+    safe_write(config_path, content)
 
     logger.info(f"Saved {len(endpoints)} endpoints to {config_path}")
 

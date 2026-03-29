@@ -79,6 +79,9 @@ class SessionManager:
         # 签名: (safe_session_id: str) -> list[dict]  (每个 dict 含 role, content, timestamp)
         self._turn_loader = None
 
+        # 会话是否已从磁盘加载完毕（API 层用此判断 ready 语义）
+        self._sessions_loaded = False
+
         # 加载持久化的会话
         self._load_sessions()
 
@@ -406,53 +409,76 @@ class SessionManager:
                 logger.error(f"Error in save loop: {e}")
 
     def _load_sessions(self) -> None:
-        """从文件加载会话"""
+        """从文件加载会话，主文件失败时自动回退到 .bak 备份。"""
         sessions_file = self.storage_path / "sessions.json"
+        backup_file = self.storage_path / "sessions.json.bak"
 
-        if not sessions_file.exists():
+        data = self._try_load_sessions_file(sessions_file)
+        if data is None and backup_file.exists():
+            logger.warning("Main sessions.json failed or missing, trying .bak backup")
+            data = self._try_load_sessions_file(backup_file)
+
+        if data is None:
+            self._sessions_loaded = True
             return
 
+        skipped_expired = 0
+        skipped_error = 0
+        for item in data:
+            try:
+                session = Session.from_dict(item)
+                if not session.is_expired() and session.state != SessionState.CLOSED:
+                    msg_count = len(session.context.messages)
+                    self._clean_large_content_in_messages(session.context.messages)
+                    self._sessions[session.session_key] = session
+                    if msg_count > 0:
+                        logger.debug(
+                            f"Loaded session {session.session_key}: "
+                            f"{msg_count} messages preserved "
+                            f"(last_active: {session.last_active})"
+                        )
+                else:
+                    skipped_expired += 1
+
+                session_ts = session.last_active.isoformat()
+                existing = self._channel_registry.get(session.channel)
+                if not existing or session_ts >= existing.get("last_seen", ""):
+                    self._channel_registry[session.channel] = {
+                        "chat_id": session.chat_id,
+                        "user_id": session.user_id,
+                        "last_seen": session_ts,
+                    }
+            except Exception as e:
+                skipped_error += 1
+                logger.warning(f"Failed to load session: {e}")
+
+        if self._channel_registry:
+            self._save_channel_registry()
+
+        parts = [f"Loaded {len(self._sessions)} sessions from storage"]
+        if skipped_expired:
+            parts.append(f"skipped {skipped_expired} expired")
+        if skipped_error:
+            parts.append(f"skipped {skipped_error} errors")
+        logger.info(f"{parts[0]}" + (f" ({', '.join(parts[1:])})" if len(parts) > 1 else ""))
+
+        self._sessions_loaded = True
+
+    @staticmethod
+    def _try_load_sessions_file(path: Path) -> list[dict] | None:
+        """尝试读取并解析 sessions JSON 文件，失败返回 None。"""
+        if not path.exists():
+            return None
         try:
-            with open(sessions_file, encoding="utf-8") as f:
+            with open(path, encoding="utf-8") as f:
                 data = json.load(f)
-
-            skipped_expired = 0
-            for item in data:
-                try:
-                    session = Session.from_dict(item)
-                    if not session.is_expired() and session.state != SessionState.CLOSED:
-                        msg_count = len(session.context.messages)
-                        self._clean_large_content_in_messages(session.context.messages)
-                        self._sessions[session.session_key] = session
-                        if msg_count > 0:
-                            logger.debug(
-                                f"Loaded session {session.session_key}: "
-                                f"{msg_count} messages preserved (last_active: {session.last_active})"
-                            )
-                    else:
-                        skipped_expired += 1
-
-                    session_ts = session.last_active.isoformat()
-                    existing = self._channel_registry.get(session.channel)
-                    if not existing or session_ts >= existing.get("last_seen", ""):
-                        self._channel_registry[session.channel] = {
-                            "chat_id": session.chat_id,
-                            "user_id": session.user_id,
-                            "last_seen": session_ts,
-                        }
-                except Exception as e:
-                    logger.warning(f"Failed to load session: {e}")
-
-            if self._channel_registry:
-                self._save_channel_registry()
-
-            logger.info(
-                f"Loaded {len(self._sessions)} sessions from storage"
-                f"{f' (skipped {skipped_expired} expired)' if skipped_expired else ''}"
-            )
-
+            if isinstance(data, list):
+                return data
+            logger.warning(f"Unexpected sessions format in {path.name}: {type(data).__name__}")
+            return None
         except Exception as e:
-            logger.error(f"Failed to load sessions: {e}")
+            logger.error(f"Failed to parse {path.name}: {e}")
+            return None
 
     def _clean_large_content_in_messages(self, messages: list[dict]) -> None:
         """

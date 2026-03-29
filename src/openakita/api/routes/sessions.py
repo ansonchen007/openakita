@@ -17,9 +17,19 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+async def _broadcast_session_event(event: str, data: dict) -> None:
+    """Broadcast a session lifecycle event via WebSocket."""
+    try:
+        from .websocket import broadcast_event
+        await broadcast_event(event, data)
+    except Exception:
+        pass
+
+
 class GenerateTitleRequest(BaseModel):
     message: str = Field(..., description="用户第一条消息")
     reply: str = Field("", description="AI 回复摘要（可选）")
+    conversation_id: str = Field("", description="会话 ID（用于跨设备标题同步）")
 
 
 @router.get("/api/sessions")
@@ -29,7 +39,7 @@ async def list_sessions(request: Request, channel: str = "desktop"):
     Returns a list of conversations with metadata, ordered by last_active desc.
     """
     session_manager = getattr(request.app.state, "session_manager", None)
-    if not session_manager:
+    if not session_manager or not getattr(session_manager, "_sessions_loaded", False):
         wac = getattr(request.app.state, "web_access_config", None)
         return {"sessions": [], "data_epoch": wac.data_epoch if wac else "", "ready": False}
 
@@ -173,6 +183,9 @@ async def delete_session(
     removed = session_manager.close_session(session_key)
     if removed:
         logger.info(f"[Sessions] Deleted session via API: {session_key}")
+        await _broadcast_session_event("chat:conversation_deleted", {
+            "conversation_id": conversation_id,
+        })
     else:
         logger.debug(f"[Sessions] Session not found for deletion: {session_key}")
 
@@ -248,6 +261,11 @@ async def generate_title(request: Request, body: GenerateTitleRequest):
         title = response.content.strip().strip('"\'"\u201c\u201d\u2018\u2019\u300c\u300d\u3010\u3011').strip()  # noqa: B005
         if not title or len(title) > 30:
             title = body.message[:20] or "新对话"
+        if body.conversation_id:
+            await _broadcast_session_event("chat:title_update", {
+                "conversation_id": body.conversation_id,
+                "title": title,
+            })
         return {"title": title}
     except Exception as e:
         logger.warning(f"[Sessions] Title generation failed: {e}")
