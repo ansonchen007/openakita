@@ -2596,8 +2596,7 @@ create_agent(name="名称", description="描述", skills=["技能"], custom_prom
         ))
         try:
             response = await self._cancellable_await(
-                asyncio.to_thread(
-                    self.brain.messages_create,
+                self.brain.messages_create_async(
                     model=self.brain.model,
                     max_tokens=target_tokens,
                     system=system_prompt,
@@ -2753,8 +2752,7 @@ create_agent(name="名称", description="描述", skills=["技能"], custom_prom
             ))
             try:
                 response = await self._cancellable_await(
-                    asyncio.to_thread(
-                        self.brain.messages_create,
+                    self.brain.messages_create_async(
                         model=self.brain.model,
                         max_tokens=chunk_target,
                         system=(
@@ -4747,7 +4745,7 @@ NEXT: 建议的下一步（如有）"""
         ))
         try:
             llm_task = asyncio.create_task(
-                self.brain.messages_create_async(**kwargs)
+                self.brain.messages_create_async(cancel_event=cancel_event, **kwargs)
             )
             cancel_waiter = asyncio.create_task(cancel_event.wait())
 
@@ -6819,8 +6817,7 @@ NEXT: 建议的下一步（如有）"""
                     ))
                     try:
                         summary_response = await self._cancellable_await(
-                            asyncio.to_thread(
-                                self.brain.messages_create,
+                            self.brain.messages_create_async(
                                 max_tokens=1000,
                                 system=_build_effective_system_prompt_task(),
                                 messages=messages,
