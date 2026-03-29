@@ -55,7 +55,7 @@ import {
   IconUpload,
 } from "../icons";
 import { safeFetch } from "../providers";
-import { openPopupWindow, canOpenPopupWindow, IS_CAPACITOR, saveFileDialog, IS_TAURI } from "../platform";
+import { openPopupWindow, canOpenPopupWindow, IS_CAPACITOR, saveFileDialog, IS_TAURI, writeTextFile } from "../platform";
 import { OrgInboxSidebar } from "../components/OrgInboxSidebar";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { OrgAvatar, AVATAR_PRESETS, AVATAR_MAP } from "../components/OrgAvatars";
@@ -1289,7 +1289,6 @@ export function OrgEditorView({
         if (!savePath) return;
         const res = await safeFetch(`${apiBaseUrl}/api/orgs/${currentOrg.id}/export`, { method: "POST" });
         const data = await res.json();
-        const { writeTextFile } = await import("@tauri-apps/plugin-fs");
         await writeTextFile(savePath, JSON.stringify(data, null, 2));
         showToast(`组织已导出到: ${savePath}`);
       } else {
