@@ -12,6 +12,7 @@
 """
 
 import asyncio
+import json
 import logging
 import time
 from datetime import datetime
@@ -431,6 +432,14 @@ class ToolExecutor:
                 from ..llm.converters.tools import PARSE_ERROR_KEY
                 if isinstance(tool_input, dict) and PARSE_ERROR_KEY in tool_input:
                     success = False
+
+                if success and isinstance(result_str, str) and result_str.lstrip().startswith("{"):
+                    try:
+                        payload, _ = json.JSONDecoder().raw_decode(result_str.lstrip())
+                        if isinstance(payload, dict) and payload.get("error") is True:
+                            success = False
+                    except Exception:
+                        pass
 
                 # 终端输出工具返回结果（便于调试与观察）
                 _preview = result_str if len(result_str) <= 800 else result_str[:800] + "\n... (已截断)"
