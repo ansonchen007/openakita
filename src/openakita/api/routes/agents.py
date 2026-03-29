@@ -359,7 +359,7 @@ async def list_agent_profiles(include_hidden: bool = False):
 @router.post("/api/agents/profiles")
 async def create_agent_profile(body: ProfileCreateRequest):
     """Create a new custom agent profile."""
-    from openakita.agents.profile import AgentProfile, AgentType, SkillsMode, get_profile_store
+    from openakita.agents.profile import AgentProfile, AgentType, get_profile_store
     from openakita.config import settings
 
     if not settings.multi_agent_enabled:

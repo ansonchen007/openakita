@@ -125,7 +125,11 @@ def _ensure_desktop():
 
 logger = logging.getLogger(__name__)
 
-# 上下文管理常量（已迁移至 context_manager.py / config.py，保留 DEFAULT_MAX_CONTEXT_TOKENS 导入）
+# 上下文管理常量（部分迁移至 context_manager.py，压缩相关仍需就地定义）
+from .context_manager import CHARS_PER_TOKEN, CHUNK_MAX_TOKENS
+COMPRESSION_RATIO = 0.15
+LARGE_TOOL_RESULT_THRESHOLD = 5000
+MIN_RECENT_TURNS = 4
 
 # 小上下文窗口模型的核心工具白名单（仅保留最基本的执行能力）
 SMALL_CTX_CORE_TOOLS = {
@@ -2511,6 +2515,75 @@ create_agent(name="名称", description="描述", skills=["技能"], custom_prom
                 f"(system_prompt={'custom' if system_prompt else 'default'}, "
                 f"tools={len(_tools) if _tools else 0})"
             )
+        return result
+
+    async def _compress_large_tool_results(
+        self, messages: list[dict], threshold: int = LARGE_TOOL_RESULT_THRESHOLD
+    ) -> list[dict]:
+        """压缩超大 tool_result / tool_use.input，使用 LLM 摘要。
+
+        逐条扫描，tokens > threshold 的 tool_result 调 LLM 压缩为精简摘要，
+        保留结构（role/type 等不变）。
+        """
+        from .tool_executor import OVERFLOW_MARKER
+
+        result = []
+        for msg in messages:
+            content = msg.get("content", "")
+            if isinstance(content, list):
+                new_content = []
+                for item in content:
+                    if isinstance(item, dict) and item.get("type") == "tool_result":
+                        raw_content = item.get("content", "")
+                        if isinstance(raw_content, list):
+                            text_parts = [
+                                p.get("text", "")
+                                for p in raw_content
+                                if isinstance(p, dict) and p.get("type") == "text"
+                            ]
+                            result_text = "\n".join(text_parts)
+                        else:
+                            result_text = str(raw_content)
+                        if OVERFLOW_MARKER in result_text:
+                            new_content.append(item)
+                            continue
+                        result_tokens = self._estimate_tokens(result_text)
+                        if result_tokens > threshold:
+                            target_tokens = max(int(result_tokens * COMPRESSION_RATIO), 100)
+                            compressed_text = await self._llm_compress_text(
+                                result_text, target_tokens, context_type="tool_result"
+                            )
+                            new_item = dict(item)
+                            new_item["content"] = compressed_text
+                            new_content.append(new_item)
+                            logger.info(
+                                f"Compressed tool_result from {result_tokens} to "
+                                f"~{self._estimate_tokens(compressed_text)} tokens"
+                            )
+                        else:
+                            new_content.append(item)
+                    elif isinstance(item, dict) and item.get("type") == "tool_use":
+                        input_text = json.dumps(item.get("input", {}), ensure_ascii=False)
+                        input_tokens = self._estimate_tokens(input_text)
+                        if input_tokens > threshold:
+                            target_tokens = max(int(input_tokens * COMPRESSION_RATIO), 100)
+                            compressed_input = await self._llm_compress_text(
+                                input_text, target_tokens, context_type="tool_input"
+                            )
+                            new_item = dict(item)
+                            new_item["input"] = {"compressed_summary": compressed_input}
+                            new_content.append(new_item)
+                            logger.info(
+                                f"Compressed tool_use input from {input_tokens} to "
+                                f"~{self._estimate_tokens(compressed_input)} tokens"
+                            )
+                        else:
+                            new_content.append(item)
+                    else:
+                        new_content.append(item)
+                result.append({**msg, "content": new_content})
+            else:
+                result.append(msg)
         return result
 
     async def _cancellable_await(self, coro, cancel_event: asyncio.Event | None = None):
