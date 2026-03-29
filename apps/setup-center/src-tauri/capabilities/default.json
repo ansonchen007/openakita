@@ -34,8 +34,9 @@
     "dialog:default",
     "dialog:allow-save",
     "fs:default",
-    "fs:allow-write-text-file",
     "fs:allow-read-text-file",
+    "fs:allow-write-text-file",
+    "fs:allow-write-file",
     {
       "identifier": "http:default",
       "allow": [
