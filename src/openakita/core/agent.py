@@ -1153,7 +1153,8 @@ class Agent:
             "memory",
             create_memory_handler(self),
             ["consolidate_memories", "add_memory", "search_memory", "get_memory_stats",
-             "list_recent_tasks", "trace_memory", "search_conversation_traces"],
+             "list_recent_tasks", "trace_memory", "search_conversation_traces",
+             "search_relational_memory", "get_session_context"],
         )
 
         # 浏览器
