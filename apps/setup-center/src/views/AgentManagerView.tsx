@@ -9,6 +9,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
@@ -1279,67 +1280,82 @@ export function AgentManagerView({
 
             {/* Isolation Config */}
             {!isCreating && (
-            <div className="space-y-3 rounded-md border p-3">
-              <p className="text-xs font-medium opacity-80">{t("agentManager.isolationTitle")}</p>
+            <div className="space-y-4 rounded-lg border p-4">
+              <p className="text-xs font-semibold tracking-wide uppercase text-muted-foreground">{t("agentManager.isolationTitle")}</p>
 
-              {/* Identity mode toggle */}
-              <div className="flex items-center justify-between">
-                <Label className="text-xs opacity-70">{t("agentManager.identityMode")}</Label>
-                <button
-                  type="button"
-                  className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${editingProfile.identity_mode === "custom" ? "bg-primary" : "bg-muted"}`}
-                  onClick={async () => {
-                    const next = editingProfile.identity_mode === "custom" ? "shared" : "custom";
+              {/* Identity mode */}
+              <div className="flex items-center justify-between gap-4">
+                <div className="space-y-0.5">
+                  <Label className="text-sm font-medium leading-none">{t("agentManager.identityMode")}</Label>
+                  <p className="text-[11px] text-muted-foreground">{t("agentManager.identityModeHint")}</p>
+                </div>
+                <Switch
+                  checked={editingProfile.identity_mode === "custom"}
+                  onCheckedChange={async (checked) => {
+                    const next = checked ? "custom" : "shared";
                     setEditingProfile((p) => ({ ...p, identity_mode: next }));
-                    if (next === "custom") {
+                    if (checked) {
                       await initProfileIdentity(editingProfile.id);
                       loadIdentityFile(editingProfile.id, identityTab);
                     }
                   }}
-                >
-                  <span className={`inline-block h-3.5 w-3.5 rounded-full bg-background transition-transform ${editingProfile.identity_mode === "custom" ? "translate-x-4" : "translate-x-0.5"}`} />
-                </button>
+                />
               </div>
 
-              {/* Memory mode toggle */}
-              <div className="flex items-center justify-between">
-                <Label className="text-xs opacity-70">{t("agentManager.memoryMode")}</Label>
-                <button
-                  type="button"
-                  className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${editingProfile.memory_mode === "isolated" ? "bg-primary" : "bg-muted"}`}
-                  onClick={() => {
-                    const next = editingProfile.memory_mode === "isolated" ? "shared" : "isolated";
+              {/* Memory mode */}
+              <div className="flex items-center justify-between gap-4">
+                <div className="space-y-0.5">
+                  <Label className="text-sm font-medium leading-none">{t("agentManager.memoryMode")}</Label>
+                  <p className="text-[11px] text-muted-foreground">{t("agentManager.memoryModeHint")}</p>
+                </div>
+                <Switch
+                  checked={editingProfile.memory_mode === "isolated"}
+                  onCheckedChange={(checked) => {
+                    const next = checked ? "isolated" : "shared";
                     setEditingProfile((p) => ({ ...p, memory_mode: next }));
-                    if (next === "isolated") loadMemoryStats(editingProfile.id);
+                    if (checked) loadMemoryStats(editingProfile.id);
                   }}
-                >
-                  <span className={`inline-block h-3.5 w-3.5 rounded-full bg-background transition-transform ${editingProfile.memory_mode === "isolated" ? "translate-x-4" : "translate-x-0.5"}`} />
-                </button>
+                />
               </div>
 
-              {/* Inherit global memory checkbox */}
+              {/* Inherit global memory */}
               {editingProfile.memory_mode === "isolated" && (
-                <div className="flex items-center gap-2 pl-1">
-                  <input
-                    type="checkbox"
+                <div className="flex items-center gap-2.5 rounded-md bg-muted/50 px-3 py-2">
+                  <Checkbox
                     id="inherit-global"
                     checked={editingProfile.memory_inherit_global ?? true}
-                    onChange={(e) => setEditingProfile((p) => ({ ...p, memory_inherit_global: e.target.checked }))}
-                    className="h-3.5 w-3.5 rounded border"
+                    onCheckedChange={(checked) => setEditingProfile((p) => ({ ...p, memory_inherit_global: !!checked }))}
                   />
-                  <Label htmlFor="inherit-global" className="text-xs opacity-70">{t("agentManager.inheritGlobal")}</Label>
+                  <div className="space-y-0.5">
+                    <Label htmlFor="inherit-global" className="text-xs font-medium leading-none cursor-pointer">{t("agentManager.inheritGlobal")}</Label>
+                    <p className="text-[11px] text-muted-foreground">{t("agentManager.inheritGlobalHint")}</p>
+                  </div>
+                </div>
+              )}
+
+              {/* Memory stats */}
+              {editingProfile.memory_mode === "isolated" && memoryStats && (
+                <div className="flex items-center gap-3 rounded-md bg-muted/50 px-3 py-2 text-xs text-muted-foreground">
+                  <span>{t("agentManager.semanticCount", { count: memoryStats.semantic_count })}</span>
+                  <span className="text-muted-foreground/50">·</span>
+                  <span>{(memoryStats.db_size_bytes / 1024).toFixed(0)} KB</span>
                 </div>
               )}
 
               {/* Identity file editor */}
               {editingProfile.identity_mode === "custom" && (
-                <div className="space-y-2">
-                  <div className="flex gap-1">
+                <div className="space-y-2.5 pt-1">
+                  <div className="flex gap-1 rounded-md bg-muted p-0.5">
                     {["SOUL.md", "AGENT.md", "USER.md", "MEMORY.md"].map((f) => (
                       <button
                         key={f}
                         type="button"
-                        className={`rounded px-2 py-0.5 text-xs transition-colors ${identityTab === f ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground hover:bg-accent"}`}
+                        className={cn(
+                          "flex-1 rounded-sm px-2 py-1 text-xs font-medium transition-colors",
+                          identityTab === f
+                            ? "bg-background text-foreground shadow-sm"
+                            : "text-muted-foreground hover:text-foreground"
+                        )}
                         onClick={() => { setIdentityTab(f); loadIdentityFile(editingProfile.id, f); }}
                       >
                         {f.replace(".md", "")}
@@ -1347,7 +1363,7 @@ export function AgentManagerView({
                     ))}
                   </div>
                   {identityLoading ? (
-                    <p className="text-xs text-muted-foreground py-4 text-center">{t("common.loading")}</p>
+                    <p className="text-xs text-muted-foreground py-6 text-center">{t("common.loading")}</p>
                   ) : (
                     <>
                       <Textarea
@@ -1358,9 +1374,9 @@ export function AgentManagerView({
                         placeholder={identitySource === "global" ? t("agentManager.identityInheritHint") : ""}
                       />
                       <div className="flex items-center justify-between">
-                        <span className="text-[10px] text-muted-foreground">
+                        <Badge variant="outline" className="text-[10px] font-normal">
                           {identitySource === "global" ? t("agentManager.sourceGlobal") : t("agentManager.sourceProfile")}
-                        </span>
+                        </Badge>
                         <Button
                           size="sm"
                           variant="outline"
@@ -1372,14 +1388,6 @@ export function AgentManagerView({
                       </div>
                     </>
                   )}
-                </div>
-              )}
-
-              {/* Memory stats */}
-              {editingProfile.memory_mode === "isolated" && memoryStats && (
-                <div className="flex items-center gap-3 text-xs text-muted-foreground">
-                  <span>{t("agentManager.semanticCount", { count: memoryStats.semantic_count })}</span>
-                  <span>{(memoryStats.db_size_bytes / 1024).toFixed(0)} KB</span>
                 </div>
               )}
             </div>
