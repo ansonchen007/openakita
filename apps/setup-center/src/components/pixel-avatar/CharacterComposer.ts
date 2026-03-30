@@ -60,10 +60,10 @@ function resolveLook(agentId: string, opts: CharacterRenderOptions): ResolvedLoo
   const hairColorIdx = hash % HAIR_COLORS.length;
   const hairColor = app?.hairColor ?? HAIR_COLORS[hairColorIdx];
 
-  const hairStyle = app?.hairStyle ?? ((hash >> 4) % 6);
+  const hairStyle = app?.hairStyle ?? ((hash >>> 4) % 6);
 
   const bodyTypes: Array<'slim' | 'average' | 'stocky'> = ['slim', 'average', 'stocky'];
-  const bodyType = app?.bodyType ?? bodyTypes[(hash >> 8) % 3];
+  const bodyType = app?.bodyType ?? bodyTypes[(hash >>> 8) % 3];
 
   const outfitColor = app?.outfitColor ?? opts.color ?? '#4A90D9';
   const accessory = app?.accessory ?? 'none';
@@ -73,7 +73,7 @@ function resolveLook(agentId: string, opts: CharacterRenderOptions): ResolvedLoo
 
 function drawCharacter(ctx: CanvasRenderingContext2D, look: ResolvedLook) {
   const { skinColor, hairColor, hairStyle, bodyType, outfitColor, accessory } = look;
-  const dims = BODY_DIMS[bodyType];
+  const dims = BODY_DIMS[bodyType] ?? BODY_DIMS.average;
   const cx = Math.floor((SPRITE_SIZE - dims.w) / 2);
   const headY = 4;
   const headSize = 10;
