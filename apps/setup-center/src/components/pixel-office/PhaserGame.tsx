@@ -11,12 +11,13 @@ export interface GameRef {
 export interface PhaserGameProps {
   themeId: string;
   orgData: OrgData | null;
+  dataVersion?: number;
   onSceneReady?: (scene: OfficeScene) => void;
   onEventLog?: (entry: unknown) => void;
 }
 
 export const PhaserGame = forwardRef<GameRef, PhaserGameProps>(function PhaserGame(
-  { themeId, orgData, onSceneReady, onEventLog },
+  { themeId, orgData, dataVersion, onSceneReady, onEventLog },
   ref,
 ) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -40,6 +41,29 @@ export const PhaserGame = forwardRef<GameRef, PhaserGameProps>(function PhaserGa
     let destroyed = false;
     let game: Phaser.Game | null = null;
     let observer: ResizeObserver | null = null;
+    let pollTimer: ReturnType<typeof setInterval> | null = null;
+
+    const initScene = (scene: OfficeScene) => {
+      if (destroyed || sceneRef.current) return;
+      sceneRef.current = scene;
+      onSceneReady?.(scene);
+      if (orgDataRef.current) scene.updateOrgData(orgDataRef.current);
+      if (themeIdRef.current !== 'office') scene.changeTheme(themeIdRef.current);
+    };
+
+    const pollForScene = () => {
+      if (destroyed || sceneRef.current) {
+        if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+        return;
+      }
+      const g = gameRef.current;
+      if (!g) return;
+      const scene = g.scene.getScene('OfficeScene') as OfficeScene | null;
+      if (scene?.sys?.isActive()) {
+        if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+        initScene(scene);
+      }
+    };
 
     const createGame = () => {
       if (destroyed || gameRef.current) return;
@@ -57,17 +81,9 @@ export const PhaserGame = forwardRef<GameRef, PhaserGameProps>(function PhaserGa
         },
       });
       gameRef.current = game;
+      pollTimer = setInterval(pollForScene, 100);
     };
 
-    const onReady = (scene: OfficeScene) => {
-      if (destroyed) return;
-      sceneRef.current = scene;
-      onSceneReady?.(scene);
-      if (orgDataRef.current) scene.updateOrgData(orgDataRef.current);
-      if (themeIdRef.current !== 'office') scene.changeTheme(themeIdRef.current);
-    };
-
-    EventBus.on('scene-ready', onReady);
     if (onEventLog) EventBus.on('event-log', onEventLog);
 
     if (el.clientWidth > 0 && el.clientHeight > 0) {
@@ -89,12 +105,14 @@ export const PhaserGame = forwardRef<GameRef, PhaserGameProps>(function PhaserGa
     return () => {
       destroyed = true;
       observer?.disconnect();
-      EventBus.off('scene-ready', onReady);
+      if (pollTimer) clearInterval(pollTimer);
       if (onEventLog) EventBus.off('event-log', onEventLog);
-      sceneRef.current?.shutdown();
+      const sc = sceneRef.current;
+      const g = gameRef.current ?? game;
       sceneRef.current = null;
-      game?.destroy(true);
       gameRef.current = null;
+      try { sc?.shutdown(); } catch { /* already destroyed */ }
+      try { g?.destroy(true, false); } catch { /* already destroyed */ }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -103,7 +121,7 @@ export const PhaserGame = forwardRef<GameRef, PhaserGameProps>(function PhaserGa
     if (orgData && sceneRef.current) {
       sceneRef.current.updateOrgData(orgData);
     }
-  }, [orgData]);
+  }, [orgData, dataVersion]);
 
   useEffect(() => {
     if (sceneRef.current) {

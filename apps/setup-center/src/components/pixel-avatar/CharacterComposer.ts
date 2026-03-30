@@ -73,75 +73,139 @@ function resolveLook(agentId: string, opts: CharacterRenderOptions): ResolvedLoo
 
 function drawAkita(ctx: CanvasRenderingContext2D, look: ResolvedLook) {
   const { outfitColor, accessory } = look;
-  const bodyColor = '#F5C87A';
-  const bellyColor = '#FFF5E0';
-  const earColor = '#D4A050';
+  const bodyColor = '#F5A623';
+  const furShade = '#D88912';
+  const whiteFace = '#FFFFFF';
+  const bellyLight = '#FFF6E8';
+  const bandGray = '#666666';
+  const cupCyan = '#4EEDC4';
+  const cupInner = darken(cupCyan, 0.82);
+  const collarGray = '#777777';
+  const codeLight = '#CCCCCC';
 
-  // Shadow
+  // Shadow (chibi round)
   ctx.fillStyle = 'rgba(0,0,0,0.10)';
   ctx.beginPath();
-  ctx.ellipse(32, 58, 16, 4, 0, 0, Math.PI * 2);
+  ctx.ellipse(32, 58, 15, 4, 0, 0, Math.PI * 2);
   ctx.fill();
 
-  // Tail (curled up)
+  // Tail (small curl)
   ctx.fillStyle = bodyColor;
-  px(ctx, 42, 14, 5, 3);
-  px(ctx, 44, 11, 4, 4);
-  px(ctx, 46, 9, 3, 3);
-  ctx.fillStyle = bellyColor;
-  px(ctx, 45, 12, 2, 2);
+  px(ctx, 46, 22, 4, 3);
+  px(ctx, 48, 19, 3, 3);
+  px(ctx, 50, 17, 2, 2);
+  ctx.fillStyle = bellyLight;
+  px(ctx, 47, 20, 2, 2);
 
-  // Body
+  // Body — round chibi
   ctx.fillStyle = bodyColor;
-  px(ctx, 14, 28, 32, 18);
-  px(ctx, 12, 32, 36, 12);
-  ctx.fillStyle = bellyColor;
-  px(ctx, 18, 34, 24, 10);
+  px(ctx, 15, 36, 34, 12);
+  px(ctx, 13, 40, 38, 8);
+  ctx.fillStyle = bellyLight;
+  px(ctx, 20, 40, 24, 6);
 
-  // Front legs
+  // Short stub legs
   ctx.fillStyle = bodyColor;
-  px(ctx, 16, 44, 7, 10);
-  px(ctx, 37, 44, 7, 10);
-  ctx.fillStyle = bellyColor;
-  px(ctx, 16, 52, 7, 3);
-  px(ctx, 37, 52, 7, 3);
+  px(ctx, 17, 48, 9, 7);
+  px(ctx, 38, 48, 9, 7);
+  ctx.fillStyle = furShade;
+  px(ctx, 17, 53, 9, 2);
+  px(ctx, 38, 53, 9, 2);
 
-  // Head
+  // Head — large round
   ctx.fillStyle = bodyColor;
-  px(ctx, 16, 8, 28, 22);
-  px(ctx, 14, 12, 32, 16);
-
-  // White face mask
-  ctx.fillStyle = bellyColor;
-  px(ctx, 20, 16, 20, 14);
-  px(ctx, 18, 18, 24, 10);
+  px(ctx, 13, 16, 38, 22);
+  px(ctx, 11, 20, 42, 14);
 
   // Ears
-  ctx.fillStyle = earColor;
-  px(ctx, 14, 4, 8, 10);
-  px(ctx, 16, 2, 5, 4);
-  px(ctx, 38, 4, 8, 10);
-  px(ctx, 40, 2, 5, 4);
-  // Inner ear
-  ctx.fillStyle = '#E8B8A0';
-  px(ctx, 16, 5, 4, 6);
-  px(ctx, 40, 5, 4, 6);
+  ctx.fillStyle = furShade;
+  px(ctx, 9, 12, 9, 11);
+  px(ctx, 11, 9, 5, 4);
+  px(ctx, 46, 12, 9, 11);
+  px(ctx, 48, 9, 5, 4);
+  ctx.fillStyle = '#E87820';
+  px(ctx, 11, 14, 5, 7);
+  px(ctx, 48, 14, 5, 7);
 
-  // Eyes
-  ctx.fillStyle = '#1a1a1a';
-  px(ctx, 22, 19, 4, 4);
-  px(ctx, 34, 19, 4, 4);
-  ctx.fillStyle = '#fff';
-  px(ctx, 22, 19, 2, 2);
-  px(ctx, 34, 19, 2, 2);
+  // Tech headphones — band over top (behind face details visually at strip)
+  ctx.fillStyle = bandGray;
+  px(ctx, 10, 10, 44, 3);
 
-  // Nose
-  ctx.fillStyle = '#333';
-  px(ctx, 27, 25, 6, 4);
-  ctx.fillStyle = '#555';
-  px(ctx, 28, 30, 2, 1);
-  px(ctx, 30, 30, 2, 1);
-  px(ctx, 29, 31, 2, 2);
+  // White cheeks + muzzle
+  ctx.fillStyle = whiteFace;
+  px(ctx, 16, 24, 11, 11);
+  px(ctx, 37, 24, 11, 11);
+  px(ctx, 23, 22, 18, 13);
+
+  // Three white forehead dots
+  px(ctx, 25, 17, 2, 2);
+  px(ctx, 31, 16, 2, 2);
+  px(ctx, 37, 17, 2, 2);
+
+  // Forehead diamond (logo accent)
+  ctx.fillStyle = cupCyan;
+  px(ctx, 30, 13, 2, 1);
+  px(ctx, 29, 14, 4, 1);
+  px(ctx, 28, 15, 6, 1);
+  px(ctx, 29, 16, 4, 1);
+  px(ctx, 30, 17, 2, 1);
+  ctx.fillStyle = cupInner;
+  px(ctx, 30, 15, 2, 1);
+
+  // Big kawaii eyes + large white highlights
+  ctx.fillStyle = '#0a0a0a';
+  px(ctx, 19, 21, 8, 8);
+  px(ctx, 37, 21, 8, 8);
+  ctx.fillStyle = '#ffffff';
+  px(ctx, 20, 22, 4, 4);
+  px(ctx, 21, 23, 3, 3);
+  px(ctx, 38, 22, 4, 4);
+  px(ctx, 39, 23, 3, 3);
+  px(ctx, 23, 25, 2, 2);
+  px(ctx, 41, 25, 2, 2);
+  ctx.fillStyle = '#ffffff';
+  px(ctx, 24, 26, 1, 1);
+  px(ctx, 42, 26, 1, 1);
+
+  // Black nose (rounded block)
+  ctx.fillStyle = '#0a0a0a';
+  px(ctx, 26, 30, 12, 5);
+  ctx.fillStyle = '#141414';
+  px(ctx, 27, 31, 10, 3);
+  px(ctx, 30, 34, 4, 2);
+
+  // Collar + </> code mark
+  ctx.fillStyle = collarGray;
+  px(ctx, 17, 35, 30, 3);
+  ctx.fillStyle = codeLight;
+  // <
+  px(ctx, 21, 36, 1, 1);
+  px(ctx, 20, 37, 1, 1);
+  px(ctx, 21, 38, 1, 1);
+  // /
+  px(ctx, 29, 36, 1, 1);
+  px(ctx, 30, 37, 1, 1);
+  px(ctx, 31, 38, 1, 1);
+  // >
+  px(ctx, 40, 36, 1, 1);
+  px(ctx, 41, 37, 1, 1);
+  px(ctx, 40, 38, 1, 1);
+
+  // Headphone ear cups + small antennas
+  ctx.fillStyle = cupCyan;
+  px(ctx, 5, 18, 7, 13);
+  px(ctx, 52, 18, 7, 13);
+  ctx.fillStyle = cupInner;
+  px(ctx, 6, 20, 4, 8);
+  px(ctx, 54, 20, 4, 8);
+  ctx.fillStyle = bandGray;
+  px(ctx, 4, 22, 2, 8);
+  px(ctx, 58, 22, 2, 8);
+  // Antenna sticks
+  px(ctx, 7, 5, 2, 6);
+  px(ctx, 55, 5, 2, 6);
+  px(ctx, 7, 3, 2, 2);
+  px(ctx, 55, 3, 2, 2);
 
   // Accessory
   if (accessory === 'crown') {

@@ -1,7 +1,7 @@
 import Phaser from 'phaser';
 import { EventBus } from './EventBus';
 import { TilesetManager, TILE_SIZE, TILESET_CELL } from './TilesetManager';
-import { generateLayout, type RoomDef, type LayoutResult } from './RoomGenerator';
+import { generateLayout, generateSoloLayout, type RoomDef, type LayoutResult } from './RoomGenerator';
 import { AgentSprite, type AgentSpriteConfig } from './AgentSprite';
 import { ActivitySystem, type Activity } from './ActivitySystem';
 import { getTheme, type SceneTheme } from './SceneTheme';
@@ -36,6 +36,10 @@ export class OfficeScene extends Phaser.Scene {
   private tilemapImage: Phaser.GameObjects.Image | null = null;
   private tilemapTextureKey = 'tilemap_texture';
 
+  private _hActStart?: (a: Activity) => void;
+  private _hActEnd?: (a: Activity) => void;
+  private _hZoom?: (id: string) => void;
+
   constructor() {
     super({ key: 'OfficeScene' });
   }
@@ -54,12 +58,14 @@ export class OfficeScene extends Phaser.Scene {
     this.tilesetManager = new TilesetManager();
     this.cameras.main.setBackgroundColor(this.currentTheme.palette.background);
 
-    EventBus.on('update-org-data', this.onOrgDataUpdate, this);
-    EventBus.on('update-theme', this.onThemeChange, this);
-    EventBus.on('activity-start', this.onActivityStart, this);
-    EventBus.on('activity-end', this.onActivityEnd, this);
+    this._hActStart = (activity: Activity) => this.onActivityStart(activity);
+    this._hActEnd = (activity: Activity) => this.onActivityEnd(activity);
+    this._hZoom = (nodeId: string) => this.onZoomToNode(nodeId);
 
-    // Camera controls — Phaser wheel: (pointer, over, deltaX, deltaY, deltaZ)
+    EventBus.on('activity-start', this._hActStart);
+    EventBus.on('activity-end', this._hActEnd);
+    EventBus.on('zoom-to-node', this._hZoom);
+
     this.input.on('wheel', (
       _pointer: Phaser.Input.Pointer,
       _over: Phaser.GameObjects.GameObject[],
@@ -85,32 +91,21 @@ export class OfficeScene extends Phaser.Scene {
       }
     });
     this.input.on('pointerup', () => { dragStart = null; });
-
-    EventBus.on('zoom-to-node', this.onZoomToNode, this);
-
-    EventBus.emit('scene-ready', this);
   }
 
   private isAlive(): boolean {
     return !!(this.sys?.game?.renderer && this.cameras?.main);
   }
 
-  private onOrgDataUpdate = (data: OrgData) => {
-    this.orgData = data;
-    this.rebuildScene();
-  };
-
-  private onThemeChange = (themeId: string) => {
-    this.currentTheme = getTheme(themeId);
-    if (!this.isAlive()) return;
-    this.cameras.main.setBackgroundColor(this.currentTheme.palette.background);
-    this.rebuildScene();
-  };
-
   private hasInitializedCamera = false;
+  private lastOrgId = '';
 
   private rebuildScene() {
     if (!this.orgData || !this.isAlive()) return;
+
+    const orgChanged = this.orgData.orgId !== this.lastOrgId;
+    this.lastOrgId = this.orgData.orgId;
+    if (orgChanged) this.hasInitializedCamera = false;
 
     const cam = this.cameras.main;
     const prevZoom = this.hasInitializedCamera ? cam.zoom : 0;
@@ -131,17 +126,22 @@ export class OfficeScene extends Phaser.Scene {
     }
     this.activitySystem?.destroy();
 
-    // Build departments from org data
-    const deptMap = new Map<string, string[]>();
-    for (const node of this.orgData.nodes) {
-      const dept = node.department || '默认';
-      if (!deptMap.has(dept)) deptMap.set(dept, []);
-      deptMap.get(dept)!.push(node.id);
-    }
-    const departments = Array.from(deptMap.entries()).map(([name, nodeIds]) => ({ name, nodeIds }));
-
     this.tilesetManager.generateTileset(this.currentTheme);
-    this.layout = generateLayout(departments, this.currentTheme);
+
+    const isSolo = this.orgData.nodes.length <= 1;
+    if (isSolo) {
+      const soloId = this.orgData.nodes[0]?.id ?? 'akita';
+      this.layout = generateSoloLayout(soloId, this.currentTheme);
+    } else {
+      const deptMap = new Map<string, string[]>();
+      for (const node of this.orgData.nodes) {
+        const dept = node.department || '默认';
+        if (!deptMap.has(dept)) deptMap.set(dept, []);
+        deptMap.get(dept)!.push(node.id);
+      }
+      const departments = Array.from(deptMap.entries()).map(([name, nodeIds]) => ({ name, nodeIds }));
+      this.layout = generateLayout(departments, this.currentTheme);
+    }
     this.renderTilemap();
     this.renderRoomLabels();
     this.activitySystem = new ActivitySystem(this.layout.rooms);
@@ -157,11 +157,8 @@ export class OfficeScene extends Phaser.Scene {
       cam.centerOn(worldW / 2, worldH / 2);
       const camW = cam.width || 800;
       const camH = cam.height || 600;
-      cam.zoom = Phaser.Math.Clamp(
-        Math.min(camW / worldW, camH / worldH) * 1.2,
-        0.3,
-        2,
-      );
+      const fitZoom = Math.min(camW / worldW, camH / worldH);
+      cam.zoom = Phaser.Math.Clamp(fitZoom * 1.8, 0.5, 2.5);
       this.hasInitializedCamera = true;
     }
   }
@@ -229,12 +226,27 @@ export class OfficeScene extends Phaser.Scene {
   private spawnAgents() {
     if (!this.orgData || !this.layout) return;
 
+    // Solo mode — spawn mascot if no nodes
+    if (this.orgData.nodes.length === 0) {
+      const seat = this.layout.rooms[0]?.seats[0];
+      if (seat) {
+        const mascot = new AgentSprite(this, {
+          nodeId: 'akita',
+          name: 'OpenAkita',
+          color: '#F5A623',
+          pixelAppearance: { bodyType: 'akita' },
+        }, seat.x + TILE_SIZE / 2, seat.y + TILE_SIZE / 2);
+        this.agentSprites.set('akita', mascot);
+      }
+      return;
+    }
+
     for (const node of this.orgData.nodes) {
       const profile = this.orgData.agentProfiles[node.agent_profile_id || node.id];
       const isCeo = /ceo|首席|总裁|总经理/i.test(node.role_title ?? '');
       let appearance = profile?.pixel_appearance ?? null;
       if (isCeo && !appearance) {
-        appearance = { bodyType: 'akita', accessory: 'crown' };
+        appearance = { bodyType: 'akita' };
       }
       const config: AgentSpriteConfig = {
         nodeId: node.id,
@@ -293,7 +305,7 @@ export class OfficeScene extends Phaser.Scene {
     return { x: 100, y: 100 };
   }
 
-  private onActivityStart = (activity: Activity) => {
+  private onActivityStart(activity: Activity) {
     switch (activity.type) {
       case 'meeting_gather':
         this.handleMeetingGather(activity);
@@ -336,11 +348,10 @@ export class OfficeScene extends Phaser.Scene {
       data: activity.data,
       time: Date.now(),
     });
-  };
+  }
 
-  private onActivityEnd = (activity: Activity) => {
+  private onActivityEnd(activity: Activity) {
     if (activity.type === 'meeting_end' || activity.type === 'meeting_gather') {
-      // Return agents to default positions
       for (const nodeId of activity.participants) {
         const sprite = this.agentSprites.get(nodeId);
         if (!sprite || !this.orgData) continue;
@@ -351,7 +362,7 @@ export class OfficeScene extends Phaser.Scene {
         sprite.moveTo(pos.x, pos.y);
       }
     }
-  };
+  }
 
   private handleMeetingGather(activity: Activity) {
     const meetingRoom = this.layout?.rooms.find(r => r.type === 'meeting');
@@ -482,7 +493,7 @@ export class OfficeScene extends Phaser.Scene {
     sprite.moveTo(pos.x, pos.y);
   }
 
-  private onZoomToNode = (nodeId: string) => {
+  private onZoomToNode(nodeId: string) {
     if (!this.isAlive()) return;
     const sprite = this.agentSprites.get(nodeId);
     if (!sprite) return;
@@ -496,15 +507,19 @@ export class OfficeScene extends Phaser.Scene {
       duration: 500,
       ease: 'Quad.easeInOut',
     });
-  };
+  }
 
-  // Public API for React bridge
+  // Public API — called directly from PhaserGame.tsx, no EventBus indirection
   updateOrgData(data: OrgData) {
-    EventBus.emit('update-org-data', data);
+    this.orgData = data;
+    this.rebuildScene();
   }
 
   changeTheme(themeId: string) {
-    EventBus.emit('update-theme', themeId);
+    this.currentTheme = getTheme(themeId);
+    if (!this.isAlive()) return;
+    this.cameras.main.setBackgroundColor(this.currentTheme.palette.background);
+    this.rebuildScene();
   }
 
   getLayout(): LayoutResult | null {
@@ -512,11 +527,13 @@ export class OfficeScene extends Phaser.Scene {
   }
 
   shutdown() {
-    EventBus.off('update-org-data', this.onOrgDataUpdate, this);
-    EventBus.off('update-theme', this.onThemeChange, this);
-    EventBus.off('activity-start', this.onActivityStart, this);
-    EventBus.off('activity-end', this.onActivityEnd, this);
-    EventBus.off('zoom-to-node', this.onZoomToNode, this);
+    if (this._hActStart) EventBus.off('activity-start', this._hActStart);
+    if (this._hActEnd) EventBus.off('activity-end', this._hActEnd);
+    if (this._hZoom) EventBus.off('zoom-to-node', this._hZoom);
+    this._hActStart = undefined;
+    this._hActEnd = undefined;
+    this._hZoom = undefined;
+
     this.activitySystem?.destroy();
     this.agentSprites.forEach(s => s.destroy());
     this.agentSprites.clear();

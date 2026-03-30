@@ -165,12 +165,12 @@ export function generateLayout(
       }
     });
 
-    if (ry + 1 < map.length && rx + deptRoomW - 3 < map[0].length) {
-      map[ry + 1][rx + deptRoomW - 3] = TILE.WHITEBOARD;
-    }
-    if (ry + 1 < map.length && rx + 1 < map[0].length) {
-      map[ry + 1][rx + 1] = TILE.PLANT;
-    }
+    // Decorations
+    const safe = (r: number, c: number) => r > ry && r < ry + deptRoomH - 1 && c > rx && c < rx + deptRoomW - 1;
+    if (safe(ry + 1, rx + deptRoomW - 3)) map[ry + 1][rx + deptRoomW - 3] = TILE.WHITEBOARD;
+    if (safe(ry + 1, rx + 1)) map[ry + 1][rx + 1] = TILE.PLANT;
+    if (safe(ry + deptRoomH - 2, rx + 1)) map[ry + deptRoomH - 2][rx + 1] = TILE.PLANT;
+    if (safe(ry + deptRoomH - 2, rx + deptRoomW - 2)) map[ry + deptRoomH - 2][rx + deptRoomW - 2] = TILE.COFFEE;
 
     rooms.push({
       id: `dept_${dept.name}`,
@@ -253,4 +253,46 @@ export function generateLayout(
     tileData: map,
     rooms,
   };
+}
+
+/**
+ * Cozy single-room layout for solo agent / no-org mode.
+ * Inspired by QClaw's lobster studio — a personal workspace.
+ */
+export function generateSoloLayout(
+  agentId: string,
+  theme: SceneTheme,
+): LayoutResult {
+  const W = 14;
+  const H = 12;
+  const map = createEmptyMap(W, H);
+
+  drawRoom(map, 0, 0, W, H);
+  placeDoor(map, 0, 0, W, H);
+
+  // Furniture
+  map[1][1] = TILE.PLANT;
+  map[1][2] = TILE.DESK;
+  map[1][3] = TILE.DESK;
+  map[2][2] = TILE.CHAIR;
+  map[1][W - 2] = TILE.WHITEBOARD;
+  map[1][W - 3] = TILE.WHITEBOARD;
+  map[H - 3][1] = TILE.SOFA;
+  map[H - 3][2] = TILE.SOFA;
+  map[H - 4][1] = TILE.COFFEE;
+  map[H - 2][W - 2] = TILE.PLANT;
+  map[1][6] = TILE.SERVER;
+  map[1][7] = TILE.SERVER;
+  map[H - 3][W - 3] = TILE.PLANT;
+
+  const rooms: RoomDef[] = [{
+    id: 'solo',
+    type: 'department',
+    label: theme.roomLabels.department,
+    x: 0, y: 0, w: W, h: H,
+    seats: [{ x: 3 * TILE_SIZE, y: 3 * TILE_SIZE, id: agentId }],
+    department: 'solo',
+  }];
+
+  return { mapWidth: W, mapHeight: H, tileData: map, rooms };
 }
