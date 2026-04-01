@@ -173,9 +173,9 @@ class PowerShellHandler:
 
         working_dir = params.get("working_directory")
         try:
-            timeout = max(10, min(int(params.get("timeout", 60)), 600))
+            timeout = max(10, min(int(params.get("timeout", 120)), 600))
         except (TypeError, ValueError):
-            timeout = 60
+            timeout = 120
 
         exe = ps_info["executable"]
 

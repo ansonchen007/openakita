@@ -3894,8 +3894,7 @@ class ReasoningEngine:
             return (working_messages, no_tool_call_count, verify_incomplete_count,
                     no_confirmation_text_count, max_no_tool_retries)
 
-        # [REPLY] / [ACTION] / 无标记 → 统一使用配置的重试次数
-        max_no_tool_retries = self._effective_force_retries(base_force_retries, conversation_id)
+        # [REPLY] / [ACTION] / 无标记 → 使用已计算的重试次数（尊重 intent override）
         no_tool_call_count += 1
 
         if no_tool_call_count <= max_no_tool_retries:

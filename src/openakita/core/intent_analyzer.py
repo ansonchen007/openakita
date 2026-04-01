@@ -102,6 +102,7 @@ memory_keywords: [<记忆关键词>]
 用户: "帮我查看项目里有哪些Python文件" → intent: task, task_type: action, goal: 列出项目中的Python文件, tool_hints: [File System]
 用户: "搜索一下最新的AI新闻" → intent: task, task_type: action, goal: 搜索AI新闻, tool_hints: [Web Search]
 用户: "Python的GIL是什么" → intent: query, task_type: question, goal: 解释Python GIL机制, tool_hints: []
+用户: "推荐3本产品经理的书" → intent: query, task_type: question, goal: 推荐产品经理书籍, tool_hints: []
 用户: "你好" → intent: chat, task_type: other, goal: 用户打招呼, tool_hints: []
 用户: "改成UTF-8编码" → intent: follow_up, task_type: action, goal: 修改编码为UTF-8, tool_hints: [File System]
 

@@ -3964,7 +3964,7 @@ class Agent:
                 elif _intent.force_tool:
                     pass
                 else:
-                    _force_tool_retries = max(0, settings.max_no_tool_retries - 1) if hasattr(settings, "max_no_tool_retries") else None
+                    _force_tool_retries = max(0, getattr(settings, "force_tool_call_max_retries", 1) - 1)
 
             _agent_profile_id = "default"
             if session and hasattr(session, "context"):
@@ -5755,8 +5755,7 @@ NEXT: 建议的下一步（如有）"""
                     f"text_preview=\"{(stripped_text or '')[:80].replace(chr(10), ' ')}\""
                 )
 
-                # REPLY / ACTION / 无标记 → 统一走配置的 ForceToolCall 重试次数
-                max_no_tool_retries = _effective_force_retries()
+                # REPLY / ACTION / 无标记 → 使用已计算的重试次数（尊重 intent override）
                 no_tool_call_count += 1
 
                 if no_tool_call_count <= max_no_tool_retries:
