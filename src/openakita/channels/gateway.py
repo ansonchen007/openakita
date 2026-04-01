@@ -1411,7 +1411,7 @@ class MessageGateway:
             return ""
         n = len(items)
         lines = [
-            f"[群聊近期上下文] 以下是本群中最近 {n} 条未处理消息，供你理解上下文。"
+            f"[群聊近期上下文] 以下是本群中最近 {n} 条未处理消息，供你理解上下文。\n"
             f"请在回复末尾简要注明 [基于最近 {n} 条群聊消息]："
         ]
         for entry in items:

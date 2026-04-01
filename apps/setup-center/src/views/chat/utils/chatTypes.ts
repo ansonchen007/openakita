@@ -1,0 +1,134 @@
+// ─── ChatView 本地类型定义 ───
+// 核心共享类型（ChatMessage, ChatConversation 等）位于 @/types.ts，此处仅定义 ChatView 内部使用的类型。
+
+import type {
+  ChatMessage,
+  ChatToolCall,
+  ChatTodo,
+  ChatTodoStep,
+  ChatAskUser,
+  ChatAskQuestion,
+  ChatAttachment,
+  ChatArtifact,
+  ChatErrorInfo,
+  ChatConversation,
+  ChatDisplayMode,
+  ConversationStatus,
+  EndpointSummary,
+  SlashCommand,
+  ChainGroup,
+  ChainToolCall,
+  ChainEntry,
+  ChainSummaryItem,
+} from "../../types";
+
+export type {
+  ChatMessage,
+  ChatToolCall,
+  ChatTodo,
+  ChatTodoStep,
+  ChatAskUser,
+  ChatAskQuestion,
+  ChatAttachment,
+  ChatArtifact,
+  ChatErrorInfo,
+  ChatConversation,
+  ChatDisplayMode,
+  ConversationStatus,
+  EndpointSummary,
+  SlashCommand,
+  ChainGroup,
+  ChainToolCall,
+  ChainEntry,
+  ChainSummaryItem,
+};
+
+/** Lazy-loaded markdown rendering modules */
+export type MdModules = {
+  ReactMarkdown: typeof import("react-markdown").default;
+  remarkPlugins: import("react-markdown").Options["remarkPlugins"];
+  rehypePlugins: import("react-markdown").Options["rehypePlugins"];
+};
+
+/** Message queued for sequential sending */
+export type QueuedMessage = {
+  id: string;
+  text: string;
+  timestamp: number;
+  convId: string;
+};
+
+/** SSE stream event union — synced with Python openakita.events / src/streamEvents.ts */
+export type StreamEvent =
+  | { type: "heartbeat" }
+  | { type: "iteration_start"; iteration: number }
+  | { type: "context_compressed"; before_tokens: number; after_tokens: number }
+  | { type: "thinking_start" }
+  | { type: "thinking_delta"; content: string }
+  | { type: "thinking_end"; duration_ms?: number; has_thinking?: boolean }
+  | { type: "chain_text"; content: string }
+  | { type: "text_delta"; content: string }
+  | { type: "tool_call_start"; tool: string; args: Record<string, unknown>; id?: string }
+  | { type: "tool_call_end"; tool: string; result: string; id?: string; is_error?: boolean; skipped?: boolean }
+  | { type: "todo_created"; plan: ChatTodo }
+  | { type: "todo_step_updated"; stepId?: string; stepIdx?: number; status: string }
+  | { type: "todo_completed" }
+  | { type: "todo_cancelled" }
+  | { type: "ask_user"; question: string; options?: { id: string; label: string }[]; allow_multiple?: boolean; questions?: { id: string; prompt: string; options?: { id: string; label: string }[]; allow_multiple?: boolean }[] }
+  | { type: "user_insert"; content: string }
+  | { type: "agent_switch"; agentName: string; reason: string }
+  | { type: "agent_handoff"; from_agent: string; to_agent: string; reason?: string }
+  | { type: "artifact"; artifact_type: string; file_url: string; path: string; name: string; caption: string; size?: number }
+  | { type: "security_confirm"; tool: string; args: Record<string, unknown>; id?: string; reason: string; risk_level: string; needs_sandbox: boolean }
+  | { type: "ui_preference"; theme?: string; language?: string }
+  | { type: "error"; message: string }
+  | { type: "done"; reason?: string; usage?: { input_tokens: number; output_tokens: number; total_tokens?: number; context_tokens?: number; context_limit?: number } };
+
+/** Sub-agent delegation entry for handoff display */
+export type SubAgentEntry = {
+  agentId: string;
+  status: "delegating" | "done" | "error";
+  reason?: string;
+  startTime: number;
+};
+
+/** Sub-agent task progress card data */
+export type SubAgentTask = {
+  agent_id: string;
+  profile_id: string;
+  session_id: string;
+  name: string;
+  icon: string;
+  status: "starting" | "running" | "completed" | "error" | "timeout" | "cancelled";
+  iteration: number;
+  tools_executed: string[];
+  tools_total: number;
+  elapsed_s: number;
+  last_progress_s: number;
+  started_at: number;
+};
+
+/** Per-session streaming context (supports concurrent streams across conversations) */
+export type StreamContext = {
+  abort: AbortController;
+  reader: ReadableStreamDefaultReader<Uint8Array> | null;
+  isStreaming: boolean;
+  userStopped: boolean;
+  messages: ChatMessage[];
+  activeSubAgents: SubAgentEntry[];
+  subAgentTasks: SubAgentTask[];
+  isDelegating: boolean;
+  pollingTimer: ReturnType<typeof setInterval> | null;
+};
+
+/** Agent profile for agent selector */
+export type AgentProfile = {
+  id: string;
+  name: string;
+  description: string;
+  icon: string;
+  color: string;
+  name_i18n?: Record<string, string>;
+  description_i18n?: Record<string, string>;
+  preferred_endpoint?: string | null;
+};

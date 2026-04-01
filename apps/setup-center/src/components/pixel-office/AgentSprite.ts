@@ -54,6 +54,7 @@ export class AgentSprite {
     this.sprite.on('pointerout', () => { this._hideTooltip(); });
     this.sprite.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
       if (pointer.rightButtonDown()) {
+        pointer.event.preventDefault();
         this.onAgentContextMenu?.(this.nodeId, this.config, pointer.event.clientX, pointer.event.clientY);
       } else {
         this.onAgentClick?.(this.nodeId, this.config, pointer.event.clientX, pointer.event.clientY);
