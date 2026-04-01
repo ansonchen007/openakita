@@ -3439,7 +3439,7 @@ class Agent:
             session_id=session_id,
             timeout_seconds=settings.progress_timeout_seconds,
             hard_timeout_seconds=settings.hard_timeout_seconds,
-            retrospect_threshold=60,
+            retrospect_threshold=180,
             fallback_model=self.brain.get_fallback_model(session_id),
         )
         task_monitor.start(self.brain.model)
@@ -4438,10 +4438,11 @@ class Agent:
             context = task_monitor.get_retrospect_context()
             prompt = RETROSPECT_PROMPT.format(context=context)
 
-            # 使用 Brain 进行复盘分析（独立上下文）
-            response = await self.brain.think(
+            # 使用 think_lightweight 进行复盘（禁用思考链，节省 token）
+            response = await self.brain.think_lightweight(
                 prompt=prompt,
                 system="你是一个任务执行分析专家。请简洁地分析任务执行情况，找出耗时原因和改进建议。",
+                max_tokens=512,
             )
 
             result = strip_thinking_tags(response.content).strip() if response.content else ""
@@ -4772,9 +4773,10 @@ MISSING: 缺失的内容（如有）
 NEXT: 建议的下一步（如有）"""
 
         try:
-            response = await self.brain.think(
+            response = await self.brain.think_lightweight(
                 prompt=verify_prompt,
                 system="你是一个任务完成度判断助手。请分析任务是否完成，并说明证据和缺失项。",
+                max_tokens=512,
             )
 
             result = response.content.strip().upper() if response.content else ""
@@ -6523,7 +6525,7 @@ NEXT: 建议的下一步（如有）"""
             session_id=task.session_id,
             timeout_seconds=settings.progress_timeout_seconds,
             hard_timeout_seconds=settings.hard_timeout_seconds,
-            retrospect_threshold=60,  # 复盘阈值：60秒
+            retrospect_threshold=180,  # 复盘阈值：180秒
             fallback_model=self.brain.get_fallback_model(task.session_id),  # 动态获取备用模型
             retry_before_switch=3,  # 切换前重试 3 次
         )

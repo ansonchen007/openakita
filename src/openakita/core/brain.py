@@ -258,7 +258,9 @@ class Brain:
             logger.warning(f"Failed to reload compiler client: {e}")
             return False
 
-    async def compiler_think(self, prompt: str, system: str = "") -> Response:
+    async def compiler_think(
+        self, prompt: str, system: str = "", max_tokens: int = 512,
+    ) -> Response:
         """
         Prompt Compiler 专用 LLM 调用。
 
@@ -269,6 +271,7 @@ class Brain:
         Args:
             prompt: 用户消息
             system: 系统提示词
+            max_tokens: 最大输出 token（默认 512，调用方可按需调大）
 
         Returns:
             Response 对象
@@ -282,7 +285,7 @@ class Brain:
                     messages=messages,
                     system=system,
                     enable_thinking=False,
-                    max_tokens=2048,
+                    max_tokens=max_tokens,
                 )
                 self._compiler_on_success()
                 self._record_usage(response)
@@ -303,7 +306,7 @@ class Brain:
             messages=messages,
             system=system,
             enable_thinking=False,
-            max_tokens=2048,
+            max_tokens=max_tokens,
         )
         self._record_usage(response)
         req_id = self._dump_llm_request(system, messages, [], caller="compiler_think")
