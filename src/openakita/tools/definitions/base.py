@@ -111,6 +111,8 @@ CATEGORY_PREFIXES = {
         "load_skill",
         "reload_skill",
         "manage_skill_enabled",
+        "execute_skill",
+        "uninstall_skill",
         "find_skills",
         "install_store_skill",
         "search_store_skills",
