@@ -68,6 +68,7 @@ export type StreamEvent =
   | { type: "thinking_end"; duration_ms?: number; has_thinking?: boolean }
   | { type: "chain_text"; content: string }
   | { type: "text_delta"; content: string }
+  | { type: "text_replace"; content: string }
   | { type: "tool_call_start"; tool: string; args: Record<string, unknown>; id?: string }
   | { type: "tool_call_end"; tool: string; result: string; id?: string; is_error?: boolean; skipped?: boolean }
   | { type: "todo_created"; plan: ChatTodo }

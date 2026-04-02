@@ -364,7 +364,12 @@ class OpenAIProvider(LLMProvider):
                             try:
                                 event = json.loads(data)
                                 has_content = True
-                                yield self._convert_stream_event(event)
+                                converted = self._convert_stream_event(event)
+                                if isinstance(converted, list):
+                                    for ev in converted:
+                                        yield ev
+                                else:
+                                    yield converted
                             except json.JSONDecodeError:
                                 continue
                     elif not has_content and not line.startswith(":"):
@@ -902,35 +907,66 @@ class OpenAIProvider(LLMProvider):
             reasoning_content=reasoning_content,
         )
 
-    def _convert_stream_event(self, event: dict) -> dict:
-        """转换流式事件为统一格式"""
+    def _convert_stream_event(self, event: dict) -> dict | list[dict]:
+        """转换流式事件为统一格式。
+
+        同一个 chunk 可能同时携带 reasoning_content + content + finish_reason
+        （DeepSeek 等模型的特殊行为），因此返回 dict 或 list[dict]。
+        """
         choices = event.get("choices", [])
         if not choices:
             return {"type": "ping"}
 
         choice = choices[0]
         delta = choice.get("delta", {})
+        events: list[dict] = []
 
-        result = {"type": "content_block_delta"}
+        # 1) Thinking: reasoning_content (DeepSeek R1, Qwen3) / reasoning (OpenRouter)
+        reasoning = delta.get("reasoning_content") or ""
+        if not reasoning:
+            r = delta.get("reasoning")
+            if isinstance(r, str) and r:
+                reasoning = r
+            elif isinstance(r, dict):
+                reasoning = r.get("content", "") or ""
+        if reasoning:
+            events.append({
+                "type": "content_block_delta",
+                "delta": {"type": "thinking", "text": reasoning},
+            })
 
-        if "content" in delta:
-            result["delta"] = {"type": "text", "text": delta["content"]}
-        elif "tool_calls" in delta:
+        # 2) Text content
+        if delta.get("content"):
+            events.append({
+                "type": "content_block_delta",
+                "delta": {"type": "text", "text": delta["content"]},
+            })
+
+        # 3) Tool calls
+        if "tool_calls" in delta:
             tool_calls = delta["tool_calls"]
             if tool_calls:
                 tc = tool_calls[0]
-                result["delta"] = {
-                    "type": "tool_use",
-                    "id": tc.get("id"),
-                    "name": tc.get("function", {}).get("name"),
-                    "arguments": tc.get("function", {}).get("arguments"),
-                }
+                events.append({
+                    "type": "content_block_delta",
+                    "delta": {
+                        "type": "tool_use",
+                        "id": tc.get("id"),
+                        "name": tc.get("function", {}).get("name"),
+                        "arguments": tc.get("function", {}).get("arguments"),
+                    },
+                })
 
+        # 4) Finish reason → message_stop
         if choice.get("finish_reason"):
-            result["type"] = "message_stop"
-            result["stop_reason"] = choice["finish_reason"]
+            events.append({
+                "type": "message_stop",
+                "stop_reason": choice["finish_reason"],
+            })
 
-        return result
+        if not events:
+            return {"type": "ping"}
+        return events[0] if len(events) == 1 else events
 
     async def close(self):
         """关闭客户端"""

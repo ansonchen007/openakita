@@ -847,7 +847,14 @@ export function ChatView({
         if (convId === activeConvIdRef.current) {
           safeFetch(`${apiBaseUrl}/api/sessions/${encodeURIComponent(convId)}/history`)
             .then((r) => r.json())
-            .then((d2) => { if (d2?.messages?.length) setMessages((prev) => patchMessagesWithBackend(prev, d2.messages)); })
+            .then((d2) => {
+              if (!d2?.messages?.length) return;
+              const list = messageListRef.current;
+              const wasAtBottom = list?.isAtBottom() ?? true;
+              if (!wasAtBottom) list?.saveScrollPosition();
+              setMessages((prev) => patchMessagesWithBackend(prev, d2.messages));
+              if (!wasAtBottom) requestAnimationFrame(() => list?.restoreScrollPosition());
+            })
             .catch(() => {});
         }
         const preview = (d.last_message_preview as string) || "";
@@ -929,7 +936,11 @@ export function ChatView({
       .then((r) => r.json())
       .then((data) => {
         if (!data?.messages?.length) return;
+        const list = messageListRef.current;
+        const wasAtBottom = list?.isAtBottom() ?? true;
+        if (!wasAtBottom) list?.saveScrollPosition();
         setMessages((prev) => patchMessagesWithBackend(prev, data.messages));
+        if (!wasAtBottom) requestAnimationFrame(() => list?.restoreScrollPosition());
       })
       .catch(() => {});
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1635,6 +1646,13 @@ export function ChatView({
     streamContexts.current.set(thisConvId, sctx);
     // User just sent a message — ensure Virtuoso follows regardless of scroll position
     messageListRef.current?.forceFollow();
+    // Explicit scroll as fallback — followOutput alone can miss under React 18 batching.
+    // Two attempts: fast (60ms) for immediate feedback, slow (300ms) after thinking
+    // indicator has rendered and Virtuoso has measured the full item height.
+    requestAnimationFrame(() => {
+      setTimeout(() => messageListRef.current?.scrollToBottom("auto"), 60);
+      setTimeout(() => messageListRef.current?.scrollToBottom("auto"), 300);
+    });
     // Functional updater chains with any pending setMessages (e.g. handleAskAnswer's answered flag)
     if (thisConvId === activeConvIdRef.current) {
       setMessages((prev) => {
@@ -2027,6 +2045,9 @@ export function ChatView({
               case "text_delta":
                 currentContent += event.content;
                 break;
+              case "text_replace":
+                currentContent = event.content;
+                break;
               case "tool_call_start": {
                 if (event.tool === "delegate_to_agent" && event.args?.agent_id) {
                   const targetId = String(event.args.agent_id);
@@ -2411,7 +2432,10 @@ export function ChatView({
                 : m
             ));
 
-            if (event.type === "done") break;
+            if (event.type === "done") {
+              messageListRef.current?.cancelFollow();
+              break;
+            }
           } catch (parseErr) {
             sseParseFailures++;
             const breakerState = sseBreaker.recordFailure();
@@ -2520,6 +2544,7 @@ export function ChatView({
         attemptRecovery(abort.signal.aborted ? 4000 : 3000);
       }
     } finally {
+      messageListRef.current?.cancelFollow();
       if (idleTimer) clearTimeout(idleTimer);
       if (screenFlushRaf) { cancelAnimationFrame(screenFlushRaf); screenFlushRaf = 0; }
       const ctx = streamContexts.current.get(thisConvId);
@@ -2676,9 +2701,14 @@ export function ChatView({
     const idx = msgs.findIndex((m) => m.id === msgId);
     if (idx < 0 || idx >= msgs.length - 1) return;
     const deleteCount = msgs.length - idx - 1;
-    if (!window.confirm(`确定要回退到这条消息吗？之后的 ${deleteCount} 条消息将被删除。`)) return;
-    setMessages((prev) => prev.slice(0, idx + 1));
-  }, []);
+    setConfirmDialog({
+      message: t("chat.confirmRewind", {
+        count: deleteCount,
+        defaultValue: `确定要回退到这条消息吗？之后的 ${deleteCount} 条消息将被删除。`,
+      }),
+      onConfirm: () => setMessages((prev) => prev.slice(0, idx + 1)),
+    });
+  }, [t]);
 
   // N3: Fork conversation from a specific message
   const handleForkConversation = useCallback(async (msgId: string) => {
@@ -2884,13 +2914,30 @@ export function ChatView({
   const [atAgentFilter, setAtAgentFilter] = useState("");
   const [atAgentIdx, setAtAgentIdx] = useState(0);
 
+  const matchAgent = useCallback((a: AgentProfile, q: string): boolean => {
+    if (!q) return true;
+    const ql = q.toLowerCase();
+    if (a.name.toLowerCase().includes(ql)) return true;
+    if (a.id.toLowerCase().includes(ql)) return true;
+    if (a.description?.toLowerCase().includes(ql)) return true;
+    if (a.name_i18n) {
+      for (const v of Object.values(a.name_i18n)) {
+        if (v.toLowerCase().includes(ql)) return true;
+      }
+    }
+    if (a.description_i18n) {
+      for (const v of Object.values(a.description_i18n)) {
+        if (v.toLowerCase().includes(ql)) return true;
+      }
+    }
+    return false;
+  }, []);
+
   // ── 输入框键盘处理 ──
   const handleInputKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    // macOS 中文输入法按回车选字时 isComposing=true，此时不应触发发送
-    if (e.nativeEvent.isComposing || e.keyCode === 229) return;
-
-    // Undo/Redo (6.2)
-    if ((e.ctrlKey || e.metaKey) && e.key === "z" && !e.shiftKey) {
+    // Undo/Redo must be checked before the IME guard because
+    // Ctrl+Shift+Z may report keyCode 229 on Windows with Chinese IME active.
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z" && !e.shiftKey) {
       e.preventDefault();
       if (undoIdxRef.current > 0) {
         undoIdxRef.current--;
@@ -2898,7 +2945,7 @@ export function ChatView({
       }
       return;
     }
-    if ((e.ctrlKey || e.metaKey) && (e.key === "Z" || (e.key === "z" && e.shiftKey))) {
+    if ((e.ctrlKey || e.metaKey) && ((e.key === "Z" || (e.key === "z" && e.shiftKey)) || e.key === "y")) {
       e.preventDefault();
       if (undoIdxRef.current < undoStackRef.current.length - 1) {
         undoIdxRef.current++;
@@ -2907,9 +2954,11 @@ export function ChatView({
       return;
     }
 
+    // macOS 中文输入法按回车选字时 isComposing=true，此时不应触发发送
+    if (e.nativeEvent.isComposing || e.keyCode === 229) return;
+
     if (atAgentOpen) {
-      const q = atAgentFilter;
-      const agents = agentProfiles.filter((a) => a.name.includes(q) || a.name.toLowerCase().includes(q.toLowerCase()) || a.id.toLowerCase().includes(q.toLowerCase()));
+      const agents = agentProfiles.filter((a) => matchAgent(a, atAgentFilter));
       if (e.key === "ArrowDown") { e.preventDefault(); setAtAgentIdx((i) => Math.min(i + 1, agents.length - 1)); return; }
       if (e.key === "ArrowUp") { e.preventDefault(); setAtAgentIdx((i) => Math.max(0, i - 1)); return; }
       if (e.key === "Enter" || e.key === "Tab") {
@@ -2920,7 +2969,7 @@ export function ChatView({
           const ta = e.target as HTMLTextAreaElement;
           const val = ta.value;
           const cursor = ta.selectionStart ?? val.length;
-          const before = val.slice(0, cursor).replace(/@\w*$/, "");
+          const before = val.slice(0, cursor).replace(/@[^\s@]*$/, "");
           setInputValue(before + val.slice(cursor));
         }
         setAtAgentOpen(false);
@@ -2994,7 +3043,7 @@ export function ChatView({
         sendMessage();
       }
     }
-  }, [atAgentOpen, atAgentFilter, atAgentIdx, agentProfiles, slashOpen, slashFilter, slashCommands, slashSelectedIdx, sendMessage, isCurrentConvStreaming, handleInsertMessage, handleQueueMessage, messageQueue, activeConvId, setInputValue, shortcutsOpen, handleCancelTask]);
+  }, [atAgentOpen, atAgentFilter, atAgentIdx, agentProfiles, matchAgent, slashOpen, slashFilter, slashCommands, slashSelectedIdx, sendMessage, isCurrentConvStreaming, handleInsertMessage, handleQueueMessage, messageQueue, activeConvId, setInputValue, shortcutsOpen, handleCancelTask]);
 
   // ── 输入变化处理（非受控模式：仅更新 ref，不触发全局重渲染） ──
   const handleInputChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -3015,10 +3064,10 @@ export function ChatView({
       }
     }
 
-    // @agent 联想
+    // @agent 联想（支持中文及其他 Unicode 字符）
     const cursor = e.target.selectionStart ?? val.length;
     const beforeCursor = val.slice(0, cursor);
-    const atMatch = beforeCursor.match(/@(\w*)$/);
+    const atMatch = beforeCursor.match(/@([^\s@]*)$/);
     if (atMatch && multiAgentEnabled && agentProfiles.length > 0) {
       setAtAgentOpen(true);
       setAtAgentFilter(atMatch[1].toLowerCase());
@@ -3413,6 +3462,7 @@ export function ChatView({
             apiBaseUrl={apiBaseUrl}
             mdModules={mdModules}
             isStreaming={isCurrentConvStreaming}
+            searchHighlight={msgSearchOpen ? msgSearchQuery : undefined}
             onAskAnswer={handleAskAnswer}
             onRetry={handleRegenerate}
             onEdit={handleEditMessage}
@@ -3643,10 +3693,9 @@ export function ChatView({
 
           {/* @Agent 联想面板 */}
           {atAgentOpen && (() => {
-            const agents = agentProfiles.filter((a) =>
-              a.name.includes(atAgentFilter) || a.name.toLowerCase().includes(atAgentFilter.toLowerCase()) || a.id.toLowerCase().includes(atAgentFilter.toLowerCase()),
-            );
+            const agents = agentProfiles.filter((a) => matchAgent(a, atAgentFilter));
             if (agents.length === 0) return null;
+            const lang = i18n.language || "en";
             return (
               <div style={{
                 position: "absolute", bottom: "100%", left: 0, right: 0,
@@ -3655,37 +3704,41 @@ export function ChatView({
                 maxHeight: 200, overflow: "auto", zIndex: 100,
                 padding: "4px 0", marginBottom: 4,
               }}>
-                {agents.map((a, i) => (
-                  <div
-                    key={a.id}
-                    onClick={() => {
-                      setSelectedAgent(a.id);
-                      const ta = inputRef.current;
-                      if (ta) {
-                        const val = ta.value;
-                        const cursor = ta.selectionStart ?? val.length;
-                        const before = val.slice(0, cursor).replace(/@\w*$/, "");
-                        setInputValue(before + val.slice(cursor));
-                      }
-                      setAtAgentOpen(false);
-                      inputRef.current?.focus();
-                    }}
-                    ref={(el) => { if (i === atAgentIdx && el) el.scrollIntoView({ block: "nearest" }); }}
-                    style={{
-                      padding: "6px 12px", cursor: "pointer", display: "flex", alignItems: "center", gap: 8,
-                      background: i === atAgentIdx ? "rgba(37,99,235,0.08)" : "transparent",
-                      transition: "background 0.1s",
-                    }}
-                    onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(37,99,235,0.08)"; }}
-                    onMouseLeave={(e) => { e.currentTarget.style.background = i === atAgentIdx ? "rgba(37,99,235,0.08)" : "transparent"; }}
-                  >
-                    <span style={{ fontSize: 16, flexShrink: 0 }}>{a.icon || "🤖"}</span>
-                    <div style={{ minWidth: 0, flex: 1 }}>
-                      <div style={{ fontWeight: 600, fontSize: 13, whiteSpace: "nowrap" }}>{a.name}</div>
-                      {a.description && <div style={{ fontSize: 11, opacity: 0.5, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{a.description}</div>}
+                {agents.map((a, i) => {
+                  const displayName = a.name_i18n?.[lang] || a.name;
+                  const displayDesc = a.description_i18n?.[lang] || a.description;
+                  return (
+                    <div
+                      key={a.id}
+                      onClick={() => {
+                        setSelectedAgent(a.id);
+                        const ta = inputRef.current;
+                        if (ta) {
+                          const val = ta.value;
+                          const cursor = ta.selectionStart ?? val.length;
+                          const before = val.slice(0, cursor).replace(/@[^\s@]*$/, "");
+                          setInputValue(before + val.slice(cursor));
+                        }
+                        setAtAgentOpen(false);
+                        inputRef.current?.focus();
+                      }}
+                      ref={(el) => { if (i === atAgentIdx && el) el.scrollIntoView({ block: "nearest" }); }}
+                      style={{
+                        padding: "6px 12px", cursor: "pointer", display: "flex", alignItems: "center", gap: 8,
+                        background: i === atAgentIdx ? "rgba(37,99,235,0.08)" : "transparent",
+                        transition: "background 0.1s",
+                      }}
+                      onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(37,99,235,0.08)"; }}
+                      onMouseLeave={(e) => { e.currentTarget.style.background = i === atAgentIdx ? "rgba(37,99,235,0.08)" : "transparent"; }}
+                    >
+                      <span style={{ fontSize: 16, flexShrink: 0 }}>{a.icon || "🤖"}</span>
+                      <div style={{ minWidth: 0, flex: 1 }}>
+                        <div style={{ fontWeight: 600, fontSize: 13, whiteSpace: "nowrap" }}>{displayName}</div>
+                        {displayDesc && <div style={{ fontSize: 11, opacity: 0.5, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{displayDesc}</div>}
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             );
           })()}

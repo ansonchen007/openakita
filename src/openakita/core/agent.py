@@ -627,6 +627,8 @@ class Agent:
         "Agent Package",   # agent packaging — rarely needed in normal conversation
         "Persona",         # persona traits — deferred until personality discussion
         "Config",          # config management — rarely needed
+        "Browser",         # browser_* tools — only needed for explicit browser operations
+        "Desktop",         # desktop_* tools — only needed in desktop environment
     })
 
     @property
@@ -1805,6 +1807,11 @@ class Agent:
         )
         if self._custom_prompt_suffix:
             prompt += f"\n\n{self._custom_prompt_suffix}"
+        if intent and getattr(intent, "suppress_plan", False):
+            prompt += (
+                "\n\n[系统] 此任务为简单单步操作，请直接执行，"
+                "无需创建计划（Plan/Todo）。执行完毕后直接回复结果。"
+            )
         prompt += self._build_multi_agent_prompt_section()
         return prompt
 
@@ -3782,37 +3789,7 @@ create_agent(name="名称", description="描述", skills=["技能"], custom_prom
             from .intent_analyzer import IntentType as _IT
             _intent = getattr(self, "_current_intent", None)
 
-            if _intent and _intent.intent == _IT.CHAT:
-                if getattr(_intent, "fast_reply", False):
-                    # Ultra-fast path: compiler model for obvious greetings
-                    try:
-                        _identity_snippet = ""
-                        if hasattr(self, "identity") and hasattr(self.identity, "get_system_prompt"):
-                            _identity_snippet = (self.identity.get_system_prompt(include_active_task=False) or "")[:500]
-
-                        _fast_system = (
-                            f"{_identity_snippet}\n\n"
-                            "用户发来了一条简短的问候/确认消息。请用你的人设风格简短回复，"
-                            "不要使用任何工具，不要过度展开。保持轻松自然，1-3句话即可。"
-                        ).strip()
-
-                        _fast_resp = await self.brain.think_lightweight(
-                            prompt=message,
-                            system=_fast_system,
-                        )
-                        response_text = clean_llm_response(
-                            _fast_resp.content if _fast_resp.content else ""
-                        ) or "你好！有什么我可以帮你的吗？"
-                    except Exception as e:
-                        logger.error(f"[FastReply] Failed: {e}")
-                        response_text = "你好！有什么我可以帮你的吗？"
-                else:
-                    # Normal CHAT path: no tools, slim system prompt
-                    response_text = await self._chat_lightweight(
-                        messages, session_type=session_type,
-                        endpoint_override=endpoint_override,
-                    )
-            elif _intent and _intent.intent == _IT.COMMAND:
+            if _intent and _intent.intent == _IT.COMMAND:
                 response_text = await self._chat_with_tools_and_context(
                     messages, task_monitor=task_monitor, session_type=session_type,
                     thinking_mode=_thinking_mode, thinking_depth=_thinking_depth,
@@ -4039,99 +4016,6 @@ create_agent(name="名称", description="描述", skills=["技能"], custom_prom
             _agent_profile_id = "default"
             if session and hasattr(session, "context"):
                 _agent_profile_id = getattr(session.context, "agent_profile_id", "default") or "default"
-
-            if _intent and _intent.intent == _IT.CHAT and mode != "agent":
-                if getattr(_intent, "fast_reply", False):
-                    # Ultra-fast path: use compiler/lightweight model for obvious greetings
-                    try:
-                        _identity_snippet = ""
-                        if hasattr(self, "identity") and hasattr(self.identity, "get_system_prompt"):
-                            _identity_snippet = (self.identity.get_system_prompt(include_active_task=False) or "")[:500]
-
-                        _fast_system = (
-                            f"{_identity_snippet}\n\n"
-                            "用户发来了一条简短的问候/确认消息。请用你的人设风格简短回复，"
-                            "不要使用任何工具，不要过度展开。保持轻松自然，1-3句话即可。"
-                        ).strip()
-
-                        _fast_response = await self.brain.think_lightweight(
-                            prompt=message,
-                            system=_fast_system,
-                        )
-                        _reply_text = clean_llm_response(
-                            _fast_response.content if _fast_response.content else ""
-                        )
-                        if not _reply_text:
-                            _reply_text = "你好！有什么我可以帮你的吗？"
-                    except Exception as e:
-                        logger.error(f"[FastReply] Failed: {e}")
-                        _reply_text = "你好！有什么我可以帮你的吗？"
-                    _chunk_size = 20
-                    for _ci in range(0, len(_reply_text), _chunk_size):
-                        yield {"type": "text_delta", "content": _reply_text[_ci:_ci + _chunk_size]}
-                        await asyncio.sleep(0.01)
-                    yield {"type": "done"}
-
-                    await self._finalize_session(
-                        response_text=_reply_text,
-                        session=session,
-                        session_id=session_id,
-                        task_monitor=task_monitor,
-                    )
-                    return
-
-                # Normal CHAT path (non-fast): uses main model, no tools
-                _chat_prompt = await self._build_system_prompt_compiled(
-                    task_description="", session_type=session_type, tools_enabled=False,
-                    session=session, mode=mode,
-                )
-                try:
-                    response = await self.brain.messages_create_async(
-                        system=_chat_prompt,
-                        messages=messages,
-                        tools=[],
-                        max_tokens=self.brain.max_tokens,
-                        endpoint_override=endpoint_override,
-                    )
-                    content = getattr(response, "content", None)
-                    _raw_parts: list[str] = []
-                    _has_tool_use = False
-                    if isinstance(content, list):
-                        for block in content:
-                            text = getattr(block, "text", None) or (block.get("text") if isinstance(block, dict) else None)
-                            if text:
-                                _raw_parts.append(text)
-                            block_type = getattr(block, "type", None) or (block.get("type") if isinstance(block, dict) else None)
-                            if block_type == "tool_use":
-                                _has_tool_use = True
-                    elif content:
-                        _raw_parts.append(str(content))
-                    _raw_text = "".join(_raw_parts)
-                    _reply_text = clean_llm_response(_raw_text)
-                    if _reply_text:
-                        _chunk_size = 20
-                        for _ci in range(0, len(_reply_text), _chunk_size):
-                            yield {"type": "text_delta", "content": _reply_text[_ci:_ci + _chunk_size]}
-                            await asyncio.sleep(0.01)
-                    elif _has_tool_use:
-                        _reply_text = "好的，已收到你的信息。"
-                        yield {"type": "text_delta", "content": _reply_text}
-                    else:
-                        _reply_text = "抱歉，模型暂时无法生成回复，请稍后再试。"
-                        yield {"type": "text_delta", "content": _reply_text}
-                except Exception as e:
-                    logger.error(f"[ChatLightweight/Stream] LLM call failed: {e}")
-                    yield {"type": "text_delta", "content": "抱歉，暂时无法回复，请稍后再试。"}
-                    _reply_text = "抱歉，暂时无法回复，请稍后再试。"
-                yield {"type": "done"}
-
-                await self._finalize_session(
-                    response_text=_reply_text,
-                    session=session,
-                    session_id=session_id,
-                    task_monitor=task_monitor,
-                )
-                return
 
             # Complexity detection: force ask_user for complex tasks
             if (
@@ -5195,7 +5079,7 @@ NEXT: 建议的下一步（如有）"""
             elif intent_result.force_tool:
                 pass  # None = use default from settings
             else:
-                force_tool_retries = max(0, getattr(settings, "force_tool_call_max_retries", 1) - 1)
+                force_tool_retries = max(0, getattr(settings, "force_tool_call_max_retries", 0) - 1)
 
         # === 委托给 ReasoningEngine ===
         return await self.reasoning_engine.run(
@@ -5286,7 +5170,7 @@ NEXT: 建议的下一步（如有）"""
         # 追问计数器：当 LLM 没有调用工具时，最多追问几次
         no_tool_call_count = 0
         im_floor = max(0, int(getattr(settings, "force_tool_call_im_floor", 1)))
-        configured = int(getattr(settings, "force_tool_call_max_retries", 1))
+        configured = int(getattr(settings, "force_tool_call_max_retries", 0))
         if session_type == "im":
             base_force_retries = max(im_floor, configured)
         else:
@@ -6737,7 +6621,7 @@ NEXT: 建议的下一步（如有）"""
 
         # 追问计数器：当 LLM 没有调用工具时，最多追问几次
         no_tool_call_count = 0
-        max_no_tool_retries = max(0, int(getattr(settings, "force_tool_call_max_retries", 1)))
+        max_no_tool_retries = max(0, int(getattr(settings, "force_tool_call_max_retries", 0)))
 
         # 获取 cancel_event（用于 LLM 调用竞速取消）
         _cancel_event = (

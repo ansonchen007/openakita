@@ -420,17 +420,19 @@ class OpenAIResponsesProvider(OpenAIProvider):
                             try:
                                 event = json.loads(data)
                                 converted = self._convert_stream_event(event)
-                                if converted.get("type") == "error":
-                                    err_msg = converted.get("error", "Unknown stream error")
-                                    self.mark_unhealthy(
-                                        f"Stream error: {err_msg}",
-                                        is_local=self._is_local_endpoint(),
-                                    )
-                                    raise LLMError(
-                                        f"Stream error from '{self.name}': {err_msg}"
-                                    )
-                                has_content = True
-                                yield converted
+                                items = converted if isinstance(converted, list) else [converted]
+                                for item in items:
+                                    if item.get("type") == "error":
+                                        err_msg = item.get("error", "Unknown stream error")
+                                        self.mark_unhealthy(
+                                            f"Stream error: {err_msg}",
+                                            is_local=self._is_local_endpoint(),
+                                        )
+                                        raise LLMError(
+                                            f"Stream error from '{self.name}': {err_msg}"
+                                        )
+                                    has_content = True
+                                    yield item
                             except json.JSONDecodeError:
                                 continue
                     elif line.startswith("event:"):

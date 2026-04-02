@@ -20,6 +20,7 @@ export const StreamEventType = {
 
   // ── Text output ──
   TEXT_DELTA: "text_delta",
+  TEXT_REPLACE: "text_replace",
 
   // ── Tool execution ──
   TOOL_CALL_START: "tool_call_start",

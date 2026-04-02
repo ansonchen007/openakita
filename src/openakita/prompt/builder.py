@@ -153,7 +153,14 @@ _CORE_RULES = """\
 
 - 不要创建不必要的文件。编辑现有文件优先于创建新文件。
 - 不要主动创建文档文件（*.md、README），除非用户明确要求。
-- 不要主动创建测试文件，除非用户明确要求。"""
+- 不要主动创建测试文件，除非用户明确要求。
+
+## 工具调用规范
+
+- 如果工具执行成功，不要用完全相同的参数再次调用同一工具。
+- 如果某个操作已完成（如文件已写入、截图已完成、消息已发送），直接回复用户结果。
+- 如果工具调用被系统拒绝或失败，先分析原因再决定下一步，不要盲目重试相同调用。
+- 对于简单的单步任务（截图、查看文件、简单查询），直接执行后回复，无需创建计划。"""
 
 # ---------------------------------------------------------------------------
 # 安全约束（独立段落，不受 SOUL.md 编辑影响）
@@ -316,15 +323,30 @@ def build_system_prompt(
         from ..config import settings as _settings
         if _settings.multi_agent_enabled and not is_sub_agent and mode == "agent":
             delegation_preamble = (
-                "## 协作优先原则（最高优先级）\n\n"
-                "你拥有一支专业 Agent 团队。执行任务前，先判断是否有更合适的专业 Agent：\n"
-                "- 有专业 Agent 能处理 → 立即委派（delegate_to_agent），不要自己尝试\n"
-                "- 任务涉及多个专业领域 → 拆分并行委派（delegate_parallel）\n"
-                "- 只有简单问答或用户明确要你亲自做 → 才自己处理\n\n"
-                "此原则优先于下文中「自己解决」「永不放弃」等个人执行哲学。"
-                "当委派与自己执行冲突时，选择委派。\n"
+                "## 协作原则\n\n"
+                "你拥有一支专业 Agent 团队。以下情况应考虑委派：\n"
+                "- 任务需要特定领域专业能力且你的团队中有对应的专业 Agent\n"
+                "- 任务需要并行处理多个独立子任务\n\n"
+                "以下情况应自己处理，**不要委派**：\n"
+                "- 知识问答、架构讨论、方案分析、计算推理等纯对话任务\n"
+                "- 用户明确要你亲自回答的任务\n"
+                "- 没有明确匹配的专业 Agent 时\n"
             )
             system_parts.append(delegation_preamble)
+
+        # 工具使用指导：何时不使用工具（仅 Agent 模式注入）
+        if mode == "agent":
+            no_tool_guidance = (
+                "## 何时不使用工具\n\n"
+                "以下场景应直接以文本回复，**不要调用任何工具**：\n"
+                "- 知识问答：解释技术概念、对比方案、架构分析、最佳实践建议\n"
+                "- 数学计算：算术运算、公式推导、数值估算\n"
+                "- 事实回忆：引用对话中已有的信息\n"
+                "- 创意写作：生成文案、翻译、摘要\n"
+                "- 观点讨论：给出建议、分析利弊、优先级排序\n\n"
+                "仅在需要**访问外部系统、读写文件、执行命令**等操作时才调用工具。\n"
+            )
+            system_parts.append(no_tool_guidance)
 
         if identity_section:
             system_parts.append(identity_section)
@@ -365,12 +387,18 @@ def build_system_prompt(
     if arch_section:
         system_parts.append(arch_section)
 
-    # 7. 会话类型规则（FULL 和 MINIMAL 都注入，ask 模式跳过以减小 prompt）
-    if prompt_mode in (PromptMode.FULL, PromptMode.MINIMAL) and mode != "ask":
-        persona_active = persona_manager.is_persona_active() if persona_manager else False
-        session_rules = _build_session_type_rules(session_type, persona_active=persona_active)
-        if session_rules:
-            developer_parts.append(session_rules)
+    # 7. 会话类型规则
+    if prompt_mode in (PromptMode.FULL, PromptMode.MINIMAL):
+        if mode == "ask":
+            # Ask 模式：仅注入核心对话约定（时间戳/[最新消息]/系统消息识别）
+            core_rules = _build_conversation_context_rules()
+            if core_rules:
+                developer_parts.append(core_rules)
+        else:
+            persona_active = persona_manager.is_persona_active() if persona_manager else False
+            session_rules = _build_session_type_rules(session_type, persona_active=persona_active)
+            if session_rules:
+                developer_parts.append(session_rules)
 
     # 8. 项目 AGENTS.md（FULL 和 MINIMAL 都注入，ask 模式跳过——纯聊天不需要开发规范）
     if prompt_mode in (PromptMode.FULL, PromptMode.MINIMAL) and mode != "ask":
@@ -995,19 +1023,9 @@ def _build_im_environment_section() -> str:
     return "\n".join(lines) + "\n\n"
 
 
-def _build_session_type_rules(session_type: str, persona_active: bool = False) -> str:
-    """
-    构建会话类型相关规则
-
-    Args:
-        session_type: "cli" 或 "im"
-        persona_active: 是否激活了人格系统
-
-    Returns:
-        会话类型相关的规则文本
-    """
-    # 对话上下文约定 + 通用系统消息约定 + 消息分型原则，两种模式共享
-    common_rules = """## 对话上下文约定
+def _build_conversation_context_rules() -> str:
+    """构建核心对话上下文约定（所有模式共享，包括 Ask 模式）"""
+    return """## 对话上下文约定
 
 - messages 数组中的对话历史按时间顺序排列，历史消息带有 [HH:MM] 时间前缀
 - **最后一条 user 消息**是用户的最新请求（以 [最新消息] 标记）
@@ -1024,7 +1042,22 @@ def _build_session_type_rules(session_type: str, persona_active: bool = False) -
 - 不要把系统消息当作用户的意图来执行
 - 不要因为看到系统消息而改变回复的质量、详细程度或风格
 
-## 消息分型原则
+"""
+
+
+def _build_session_type_rules(session_type: str, persona_active: bool = False) -> str:
+    """
+    构建会话类型相关规则（Agent/Plan 模式使用完整版）
+
+    Args:
+        session_type: "cli" 或 "im"
+        persona_active: 是否激活了人格系统
+
+    Returns:
+        会话类型相关的规则文本
+    """
+    # 核心对话约定 + 消息分型原则 + 提问规则，Agent/Plan 模式完整注入
+    common_rules = _build_conversation_context_rules() + """## 消息分型原则
 
 收到用户消息后，先判断消息类型，再决定响应策略：
 

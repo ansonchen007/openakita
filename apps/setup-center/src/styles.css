@@ -1144,6 +1144,12 @@ button.btnApplyRestart:hover {
   background: rgba(0, 0, 0, 0.12);
 }
 
+/* Search highlight (CSS Custom Highlight API) */
+::highlight(msg-search) {
+  background-color: #fbbf24;
+  color: #000;
+}
+
 /* Bouncing dots animation */
 .dotBounce {
   display: inline-block;
@@ -4485,20 +4491,22 @@ body > div[id*="sm-" i] {
 /* Message action buttons (edit / regenerate) — hover to show */
 .msgActionBtn {
   opacity: 0;
-  transition: opacity 0.15s;
+  transition: opacity 0.18s, background-color 0.15s;
   background: none;
   border: none;
+  border-radius: 6px;
   cursor: pointer;
-  font-size: 12px;
-  padding: 0 2px;
+  font-size: 13px;
+  padding: 3px 5px;
   line-height: 1;
 }
 .msgBubbleWrap:hover .msgActionBtn,
 .flatMsgItem:hover .msgActionBtn {
-  opacity: 0.6;
+  opacity: 0.95;
 }
 .msgActionBtn:hover {
   opacity: 1 !important;
+  background-color: var(--accent-bg, rgba(128, 128, 128, 0.15));
 }
 
 /* Quick start cards — hover effect */
