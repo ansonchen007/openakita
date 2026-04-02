@@ -16,6 +16,7 @@ from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from ..utils.atomic_io import safe_json_write
 from .task import ScheduledTask, TaskExecution, TaskStatus, TriggerType
 from .triggers import Trigger
 
@@ -79,6 +80,14 @@ class TaskScheduler:
         self._running_tasks: set[str] = set()
         self._semaphore: asyncio.Semaphore | None = None
 
+        # 并发保护锁：覆盖 _tasks/_triggers 所有写路径
+        self._lock = asyncio.Lock()
+
+        # 回调：任务因连续失败被自动禁用时触发
+        self.on_task_auto_disabled: (
+            Callable[[ScheduledTask], Awaitable[None]] | None
+        ) = None
+
         # 加载任务
         self._load_tasks()
         self._load_executions()
@@ -107,8 +116,8 @@ class TaskScheduler:
 
         logger.info(f"TaskScheduler started with {len(self._tasks)} tasks")
 
-    async def stop(self) -> None:
-        """停止调度器"""
+    async def stop(self, graceful_timeout: float = 30.0) -> None:
+        """停止调度器，优雅等待运行中的任务完成"""
         self._running = False
 
         if self._scheduler_task:
@@ -116,13 +125,29 @@ class TaskScheduler:
             with contextlib.suppress(asyncio.CancelledError):
                 await self._scheduler_task
 
-        # 等待正在执行的任务
         if self._running_tasks:
-            logger.info(f"Waiting for {len(self._running_tasks)} running tasks...")
-            # 给运行中的任务一些时间完成
-            await asyncio.sleep(2)
+            running_ids = list(self._running_tasks)
+            logger.info(
+                f"Waiting for {len(running_ids)} running tasks to finish "
+                f"(timeout={graceful_timeout}s): {running_ids}"
+            )
+            deadline = asyncio.get_event_loop().time() + graceful_timeout
+            while self._running_tasks and asyncio.get_event_loop().time() < deadline:
+                await asyncio.sleep(0.5)
 
-        # 保存任务
+            still_running = list(self._running_tasks)
+            if still_running:
+                logger.warning(
+                    f"Force-stopping: {len(still_running)} tasks still running "
+                    f"after {graceful_timeout}s timeout, resetting to SCHEDULED: {still_running}"
+                )
+                for tid in still_running:
+                    task = self._tasks.get(tid)
+                    if task and task.status == TaskStatus.RUNNING:
+                        task.status = TaskStatus.SCHEDULED
+                        task.updated_at = datetime.now()
+                self._running_tasks.clear()
+
         self._save_tasks()
 
         logger.info("TaskScheduler stopped")
@@ -136,18 +161,19 @@ class TaskScheduler:
         Returns:
             任务 ID
         """
-        # 创建触发器
-        trigger = Trigger.from_config(task.trigger_type.value, task.trigger_config)
+        async with self._lock:
+            if task.id in self._tasks:
+                raise ValueError(f"Task with id {task.id!r} already exists")
 
-        # 计算下一次运行时间
-        task.next_run = trigger.get_next_run_time()
-        task.status = TaskStatus.SCHEDULED
+            trigger = Trigger.from_config(task.trigger_type.value, task.trigger_config)
 
-        # 保存
-        self._tasks[task.id] = task
-        self._triggers[task.id] = trigger
+            task.next_run = trigger.get_next_run_time()
+            task.status = TaskStatus.SCHEDULED
 
-        self._save_tasks()
+            self._tasks[task.id] = task
+            self._triggers[task.id] = trigger
+
+            self._save_tasks()
 
         logger.info(f"Added task: {task.id} ({task.name}), next run: {task.next_run}")
         return task.id
@@ -163,10 +189,12 @@ class TaskScheduler:
         Returns:
             是否删除成功
         """
-        if task_id in self._tasks:
+        async with self._lock:
+            if task_id not in self._tasks:
+                return False
+
             task = self._tasks[task_id]
 
-            # 检查是否允许删除
             if not task.deletable and not force:
                 logger.warning(
                     f"Task {task_id} is a system task and cannot be deleted. Use disable instead."
@@ -176,56 +204,69 @@ class TaskScheduler:
             task.cancel()
 
             del self._tasks[task_id]
-            if task_id in self._triggers:
-                del self._triggers[task_id]
+            self._triggers.pop(task_id, None)
 
             self._save_tasks()
-            logger.info(f"Removed task: {task_id}")
-            return True
-        return False
+
+        logger.info(f"Removed task: {task_id}")
+        return True
+
+    _UPDATABLE_FIELDS: set[str] = {
+        "name", "description", "prompt", "reminder_message",
+        "task_type", "trigger_type", "trigger_config",
+        "channel_id", "chat_id", "user_id", "agent_profile_id",
+        "metadata", "script_path", "action",
+    }
 
     async def update_task(self, task_id: str, updates: dict) -> bool:
-        """更新任务"""
-        if task_id not in self._tasks:
-            return False
+        """更新任务（仅允许白名单字段）"""
+        async with self._lock:
+            if task_id not in self._tasks:
+                return False
 
-        task = self._tasks[task_id]
+            task = self._tasks[task_id]
 
-        # 更新字段
-        for key, value in updates.items():
-            if hasattr(task, key):
-                setattr(task, key, value)
+            rejected = set(updates.keys()) - self._UPDATABLE_FIELDS
+            if rejected:
+                logger.warning(f"update_task({task_id}): rejected non-updatable fields: {rejected}")
 
-        task.updated_at = datetime.now()
+            for key, value in updates.items():
+                if key in self._UPDATABLE_FIELDS and hasattr(task, key):
+                    setattr(task, key, value)
 
-        # 如果触发配置变更，重新创建触发器
-        if "trigger_config" in updates or "trigger_type" in updates:
-            trigger = Trigger.from_config(task.trigger_type.value, task.trigger_config)
-            self._triggers[task_id] = trigger
-            task.next_run = trigger.get_next_run_time(task.last_run)
+            task.updated_at = datetime.now()
 
-        self._save_tasks()
+            if "trigger_config" in updates or "trigger_type" in updates:
+                trigger = Trigger.from_config(task.trigger_type.value, task.trigger_config)
+                self._triggers[task_id] = trigger
+                task.next_run = trigger.get_next_run_time(task.last_run)
+
+            self._save_tasks()
+
         logger.info(f"Updated task: {task_id}")
         return True
 
     async def enable_task(self, task_id: str) -> bool:
         """启用任务"""
-        if task_id in self._tasks:
+        async with self._lock:
+            if task_id not in self._tasks:
+                return False
             task = self._tasks[task_id]
+            task.fail_count = 0  # Bug-7: 重置失败计数，给任务重新来过的机会
             task.enable()
             self._update_next_run(task)
             self._save_tasks()
-            return True
-        return False
+        return True
 
     async def disable_task(self, task_id: str) -> bool:
         """禁用任务"""
-        if task_id in self._tasks:
+        async with self._lock:
+            if task_id not in self._tasks:
+                return False
             task = self._tasks[task_id]
             task.disable()
             self._save_tasks()
-            return True
-        return False
+        return True
 
     def get_task(self, task_id: str) -> ScheduledTask | None:
         """获取任务"""
@@ -246,18 +287,39 @@ class TaskScheduler:
 
         return sorted(tasks, key=lambda t: t.next_run or datetime.max)
 
+    async def save(self) -> None:
+        """公共保存接口（获取锁后保存，供外部需要批量修改后调用）"""
+        async with self._lock:
+            self._save_tasks()
+
     async def trigger_now(self, task_id: str) -> TaskExecution | None:
         """
-        立即触发任务
+        立即触发任务（走 semaphore 并发控制，检查任务状态）
 
         Returns:
-            执行记录
+            执行记录, 或 None（任务不存在/不可用/已在运行）
         """
         task = self._tasks.get(task_id)
         if not task:
             return None
 
-        return await self._execute_task(task)
+        if not task.enabled:
+            logger.warning(f"trigger_now: task {task_id} is disabled, skipping")
+            return None
+
+        if task_id in self._running_tasks:
+            logger.warning(f"trigger_now: task {task_id} is already running, skipping")
+            return None
+
+        self._running_tasks.add(task_id)
+        try:
+            if self._semaphore:
+                async with self._semaphore:
+                    return await self._execute_task(task)
+            else:
+                return await self._execute_task(task)
+        finally:
+            self._running_tasks.discard(task_id)
 
     # ==================== 调度循环 ====================
 
@@ -328,48 +390,62 @@ class TaskScheduler:
                 else:
                     execution.finish(False, error=result_or_error)
             else:
-                # 没有执行器，模拟执行
                 execution.finish(True, result="No executor configured")
 
-            # 根据执行结果更新任务状态
             if execution.status == "success":
                 trigger = self._triggers.get(task.id)
                 next_run = trigger.get_next_run_time(datetime.now()) if trigger else None
                 task.mark_completed(next_run)
                 logger.info(f"Task {task.id} completed successfully")
             else:
-                # 失败：标记失败并推进到下一次运行时间
-                error_msg = execution.error or "Unknown error"
-                task.mark_failed(error_msg)
-                trigger = self._triggers.get(task.id)
-                next_run = trigger.get_next_run_time(datetime.now()) if trigger else None
-                if next_run:
-                    # 确保 next_run 在当前 advance 窗口之后，防止同一触发窗口内快速重试
-                    min_next = datetime.now() + timedelta(seconds=self.advance_seconds + 5)
-                    if next_run <= min_next:
-                        next_run = trigger.get_next_run_time(min_next)
-                    task.next_run = next_run
-                logger.warning(f"Task {task.id} reported failure: {error_msg}")
+                self._handle_task_failure(task, execution.error or "Unknown error")
+
+        except asyncio.CancelledError:
+            execution.finish(False, error="Task was cancelled")
+            task.mark_failed("Task was cancelled")
+            self._advance_next_run(task)
+            logger.warning(f"Task {task.id} was cancelled")
 
         except Exception as e:
             error_msg = str(e)
             execution.finish(False, error=error_msg)
             task.mark_failed(error_msg)
-            # 异常路径同样需要确保 next_run 跳过当前触发窗口
-            trigger = self._triggers.get(task.id)
-            if trigger:
-                min_next = datetime.now() + timedelta(seconds=self.advance_seconds + 5)
-                next_run = trigger.get_next_run_time(min_next)
-                if next_run:
-                    task.next_run = next_run
+            self._advance_next_run(task)
             logger.error(f"Task {task.id} failed: {error_msg}", exc_info=True)
 
-        # 保存执行记录
         self._executions.append(execution)
         self._save_tasks()
         self._save_executions()
 
         return execution
+
+    def _handle_task_failure(self, task: ScheduledTask, error_msg: str) -> None:
+        """处理任务失败：标记失败状态并推进 next_run"""
+        was_enabled = task.enabled
+        task.mark_failed(error_msg)
+        self._advance_next_run(task)
+        logger.warning(f"Task {task.id} reported failure: {error_msg}")
+
+        # 检测是否刚被自动禁用（mark_failed 内部会在 fail_count>=5 时禁用）
+        if was_enabled and not task.enabled and self.on_task_auto_disabled:
+            asyncio.ensure_future(self._notify_auto_disabled(task))
+
+    async def _notify_auto_disabled(self, task: ScheduledTask) -> None:
+        """安全调用 on_task_auto_disabled 回调"""
+        try:
+            await self.on_task_auto_disabled(task)
+        except Exception as e:
+            logger.debug(f"on_task_auto_disabled callback error for {task.id}: {e}")
+
+    def _advance_next_run(self, task: ScheduledTask) -> None:
+        """确保 next_run 跳过当前 advance 窗口，防止同一触发窗口内快速重试"""
+        trigger = self._triggers.get(task.id)
+        if not trigger:
+            return
+        min_next = datetime.now() + timedelta(seconds=self.advance_seconds + 5)
+        next_run = trigger.get_next_run_time(min_next)
+        if next_run:
+            task.next_run = next_run
 
     def _update_next_run(self, task: ScheduledTask) -> None:
         """更新任务的下一次运行时间"""
@@ -387,63 +463,40 @@ class TaskScheduler:
         与 _update_next_run 的区别：
         - 不会设置为立即执行（即使 last_run 为 None）
         - 用于程序重启后恢复任务
-
-        Args:
-            task: 任务
-            now: 当前时间
+        - 记录 missed 元数据供后续汇总通知
         """
         trigger = self._triggers.get(task.id)
         if not trigger:
             trigger = Trigger.from_config(task.trigger_type.value, task.trigger_config)
             self._triggers[task.id] = trigger
 
-        # 对于一次性任务，如果已经过期，标记为完成
+        missed_at = task.next_run
+
         if task.trigger_type == TriggerType.ONCE:
-            logger.info(f"One-time task {task.id} missed, marking as completed")
-            task.status = TaskStatus.COMPLETED
+            logger.info(f"One-time task {task.id} missed (was due at {missed_at})")
+            task.status = TaskStatus.MISSED
             task.enabled = False
+            task.metadata["missed_at"] = missed_at.isoformat() if missed_at else now.isoformat()
             return
 
-        # 对于间隔任务和 cron 任务，计算下一次运行时间
-        # 使用当前时间作为基准（而不是 last_run），避免立即执行
+        # 对于间隔任务和 cron 任务，记录 missed 并推进到下一次
+        task.metadata["last_missed_at"] = missed_at.isoformat() if missed_at else now.isoformat()
+        missed_count = task.metadata.get("missed_count", 0)
+        task.metadata["missed_count"] = missed_count + 1
+
         next_run = trigger.get_next_run_time(now)
 
-        # 确保 next_run 在未来（至少 1 分钟后），避免启动时立即执行
         min_next_run = now + timedelta(seconds=60)
         if next_run and next_run < min_next_run:
             next_run = trigger.get_next_run_time(min_next_run)
 
         task.next_run = next_run
-        logger.info(f"Recalculated next_run for task {task.id}: {next_run}")
+        logger.info(
+            f"Recalculated next_run for task {task.id}: {next_run} "
+            f"(missed at {missed_at}, total missed: {missed_count + 1})"
+        )
 
     # ==================== 持久化 ====================
-
-    def _atomic_write_json(self, target: Path, data: object) -> None:
-        """
-        原子写入 JSON 文件（Windows 友好）
-        - 写入临时文件
-        - fsync 落盘
-        - 使用 os.replace 原子替换目标文件
-        - 保留 .bak 备份（尽力而为，不阻塞主流程）
-        """
-        target.parent.mkdir(parents=True, exist_ok=True)
-        tmp = target.with_suffix(target.suffix + ".tmp")
-        bak = target.with_suffix(target.suffix + ".bak")
-
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-            f.flush()
-            os.fsync(f.fileno())
-
-        # 尽力备份旧文件
-        if target.exists():
-            with contextlib.suppress(Exception):
-                if bak.exists():
-                    bak.unlink()
-                # 用 replace，允许覆盖旧 bak
-                os.replace(str(target), str(bak))
-
-        os.replace(str(tmp), str(target))
 
     def _try_recover_json(self, target: Path) -> bool:
         """
@@ -485,17 +538,27 @@ class TaskScheduler:
             with open(tasks_file, encoding="utf-8") as f:
                 data = json.load(f)
 
+            if not isinstance(data, list):
+                logger.error(
+                    f"tasks.json contains {type(data).__name__} instead of list, "
+                    f"skipping load (file may be corrupt)"
+                )
+                return
+
             for item in data:
                 try:
+                    if not isinstance(item, dict):
+                        logger.warning(f"Skipping non-dict task entry: {type(item).__name__}")
+                        continue
                     task = ScheduledTask.from_dict(item)
                     self._tasks[task.id] = task
 
-                    # 创建触发器
                     trigger = Trigger.from_config(task.trigger_type.value, task.trigger_config)
                     self._triggers[task.id] = trigger
 
                 except Exception as e:
-                    logger.warning(f"Failed to load task: {e}")
+                    task_id = item.get("id", "?") if isinstance(item, dict) else "?"
+                    logger.warning(f"Failed to load task {task_id}: {e}")
 
             logger.info(f"Loaded {len(self._tasks)} tasks from storage")
 
@@ -530,7 +593,7 @@ class TaskScheduler:
 
         try:
             data = [task.to_dict() for task in self._tasks.values()]
-            self._atomic_write_json(tasks_file, data)
+            safe_json_write(tasks_file, data, fsync=True)
 
         except Exception as e:
             logger.error(f"Failed to save tasks: {e}")
@@ -545,7 +608,7 @@ class TaskScheduler:
             data = [e.to_dict() for e in recent]
             # 同步裁剪内存，避免长期运行无限增长
             self._executions = recent
-            self._atomic_write_json(executions_file, data)
+            safe_json_write(executions_file, data, fsync=True)
 
         except Exception as e:
             logger.error(f"Failed to save executions: {e}")

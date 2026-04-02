@@ -348,27 +348,60 @@ class SkillParser:
         Returns:
             错误消息列表 (空列表表示验证通过)
         """
+        import shutil as _shutil
         errors = []
+        meta = skill.metadata
 
-        # 检查目录名匹配（命名空间格式取 @ 后部分）
-        expected_dir = (
-            skill.metadata.name.split("@", 1)[-1]
-            if "@" in skill.metadata.name
-            else skill.metadata.name
-        )
-        if skill.skill_dir.name != expected_dir:
+        # Name length
+        if len(meta.name) > 64:
             errors.append(
-                f"Directory name '{skill.skill_dir.name}' should match "
-                f"expected '{expected_dir}' (from skill name '{skill.metadata.name}')"
+                f"Skill name '{meta.name[:30]}...' exceeds 64 characters ({len(meta.name)})"
             )
 
-        # 检查 body 长度 (建议 < 5000 tokens, 约 500 行)
+        # Directory name vs expected
+        expected_dir = (
+            meta.name.split("@", 1)[-1]
+            if "@" in meta.name
+            else meta.name
+        )
+        if skill.skill_dir and skill.skill_dir.name != expected_dir:
+            errors.append(
+                f"Directory name '{skill.skill_dir.name}' should match "
+                f"expected '{expected_dir}' (from skill name '{meta.name}')"
+            )
+
+        # Body length
         body_lines = skill.body.count("\n") + 1
         if body_lines > 500:
             errors.append(
                 f"SKILL.md body has {body_lines} lines. "
                 f"Recommended: keep under 500 lines for efficient context usage."
             )
+
+        # System skill must have handler and tool_name
+        if meta.system and not meta.handler:
+            errors.append("System skill must declare 'handler' in frontmatter")
+        if meta.system and not meta.tool_name:
+            errors.append("System skill must declare 'tool-name' in frontmatter")
+
+        # required_bins availability
+        for bin_name in meta.required_bins:
+            if not _shutil.which(bin_name):
+                errors.append(f"Required binary '{bin_name}' not found in PATH")
+
+        # required_env availability
+        import os as _os
+        for env_name in meta.required_env:
+            if not _os.environ.get(env_name):
+                errors.append(f"Required environment variable '{env_name}' not set")
+
+        # Config schema basic validation
+        for item in (meta.config or []):
+            if isinstance(item, dict):
+                if "name" not in item:
+                    errors.append(f"Config item missing 'name': {item}")
+                if "type" in item and item["type"] not in ("string", "number", "boolean", "select"):
+                    errors.append(f"Config item '{item.get('name', '?')}' has unknown type: {item['type']}")
 
         return errors
 

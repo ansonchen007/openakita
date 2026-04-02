@@ -51,6 +51,11 @@ def has_active_todo(session_id: str) -> bool:
     return session_id in _session_active_todos
 
 
+def get_active_plan_id(session_id: str) -> str | None:
+    """获取 session 当前活跃 Todo 的 plan_id（供 SSE 事件同步用）"""
+    return _session_active_todos.get(session_id)
+
+
 def register_active_todo(session_id: str, plan_id: str) -> None:
     """注册活跃的 Todo"""
     _session_active_todos[session_id] = plan_id
@@ -58,15 +63,12 @@ def register_active_todo(session_id: str, plan_id: str) -> None:
 
 
 def unregister_active_todo(session_id: str) -> None:
-    """注销活跃的 Todo"""
+    """注销活跃的 Todo（保留 handler 以支持后续新建 todo）"""
     if session_id in _session_active_todos:
         todo_id = _session_active_todos.pop(session_id)
         logger.info(f"[Todo] Unregistered todo {todo_id} for session {session_id}")
-    # 同时清除 todo_required 标记和 handler
     if session_id in _session_todo_required:
         del _session_todo_required[session_id]
-    if session_id in _session_handlers:
-        del _session_handlers[session_id]
 
 
 def clear_session_todo_state(session_id: str) -> None:
@@ -78,6 +80,20 @@ def clear_session_todo_state(session_id: str) -> None:
 
 # 存储 session -> PlanHandler 实例的映射（用于任务完成判断时查询 Plan 状态）
 _session_handlers: dict[str, "PlanHandler"] = {}
+
+
+def _emit_todo_lifecycle_event(session_id: str, event_type: str, plan: dict | None = None) -> None:
+    """通过 WebSocket 广播 todo 生命周期事件（供非流式路径使用）"""
+    try:
+        import asyncio
+        from ...api.routes.websocket import broadcast_event
+        data: dict = {"sessionId": session_id, "type": event_type}
+        if plan:
+            data["planId"] = plan.get("id", "")
+            data["status"] = plan.get("status", "")
+        asyncio.ensure_future(broadcast_event(f"todo:{event_type}", data))
+    except Exception as e:
+        logger.debug(f"[Todo] Failed to emit lifecycle event {event_type}: {e}")
 
 
 def auto_close_todo(session_id: str) -> bool:
@@ -134,6 +150,7 @@ def auto_close_todo(session_id: str) -> bool:
     )
 
     unregister_active_todo(session_id)
+    _emit_todo_lifecycle_event(session_id, "todo_completed", plan)
     return True
 
 
@@ -177,6 +194,7 @@ def cancel_todo(session_id: str) -> bool:
 
     logger.info(f"[Todo] Cancelled todo for session {session_id}")
     unregister_active_todo(session_id)
+    _emit_todo_lifecycle_event(session_id, "todo_completed", plan)
     return True
 
 
@@ -186,22 +204,24 @@ def force_close_plan(session_id: str) -> bool:
 
     无条件清除所有与该 session 关联的 Plan 模块级状态，
     无论 handler 实例或 plan 数据是否可达。
-    用于打破 plan_required=True + has_active_plan=False 的死锁。
+    用于打破 todo_required=True + has_active_todo=False 的死锁。
 
     Returns:
         True 如果清理了任何状态
     """
     had_state = False
-    if session_id in _session_active_plans:
-        plan_id = _session_active_plans.pop(session_id)
-        logger.warning(f"[Plan] Force-closed active plan {plan_id} for {session_id}")
+    if session_id in _session_active_todos:
+        plan_id = _session_active_todos.pop(session_id)
+        logger.warning(f"[Plan] Force-closed active todo {plan_id} for {session_id}")
         had_state = True
-    if session_id in _session_plan_required:
-        del _session_plan_required[session_id]
+    if session_id in _session_todo_required:
+        del _session_todo_required[session_id]
         had_state = True
-    handler = _session_handlers.pop(session_id, None)
+    handler = _session_handlers.get(session_id)
     if handler:
-        handler._plans_by_session.pop(session_id, None)
+        handler._todos_by_session.pop(session_id, None)
+        if handler.current_todo and handler._get_conversation_id() == session_id:
+            handler.current_todo = None
         had_state = True
     if had_state:
         logger.warning(f"[Plan] Force-closed all plan state for session {session_id}")
@@ -260,43 +280,39 @@ def should_require_todo(user_message: str) -> bool:
 
     msg = user_message.lower()
 
-    # 动作词列表
-    action_words = [
-        "打开",
-        "搜索",
-        "截图",
-        "发给",
-        "发送",
-        "写",
-        "创建",
-        "执行",
-        "运行",
-        "读取",
-        "查看",
-        "保存",
-        "下载",
-        "上传",
-        "复制",
-        "粘贴",
-        "删除",
-        "编辑",
-        "修改",
-        "更新",
-        "安装",
-        "配置",
-        "设置",
-        "启动",
-        "关闭",
+    # 中文动作词
+    zh_action_words = [
+        "打开", "搜索", "截图", "发给", "发送", "写", "创建",
+        "执行", "运行", "读取", "查看", "保存", "下载", "上传",
+        "复制", "粘贴", "删除", "编辑", "修改", "更新", "安装",
+        "配置", "设置", "启动", "关闭",
+    ]
+    # 英文动作词（匹配词根，兼容 -ing / -ed / -s 等形态）
+    en_action_words = [
+        "open", "search", "screenshot", "send", "write", "create",
+        "execute", "run", "read", "view", "save", "download", "upload",
+        "copy", "paste", "delete", "edit", "modify", "update", "install",
+        "configure", "setup", "start", "stop", "close", "deploy", "build",
+        "test", "refactor", "migrate", "fix", "implement", "add", "remove",
     ]
 
-    # 连接词（表示多步骤）
-    connector_words = ["然后", "接着", "之后", "并且", "再", "最后"]
+    # 中文连接词
+    zh_connectors = ["然后", "接着", "之后", "并且", "再", "最后"]
+    # 英文连接词
+    en_connectors = ["then", "after that", "next", "finally", "and then", "followed by", "also"]
 
     # 统计动作词数量
-    action_count = sum(1 for word in action_words if word in msg)
+    action_count = sum(1 for w in zh_action_words if w in msg)
+    import re as _re
+    for w in en_action_words:
+        if _re.search(r'\b' + _re.escape(w), msg):
+            action_count += 1
 
     # 检查连接词
-    has_connector = any(word in msg for word in connector_words)
+    has_connector = (
+        any(w in msg for w in zh_connectors)
+        or any(_re.search(r'\b' + _re.escape(w) + r'\b', msg) for w in en_connectors)
+    )
 
     # 检查逗号分隔的多个动作
     comma_separated = "，" in msg or "," in msg
@@ -405,10 +421,10 @@ class PlanHandler:
                 f"请使用 update_todo_step 继续执行当前计划。\n\n{status}"
             )
 
-        # 状态不一致兜底：_session_active_plans 有记录但本实例无 plan 数据
+        # 状态不一致兜底：_session_active_todos 有记录但本实例无 plan 数据
         cid = self._get_conversation_id()
-        if cid and has_active_plan(cid) and _plan is None:
-            logger.warning(f"[Plan] Inconsistent state: active_plan registered but no plan data for {cid}, force-closing")
+        if cid and has_active_todo(cid) and _plan is None:
+            logger.warning(f"[Plan] Inconsistent state: active_todo registered but no plan data for {cid}, force-closing")
             force_close_plan(cid)
 
         plan_id = f"plan_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{secrets.token_hex(3)}"
@@ -421,6 +437,8 @@ class PlanHandler:
                 return "❌ steps 参数格式错误，需要 JSON 数组"
         if not isinstance(steps, list):
             return "❌ steps 参数格式错误，需要 JSON 数组"
+        if len(steps) == 0:
+            return "❌ 至少需要一个步骤才能创建计划"
 
         normalized_steps: list[dict] = []
         for index, raw_step in enumerate(steps):
@@ -428,6 +446,16 @@ class PlanHandler:
                 return f"❌ steps[{index}] 格式错误，需要对象"
 
             step = dict(raw_step)
+
+            # 必填字段校验：id / description 缺失时自动补全，防止下游 KeyError
+            if "id" not in step or not str(step["id"]).strip():
+                step["id"] = f"step_{index + 1}"
+            else:
+                step["id"] = str(step["id"]).strip()[:64]
+            if "description" not in step or not str(step["description"]).strip():
+                step["description"] = step["id"]
+            else:
+                step["description"] = str(step["description"]).strip()[:512]
 
             # 兼容模型偶发输出：把字符串化数组字段还原为 list
             for field_name in ("skills", "depends_on"):
@@ -465,13 +493,13 @@ class PlanHandler:
         }
         self._set_current_todo(_new_plan)
 
+        # 先落盘再注册，确保注册时文件已可查
+        self._save_plan_markdown()
+
         conversation_id = self._get_conversation_id()
         if conversation_id:
             register_active_todo(conversation_id, plan_id)
-            register_plan_handler(conversation_id, self)  # 注册 handler 以便查询 Plan 状态
-
-        # 保存到文件
-        self._save_plan_markdown()
+            register_plan_handler(conversation_id, self)
 
         # 记录日志
         self._add_log(f"计划创建：{params.get('task_summary', '')}")
@@ -510,14 +538,48 @@ class PlanHandler:
                 force_close_plan(cid)
             return "❌ 当前没有活动的计划，请先调用 create_todo"
 
-        step_id = params.get("step_id", "")
-        status = params.get("status", "")
+        step_id = str(params.get("step_id", "")).strip()
+        status = str(params.get("status", "")).strip()
         result = params.get("result", "")
+
+        if not step_id:
+            return "❌ step_id 为必填项，请指定要更新的步骤 ID"
+        if not status:
+            return "❌ status 为必填项，请指定目标状态"
+
+        _VALID_TRANSITIONS: dict[str, set[str]] = {
+            "pending": {"in_progress", "skipped", "cancelled"},
+            "in_progress": {"completed", "failed", "skipped", "cancelled"},
+            "completed": set(),
+            "failed": {"in_progress"},
+            "skipped": {"in_progress"},
+            "cancelled": set(),
+        }
 
         # 查找并更新步骤
         step_found = False
         for step in _plan["steps"]:
             if step["id"] == step_id:
+                old_status = step.get("status", "pending")
+                allowed = _VALID_TRANSITIONS.get(old_status, set())
+                if status != old_status and status not in allowed:
+                    return (
+                        f"⚠️ 步骤 {step_id} 当前状态为 {old_status}，"
+                        f"不允许直接变更为 {status}。"
+                        f"允许的目标状态：{', '.join(sorted(allowed)) or '无（已终态）'}"
+                    )
+                # depends_on 依赖检查：步骤开始前确认前置已完成
+                if status == "in_progress":
+                    deps = step.get("depends_on", [])
+                    if deps:
+                        _DONE = {"completed", "skipped"}
+                        steps_map = {s["id"]: s for s in _plan["steps"]}
+                        blocked = [d for d in deps if steps_map.get(d, {}).get("status") not in _DONE]
+                        if blocked:
+                            return (
+                                f"⚠️ 步骤 {step_id} 依赖于 {', '.join(blocked)}，"
+                                f"这些步骤尚未完成，请先完成它们。"
+                            )
                 step["status"] = status
                 step["result"] = result
                 # 保底：确保 skills 存在（兼容旧 plan 文件/旧模型输出）
@@ -584,7 +646,20 @@ class PlanHandler:
         except Exception as e:
             logger.warning(f"Failed to emit step progress: {e}")
 
-        return f"步骤 {step_id} 状态已更新为 {status}"
+        response = f"步骤 {step_id} 状态已更新为 {status}"
+
+        # 验证提醒：步骤完成后建议验证结果
+        if status == "completed":
+            pending_steps = [s for s in steps if s.get("status") in ("pending", "in_progress")]
+            if pending_steps:
+                next_step = pending_steps[0]
+                response += f"\n\n💡 下一步：{next_step.get('description', next_step['id'])}"
+            else:
+                response += "\n\n✅ 所有步骤已完成，请调用 complete_todo 结束计划。"
+        elif status == "failed":
+            response += "\n\n⚠️ 该步骤失败，请检查原因后决定是否重试（将状态改回 in_progress）或跳过。"
+
+        return response
 
     def _get_status(self) -> str:
         """获取计划状态"""
@@ -631,19 +706,27 @@ class PlanHandler:
         _plan = self._get_current_todo()
         if not _plan:
             cid = self._get_conversation_id()
-            if cid and has_active_plan(cid):
-                logger.warning(f"[Plan] complete_plan: plan data lost for {cid}, force-closing stale registration")
+            if cid and has_active_todo(cid):
+                logger.warning(f"[Plan] complete_todo: plan data lost for {cid}, force-closing stale registration")
                 force_close_plan(cid)
                 return "⚠️ 旧计划数据已丢失，已强制清除死锁状态。可以开始新任务。"
             return "❌ 当前没有活动的计划"
 
         summary = params.get("summary", "")
 
+        steps = _plan["steps"]
+        still_active = [s for s in steps if s.get("status") in ("pending", "in_progress")]
+        if still_active:
+            active_ids = [s.get("id", "?") for s in still_active[:5]]
+            return (
+                f"⚠️ 还有 {len(still_active)} 个步骤未完成：{', '.join(active_ids)}。\n"
+                "请先完成或跳过这些步骤，再调用 complete_todo。"
+            )
+
         _plan["status"] = "completed"
         _plan["completed_at"] = datetime.now().isoformat()
         _plan["summary"] = summary
 
-        steps = _plan["steps"]
         completed = sum(1 for s in steps if s["status"] == "completed")
         failed = sum(1 for s in steps if s["status"] == "failed")
 
@@ -707,20 +790,35 @@ class PlanHandler:
         filename = f"{_slug}_{_hash}.plan.md"
 
         plan_file = self.plan_dir / filename
+        if plan_file.exists():
+            for _seq in range(2, 100):
+                _candidate = self.plan_dir / f"{_slug}_{_hash}_{_seq}.plan.md"
+                if not _candidate.exists():
+                    plan_file = _candidate
+                    break
+
+        def _yaml_escape(val: str) -> str:
+            """YAML 安全转义：含特殊字符时加引号并转义内部双引号"""
+            if not val:
+                return '""'
+            needs_quote = any(c in val for c in (':', '#', '"', "'", '\n', '{', '}', '[', ']', ',', '&', '*', '?', '|', '-', '<', '>', '=', '!', '%', '@', '`'))
+            if needs_quote:
+                return '"' + val.replace('\\', '\\\\').replace('"', '\\"').replace('\n', '\\n') + '"'
+            return val
 
         # Build YAML frontmatter
         yaml_lines = ["---"]
-        yaml_lines.append(f"name: {name}")
+        yaml_lines.append(f"name: {_yaml_escape(name)}")
         if overview:
-            yaml_lines.append(f"overview: {overview}")
+            yaml_lines.append(f"overview: {_yaml_escape(overview)}")
         if todos:
             yaml_lines.append("todos:")
             for todo in todos:
                 todo_id = todo.get("id", f"step_{secrets.token_hex(3)}")
                 content = todo.get("content", "")
                 status = todo.get("status", "pending")
-                yaml_lines.append(f"  - id: {todo_id}")
-                yaml_lines.append(f"    content: \"{content}\"")
+                yaml_lines.append(f"  - id: {_yaml_escape(todo_id)}")
+                yaml_lines.append(f"    content: {_yaml_escape(content)}")
                 yaml_lines.append(f"    status: {status}")
         yaml_lines.append("isProject: true")
         yaml_lines.append("---")
@@ -827,13 +925,12 @@ class PlanHandler:
                     "conversation_id": conversation_id,
                 }
             else:
-                self.agent._plan_exit_pending = {
-                    conversation_id: {
-                        "summary": summary,
-                        "plan_id": plan_id,
-                        "plan_file": plan_file_path,
-                        "conversation_id": conversation_id,
-                    }
+                self.agent._plan_exit_pending = {}
+                self.agent._plan_exit_pending[conversation_id] = {
+                    "summary": summary,
+                    "plan_id": plan_id,
+                    "plan_file": plan_file_path,
+                    "conversation_id": conversation_id,
                 }
             logger.info(
                 f"[Plan] exit_plan_mode: flagged for mode switch "
@@ -898,6 +995,8 @@ class PlanHandler:
             "",
         ]
 
+        _max_result_len = 200 if total > 20 else 300
+        _char_budget = 4000
         for i, step in enumerate(steps):
             num = i + 1
             icon = {
@@ -906,14 +1005,20 @@ class PlanHandler:
                 "completed": "OK",
                 "failed": "XX",
                 "skipped": "--",
+                "cancelled": "~~",
             }.get(step["status"], "??")
             desc = step.get("description", step["id"])
             result_hint = ""
             if step["status"] == "completed" and step.get("result"):
-                result_hint = f" => {step['result'][:300]}"
+                result_hint = f" => {step['result'][:_max_result_len]}"
             elif step["status"] == "failed" and step.get("result"):
-                result_hint = f" => FAIL: {step['result'][:300]}"
-            lines.append(f"  [{icon}] {num}. {desc}{result_hint}")
+                result_hint = f" => FAIL: {step['result'][:_max_result_len]}"
+            line = f"  [{icon}] {num}. {desc}{result_hint}"
+            _char_budget -= len(line)
+            if _char_budget < 0:
+                lines.append(f"  ... ({total - i} more steps omitted)")
+                break
+            lines.append(line)
 
         plan_file = plan.get("plan_file", "")
         if plan_file:
@@ -932,6 +1037,21 @@ class PlanHandler:
                 "IMPORTANT: This plan already exists. Do NOT call create_todo again. "
                 "Continue from the current step using update_todo_step."
             )
+
+        # Stale step 提醒：长时间未更新的 in_progress 步骤
+        for step in steps:
+            if step["status"] == "in_progress" and step.get("started_at"):
+                try:
+                    started = datetime.fromisoformat(step["started_at"])
+                    elapsed = (datetime.now() - started).total_seconds()
+                    if elapsed > 300:
+                        mins = int(elapsed / 60)
+                        lines.append(
+                            f"\n⚠️ STALE: Step '{step['id']}' has been in_progress for {mins} min. "
+                            "Consider completing, failing, or skipping it."
+                        )
+                except (ValueError, TypeError):
+                    pass
 
         return "\n".join(lines)
 
@@ -956,6 +1076,9 @@ class PlanHandler:
 |----|------|--------|------|------|------|
 """
 
+        def _md_escape_cell(val: str) -> str:
+            return val.replace("|", "\\|").replace("\n", " ")
+
         for step in plan["steps"]:
             status_emoji = {
                 "pending": "⬜",
@@ -963,14 +1086,17 @@ class PlanHandler:
                 "completed": "✅",
                 "failed": "❌",
                 "skipped": "⏭️",
+                "cancelled": "🚫",
             }.get(step["status"], "❓")
 
-            tool = step.get("tool", "-")
-            skills = ", ".join(step.get("skills", []) or [])
-            result = step.get("result", "-")
+            tool = _md_escape_cell(step.get("tool", "-"))
+            skills = _md_escape_cell(", ".join(step.get("skills", []) or []) or "-")
+            result = _md_escape_cell(step.get("result", "-") or "-")
+            sid = _md_escape_cell(step["id"])
+            desc = _md_escape_cell(step["description"])
 
             content += (
-                f"| {step['id']} | {step['description']} | {skills or '-'} | {tool} | {status_emoji} | {result} |\n"
+                f"| {sid} | {desc} | {skills} | {tool} | {status_emoji} | {result} |\n"
             )
 
         content += "\n## 执行日志\n\n"

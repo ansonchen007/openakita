@@ -512,15 +512,23 @@ class SkillLoader:
 
         很多外部技能（如 Anthropic 的 xlsx、pdf 等）把脚本直接放在技能根目录
         而非 scripts/ 子目录，因此需要双重查找。
+
+        安全: 解析后的路径必须仍在技能目录内，防止 ``../`` 穿越。
         """
-        if skill.scripts_dir:
-            candidate = skill.scripts_dir / script_name
+        for base in (skill.scripts_dir, skill.skill_dir):
+            if base is None:
+                continue
+            candidate = (base / script_name).resolve()
+            try:
+                candidate.relative_to(skill.skill_dir.resolve())
+            except ValueError:
+                logger.warning(
+                    "Script path traversal blocked: %s resolves outside skill dir %s",
+                    script_name, skill.skill_dir,
+                )
+                return None
             if candidate.exists():
                 return candidate
-        # Fallback: 技能根目录
-        candidate = skill.skill_dir / script_name
-        if candidate.exists():
-            return candidate
         return None
 
     def run_script(
@@ -605,25 +613,38 @@ class SkillLoader:
             extra: dict = {}
             if sys.platform == "win32":
                 extra["creationflags"] = subprocess.CREATE_NO_WINDOW
-            result = subprocess.run(
+
+            MAX_OUTPUT_BYTES = 1 * 1024 * 1024  # 1 MB
+
+            proc = subprocess.Popen(
                 cmd,
                 cwd=cwd or skill.skill_dir,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=60,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 **extra,
             )
+            try:
+                raw_stdout, raw_stderr = proc.communicate(timeout=60)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.communicate()
+                return False, "Script execution timed out"
 
-            output = result.stdout
-            if result.stderr:
-                output += f"\nSTDERR:\n{result.stderr}"
+            truncated = False
+            stdout_bytes = raw_stdout[:MAX_OUTPUT_BYTES] if raw_stdout else b""
+            stderr_bytes = raw_stderr[:MAX_OUTPUT_BYTES] if raw_stderr else b""
+            if (raw_stdout and len(raw_stdout) > MAX_OUTPUT_BYTES) or \
+               (raw_stderr and len(raw_stderr) > MAX_OUTPUT_BYTES):
+                truncated = True
 
-            return result.returncode == 0, output
+            output = stdout_bytes.decode("utf-8", errors="replace")
+            if stderr_bytes:
+                output += f"\nSTDERR:\n{stderr_bytes.decode('utf-8', errors='replace')}"
+            if truncated:
+                output += "\n\n[OUTPUT TRUNCATED — exceeded 1 MB limit]"
 
-        except subprocess.TimeoutExpired:
-            return False, "Script execution timed out"
+            return proc.returncode == 0, output
+
         except Exception as e:
             return False, f"Script execution failed: {e}"
 
@@ -632,19 +653,19 @@ class SkillLoader:
         获取技能参考文档
 
         Args:
-            name: 技能名称
+            name: 技能名称（接受 skill_id 或 display name）
             ref_name: 参考文档名称 (如 REFERENCE.md)
 
         Returns:
             文档内容或 None
         """
-        skill = self._loaded_skills.get(name)
+        skill = self._resolve_skill(name)
         if not skill or not skill.references_dir:
             return None
 
         ref_path = skill.references_dir / ref_name
         if ref_path.exists():
-            return ref_path.read_text(encoding="utf-8")
+            return ref_path.read_text(encoding="utf-8", errors="replace")
 
         return None
 

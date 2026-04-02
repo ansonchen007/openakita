@@ -11,6 +11,7 @@
 """
 
 import logging
+import threading
 
 from .registry import SkillRegistry
 
@@ -24,8 +25,6 @@ class SkillCatalog:
     管理技能清单的生成和格式化，用于系统提示注入。
     """
 
-    # 技能清单模板
-    # 注意：该段落会进入 system prompt，尽量短（降低噪声与 token 占用）
     CATALOG_TEMPLATE = """
 ## Available Skills
 
@@ -52,44 +51,52 @@ Do not infer filesystem paths from the workspace map; `get_skill_info` is author
 
     def __init__(self, registry: SkillRegistry):
         self.registry = registry
+        self._lock = threading.Lock()
         self._cached_catalog: str | None = None
+        self._cached_index: str | None = None
+        self._cached_compact: str | None = None
+
+    def _list_model_visible(self) -> list:
+        """Return enabled skills that are also visible to the model."""
+        return [
+            s for s in self.registry.list_enabled()
+            if not s.disable_model_invocation
+        ]
 
     def generate_catalog(self) -> str:
         """
-        生成已启用技能清单（disabled 技能不会出现在系统提示中）
-
-        Returns:
-            格式化的技能清单字符串
+        生成已启用技能清单（disabled 和 disable_model_invocation 技能不出现在系统提示中）
         """
-        skills = self.registry.list_enabled()
+        with self._lock:
+            skills = self._list_model_visible()
 
-        if not skills:
-            empty_catalog = (
-                "\n## Available Skills\n\n"
-                "No skills installed. Use the skill creation workflow to add new skills.\n"
-            )
-            self._cached_catalog = empty_catalog
-            return empty_catalog
+            if not skills:
+                empty_catalog = (
+                    "\n## Available Skills\n\n"
+                    "No skills installed. Use the skill creation workflow to add new skills.\n"
+                )
+                self._cached_catalog = empty_catalog
+                return empty_catalog
 
-        skill_entries = []
-        for skill in skills:
-            desc = skill.description or ""
-            first_line = desc.split("\n")[0].strip()
+            skill_entries = []
+            for skill in skills:
+                desc = skill.description or ""
+                first_line = desc.split("\n")[0].strip()
 
-            entry = self._safe_format(
-                self.SKILL_ENTRY_TEMPLATE,
-                name=skill.name,
-                description=first_line,
-            )
-            skill_entries.append(entry)
+                entry = self._safe_format(
+                    self.SKILL_ENTRY_TEMPLATE,
+                    name=skill.name,
+                    description=first_line,
+                )
+                skill_entries.append(entry)
 
-        skill_list = "\n".join(skill_entries)
+            skill_list = "\n".join(skill_entries)
 
-        catalog = self._safe_format(self.CATALOG_TEMPLATE, skill_list=skill_list)
-        self._cached_catalog = catalog
+            catalog = self._safe_format(self.CATALOG_TEMPLATE, skill_list=skill_list)
+            self._cached_catalog = catalog
 
-        logger.info(f"Generated skill catalog with {len(skills)} skills")
-        return catalog
+            logger.info(f"Generated skill catalog with {len(skills)} skills")
+            return catalog
 
     def get_catalog(self, refresh: bool = False) -> str:
         """
@@ -97,100 +104,93 @@ Do not infer filesystem paths from the workspace map; `get_skill_info` is author
 
         Args:
             refresh: 是否强制刷新
-
-        Returns:
-            技能清单字符串
         """
         if refresh or self._cached_catalog is None:
             return self.generate_catalog()
         return self._cached_catalog
 
     def get_compact_catalog(self) -> str:
-        """
-        获取紧凑版技能清单 (仅名称列表)
-
-        用于 token 受限的场景
-        """
-        skills = self.registry.list_enabled()
-        if not skills:
-            return "No skills installed."
-
-        names = [s.name for s in skills]
-        if not names:
-            return "No skills installed."
-        return f"Available skills: {', '.join(names)}"
+        """获取紧凑版技能清单 (仅名称列表)，用于 token 受限场景。"""
+        with self._lock:
+            skills = self._list_model_visible()
+            if not skills:
+                result = "No skills installed."
+            else:
+                names = [s.name for s in skills]
+                result = f"Available skills: {', '.join(names)}"
+            self._cached_compact = result
+            return result
 
     def get_index_catalog(self) -> str:
         """
         获取已启用技能的"全量索引"（仅名称，尽量短，但完整）。
 
-        disabled 技能不会出现在索引中，避免 LLM 误用被禁用的技能。
+        disabled 和 disable_model_invocation 技能不会出现在索引中。
         按 system / external / plugin 三组输出。
         """
-        skills = self.registry.list_enabled()
-        if not skills:
-            return "## Skills Index (complete)\n\nNo skills installed."
+        with self._lock:
+            skills = self._list_model_visible()
+            if not skills:
+                result = "## Skills Index (complete)\n\nNo skills installed."
+                self._cached_index = result
+                return result
 
-        system_names: list[str] = []
-        external_names: list[str] = []
-        plugin_entries: list[str] = []
+            system_names: list[str] = []
+            external_names: list[str] = []
+            plugin_entries: list[str] = []
 
-        for s in skills:
-            if getattr(s, "system", False):
-                system_names.append(s.name)
-            elif getattr(s, "plugin_source", None):
-                plugin_id = s.plugin_source.replace("plugin:", "")
-                plugin_entries.append(f"{s.name} (via {plugin_id})")
-            else:
-                external_names.append(s.name)
+            for s in skills:
+                if getattr(s, "system", False):
+                    system_names.append(s.name)
+                elif getattr(s, "plugin_source", None):
+                    plugin_id = s.plugin_source.replace("plugin:", "")
+                    plugin_entries.append(f"{s.name} (via {plugin_id})")
+                else:
+                    external_names.append(s.name)
 
-        system_names.sort()
-        external_names.sort()
-        plugin_entries.sort()
+            system_names.sort()
+            external_names.sort()
+            plugin_entries.sort()
 
-        lines: list[str] = [
-            "## Skills Index (complete)",
-            "",
-            "Use `get_skill_info(skill_name)` to load full instructions.",
-            "Most external skills are **instruction-only** (no pre-built scripts) "
-            "\u2014 read instructions via get_skill_info, then write code and execute via run_shell.",
-            "Only use `run_skill_script` when a skill explicitly lists executable scripts.",
-        ]
-
-        if system_names:
-            lines += ["", f"**System skills ({len(system_names)})**: {', '.join(system_names)}"]
-        if external_names:
-            lines += [
+            lines: list[str] = [
+                "## Skills Index (complete)",
                 "",
-                f"**External skills ({len(external_names)})**: {', '.join(external_names)}",
-            ]
-        if plugin_entries:
-            lines += [
-                "",
-                f"**Plugin skills ({len(plugin_entries)})**: {', '.join(plugin_entries)}",
+                "Use `get_skill_info(skill_name)` to load full instructions.",
+                "Most external skills are **instruction-only** (no pre-built scripts) "
+                "\u2014 read instructions via get_skill_info, then write code and execute via run_shell.",
+                "Only use `run_skill_script` when a skill explicitly lists executable scripts.",
             ]
 
-        return "\n".join(lines)
+            if system_names:
+                lines += ["", f"**System skills ({len(system_names)})**: {', '.join(system_names)}"]
+            if external_names:
+                lines += [
+                    "",
+                    f"**External skills ({len(external_names)})**: {', '.join(external_names)}",
+                ]
+            if plugin_entries:
+                lines += [
+                    "",
+                    f"**Plugin skills ({len(plugin_entries)})**: {', '.join(plugin_entries)}",
+                ]
+
+            result = "\n".join(lines)
+            self._cached_index = result
+            return result
 
     def get_skill_summary(self, skill_name: str) -> str | None:
-        """
-        获取单个技能的摘要
-
-        Args:
-            skill_name: 技能名称
-
-        Returns:
-            技能摘要 (name + description)
-        """
+        """获取单个技能的摘要"""
         skill = self.registry.get(skill_name)
         if not skill:
             return None
-
         return f"**{skill.name}**: {skill.description}"
 
     def invalidate_cache(self) -> None:
-        """使缓存失效"""
-        self._cached_catalog = None
+        """使所有缓存失效"""
+        with self._lock:
+            self._cached_catalog = None
+            self._cached_index = None
+            self._cached_compact = None
 
     @property
     def skill_count(self) -> int:

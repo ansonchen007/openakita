@@ -2241,7 +2241,7 @@ export function ChatView({
                       : event.stepIdx != null && currentPlan!.steps.indexOf(s) === event.stepIdx;
                     return matched ? { ...s, status: event.status as ChatTodoStep["status"] } : s;
                   });
-                  const allDone = newSteps.every((s) => s.status === "completed" || s.status === "skipped" || s.status === "failed");
+                  const allDone = newSteps.every((s) => s.status === "completed" || s.status === "skipped" || s.status === "failed" || s.status === "cancelled");
                   currentPlan = { ...currentPlan, steps: newSteps, ...(allDone ? { status: "completed" as const } : {}) } as ChatTodo;
                 }
                 break;

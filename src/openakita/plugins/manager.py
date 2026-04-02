@@ -322,6 +322,7 @@ class PluginManager:
             )
             return
 
+        self._skills_loaded = True
         self._tag_skill_source(skill_path.parent.name, manifest.id)
 
     def _try_load_plugin_skill(
@@ -367,6 +368,11 @@ class PluginManager:
         entry = registry.get(skill_id)
         if entry is not None and hasattr(entry, "plugin_source"):
             entry.plugin_source = f"plugin:{plugin_id}"
+        else:
+            logger.warning(
+                "Cannot tag plugin source: skill '%s' not found in registry after load",
+                skill_id,
+            )
 
     def _refresh_skill_catalog(self) -> None:
         """Invalidate skill catalog cache if any plugin loaded a skill."""

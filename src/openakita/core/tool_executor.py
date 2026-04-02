@@ -809,9 +809,9 @@ class ToolExecutor:
     def _check_permission(self, tool_name: str, tool_input: dict) -> str | None:
         """Runtime permission check — enforce path-level restrictions.
 
-        In Plan/Ask mode, write operations are checked against the permission
-        ruleset. If the target path is denied, returns a DeniedError message
-        for the LLM to learn from (same pattern as OpenCode).
+        In Plan/Ask mode, ALL tools are checked against the permission
+        ruleset. If the tool or target path is denied, returns a DeniedError
+        message for the LLM to learn from (same pattern as OpenCode).
 
         Returns:
             Error message string if denied, or None if allowed.
@@ -822,12 +822,10 @@ class ToolExecutor:
         from .permission import (
             EDIT_TOOLS,
             evaluate,
+            _tool_to_permission,
             PLAN_MODE_RULESET,
             ASK_MODE_RULESET,
         )
-
-        if tool_name not in EDIT_TOOLS:
-            return None
 
         if self._current_mode == "plan":
             ruleset = PLAN_MODE_RULESET
@@ -836,25 +834,33 @@ class ToolExecutor:
         else:
             return None
 
-        file_path = tool_input.get("path", tool_input.get("file_path", ""))
-        if not file_path:
-            file_path = tool_input.get("target", "*")
+        permission = _tool_to_permission(tool_name)
 
-        rule = evaluate("edit", str(file_path), ruleset)
+        if tool_name in EDIT_TOOLS:
+            file_path = tool_input.get("path", tool_input.get("file_path", ""))
+            if not file_path:
+                file_path = tool_input.get("target", "*")
+            pattern = str(file_path)
+        else:
+            pattern = "*"
+
+        rule = evaluate(permission, pattern, ruleset)
         if rule.action == "deny":
             logger.warning(
-                f"[Permission] DENIED {tool_name} on {file_path!r} "
+                f"[Permission] DENIED {tool_name} (perm={permission}) on {pattern!r} "
                 f"in {self._current_mode} mode"
             )
-            return (
-                f"Permission denied: cannot use {tool_name} on '{file_path}' "
-                f"in {self._current_mode} mode. "
-                f"The current mode restricts write operations. "
-                + (
+            if tool_name in EDIT_TOOLS:
+                hint = (
                     "In Plan mode, you can only write to data/plans/*.md files. "
                     "Use create_plan_file to create a plan document instead."
                     if self._current_mode == "plan"
                     else "Ask mode is read-only. No write operations are allowed."
                 )
+            else:
+                hint = f"Tool '{tool_name}' is not available in {self._current_mode} mode."
+            return (
+                f"Permission denied: cannot use {tool_name} "
+                f"in {self._current_mode} mode. {hint}"
             )
         return None

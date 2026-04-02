@@ -1,7 +1,7 @@
 """
 技能管理处理器
 
-处理技能管理相关的系统技能：
+处理技能管理相关的系统技能（共 8 个工具）：
 - list_skills: 列出技能
 - get_skill_info: 获取技能信息
 - run_skill_script: 运行技能脚本
@@ -9,6 +9,7 @@
 - install_skill: 安装技能
 - load_skill: 加载新创建的技能
 - reload_skill: 重新加载已修改的技能
+- manage_skill_enabled: 启用/禁用技能
 
 说明：技能创建/封装等工作流建议使用专门的技能（外部技能）完成。
 """
@@ -52,24 +53,31 @@ class SkillsHandler:
 
     async def handle(self, tool_name: str, params: dict[str, Any]) -> str:
         """处理工具调用"""
-        if tool_name == "list_skills":
-            return self._list_skills(params)
-        elif tool_name == "get_skill_info":
-            return self._get_skill_info(params)
-        elif tool_name == "run_skill_script":
-            return self._run_skill_script(params)
-        elif tool_name == "get_skill_reference":
-            return self._get_skill_reference(params)
-        elif tool_name == "install_skill":
-            return await self._install_skill(params)
-        elif tool_name == "load_skill":
-            return self._load_skill(params)
-        elif tool_name == "reload_skill":
-            return self._reload_skill(params)
-        elif tool_name == "manage_skill_enabled":
-            return self._manage_skill_enabled(params)
-        else:
-            return f"❌ Unknown skills tool: {tool_name}"
+        try:
+            if tool_name == "list_skills":
+                return self._list_skills(params)
+            elif tool_name == "get_skill_info":
+                return self._get_skill_info(params)
+            elif tool_name == "run_skill_script":
+                return self._run_skill_script(params)
+            elif tool_name == "get_skill_reference":
+                return self._get_skill_reference(params)
+            elif tool_name == "install_skill":
+                return await self._install_skill(params)
+            elif tool_name == "load_skill":
+                return self._load_skill(params)
+            elif tool_name == "reload_skill":
+                return self._reload_skill(params)
+            elif tool_name == "manage_skill_enabled":
+                return self._manage_skill_enabled(params)
+            else:
+                return f"❌ Unknown skills tool: {tool_name}"
+        except KeyError as e:
+            logger.error("Missing required parameter in %s: %s", tool_name, e)
+            return f"❌ 缺少必需参数: {e}"
+        except Exception as e:
+            logger.error("Unexpected error in skills handler %s: %s", tool_name, e, exc_info=True)
+            return f"❌ 技能操作失败: {e}"
 
     def _list_skills(self, params: dict) -> str:
         """列出所有技能，区分启用/禁用状态"""
@@ -202,11 +210,12 @@ class SkillsHandler:
         total_chars = len(content)
         overflow_path = save_overflow(tool_name, content)
         truncated = content[:SKILL_MAX_CHARS]
+        overflow_name = Path(overflow_path).name if overflow_path else "overflow.txt"
         hint = (
             f"\n\n{OVERFLOW_MARKER} 技能内容共 {total_chars} 字符，"
             f"已截断到前 {SKILL_MAX_CHARS} 字符。\n"
-            f"完整内容已保存到: {overflow_path}\n"
-            f'使用 read_file(path="{overflow_path}", offset=1, limit=500) 查看后续内容。'
+            f"完整内容已保存，使用以下命令查看后续内容:\n"
+            f'read_file(path="{overflow_path}", offset=1, limit=500)'
         )
         logger.info(
             f"[SkillTruncate] {tool_name} output: {total_chars} → {SKILL_MAX_CHARS} chars, "
@@ -273,10 +282,35 @@ class SkillsHandler:
         skill_name = params["skill_name"]
         script_name = params["script_name"]
         args = params.get("args", [])
-        cwd = params.get("cwd")
+        cwd_raw = params.get("cwd")
+
+        resolved_cwd: Path | None = None
+        if cwd_raw:
+            resolved_cwd = Path(cwd_raw).resolve()
+            project_root = Path(self.agent.settings.get("project_root", ".")).resolve()
+            skill_entry = self.agent.skill_registry.get(skill_name)
+            skill_dir = Path(skill_entry.skill_path).resolve() if skill_entry and skill_entry.skill_path else None
+
+            allowed = False
+            try:
+                resolved_cwd.relative_to(project_root)
+                allowed = True
+            except ValueError:
+                pass
+            if not allowed and skill_dir:
+                try:
+                    resolved_cwd.relative_to(skill_dir)
+                    allowed = True
+                except ValueError:
+                    pass
+            if not allowed:
+                return (
+                    f"❌ 工作目录被拒绝: {cwd_raw}\n"
+                    f"cwd 只能位于项目工作区或技能目录内。"
+                )
 
         success, output = self.agent.skill_loader.run_script(
-            skill_name, script_name, args, cwd=Path(cwd) if cwd else None
+            skill_name, script_name, args, cwd=resolved_cwd
         )
 
         if success:
@@ -466,18 +500,18 @@ class SkillsHandler:
         except Exception:
             pass
 
-        # 如果没有 allowlist 文件，初始化为当前所有外部技能
+        # 如果没有 allowlist 文件，初始化为当前所有外部技能的 skill_id
         if existing_allowlist is None:
             all_skills = self.agent.skill_registry.list_all()
-            existing_allowlist = {s.name for s in all_skills if not s.system}
+            existing_allowlist = {s.skill_id for s in all_skills if not s.system}
 
-        # 收集所有已知外部技能名（包括被 prune 的）
-        all_external_names = set(existing_allowlist)
+        # 收集所有已知外部技能 skill_id（包括被 prune 的）
+        all_external_ids = set(existing_allowlist)
         loader = getattr(self.agent, "skill_loader", None)
         if loader:
-            for name, skill in loader._loaded_skills.items():
+            for sid, skill in loader._loaded_skills.items():
                 if not getattr(skill.metadata, "system", False):
-                    all_external_names.add(name)
+                    all_external_ids.add(sid)
 
         applied: list[str] = []
         skipped: list[str] = []
@@ -488,21 +522,23 @@ class SkillsHandler:
             if not name:
                 continue
 
-            # 系统技能不可禁用
+            # Resolve to skill_id (accept both skill_id and display name)
             skill = self.agent.skill_registry.get(name)
+            sid = skill.skill_id if skill else name
+
             if skill and skill.system:
-                skipped.append(f"{name}（系统技能，不可禁用）")
+                skipped.append(f"{sid}（系统技能，不可禁用）")
                 continue
 
-            if name not in all_external_names:
-                skipped.append(f"{name}（未找到）")
+            if sid not in all_external_ids:
+                skipped.append(f"{sid}（未找到）")
                 continue
 
             if enabled:
-                existing_allowlist.add(name)
+                existing_allowlist.add(sid)
             else:
-                existing_allowlist.discard(name)
-            applied.append(f"{name} → {'启用' if enabled else '禁用'}")
+                existing_allowlist.discard(sid)
+            applied.append(f"{sid} → {'启用' if enabled else '禁用'}")
 
         if not applied:
             msg = "未执行任何变更。"

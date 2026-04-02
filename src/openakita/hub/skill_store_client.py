@@ -12,6 +12,7 @@ SkillStoreClient — 与 OpenAkita Platform Skill Store 交互的客户端
 from __future__ import annotations
 
 import logging
+import os
 import shutil
 import subprocess
 import sys
@@ -207,7 +208,14 @@ class SkillStoreClient:
             return False
 
         skill_dir.mkdir(parents=True, exist_ok=True)
+        abs_target = str(skill_dir.resolve()) + os.sep
         with zipfile.ZipFile(io.BytesIO(data)) as zf:
+            for member in zf.namelist():
+                member_path = os.path.normpath(os.path.join(skill_dir.resolve(), member))
+                if not member_path.startswith(abs_target) and member_path != abs_target.rstrip(os.sep):
+                    raise RuntimeError(
+                        f"Zip Slip detected: member '{member}' escapes target directory"
+                    )
             zf.extractall(skill_dir)
 
         skill_md = skill_dir / "SKILL.md"

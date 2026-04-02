@@ -77,20 +77,34 @@ class TaskQueue:
         logger.info("[TaskQueue] Started")
 
     async def stop(self) -> None:
-        """Stop the queue worker and cancel pending tasks."""
+        """Stop the queue worker, cancel active tasks, and resolve pending futures."""
         self._running = False
-        self._not_empty.set()  # wake up the worker
+        self._not_empty.set()
         if self._worker_task:
             self._worker_task.cancel()
             try:
                 await self._worker_task
             except (asyncio.CancelledError, Exception):
                 pass
-        # Cancel active tasks
+
         for task_id, task in self._active.items():
             if not task.done():
                 task.cancel()
         self._active.clear()
+
+        # 清理堆中未执行的 Future，防止泄漏
+        for qt in self._heap:
+            fut = self._results.pop(qt.task_id, None)
+            if fut and not fut.done():
+                fut.cancel()
+        self._heap.clear()
+
+        # 清理任何残留的 Future
+        for tid, fut in list(self._results.items()):
+            if not fut.done():
+                fut.cancel()
+        self._results.clear()
+
         logger.info("[TaskQueue] Stopped")
 
     async def enqueue(
@@ -159,6 +173,9 @@ class TaskQueue:
                 continue  # Go back and check heap under lock
 
             if task.cancelled:
+                fut = self._results.pop(task.task_id, None)
+                if fut and not fut.done():
+                    fut.cancel()
                 continue
 
             # Wait for concurrency slot

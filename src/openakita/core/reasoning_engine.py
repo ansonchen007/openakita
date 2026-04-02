@@ -2725,12 +2725,44 @@ class ReasoningEngine:
                                     })
                                 else:
                                     plan_steps.append({"id": f"step_{idx + 1}", "description": str(s), "status": "pending"})
+                            # 从后端获取真实 plan_id，保持前后端 ID 一致
+                            _sse_plan_id = str(uuid.uuid4())
+                            try:
+                                from ..tools.handlers.plan import get_active_plan_id
+                                _real_id = get_active_plan_id(conversation_id)
+                                if _real_id:
+                                    _sse_plan_id = _real_id
+                            except Exception:
+                                pass
                             yield {"type": "todo_created", "plan": {
-                                "id": str(uuid.uuid4()),
+                                "id": _sse_plan_id,
                                 "taskSummary": tool_args.get("task_summary", ""),
                                 "steps": plan_steps,
                                 "status": "in_progress",
                             }}
+                        elif tool_name == "create_plan_file" and isinstance(tool_args, dict):
+                            pf_todos = tool_args.get("todos", [])
+                            pf_steps = []
+                            for idx, t in enumerate(pf_todos):
+                                if isinstance(t, dict):
+                                    pf_steps.append({
+                                        "id": str(t.get("id", f"step_{idx + 1}")),
+                                        "description": str(t.get("content", t.get("id", ""))),
+                                        "status": "pending",
+                                    })
+                            if pf_steps:
+                                _pf_plan_id = ""
+                                try:
+                                    from ..tools.handlers.plan import get_active_plan_id
+                                    _pf_plan_id = get_active_plan_id(conversation_id) or ""
+                                except Exception:
+                                    pass
+                                yield {"type": "todo_created", "plan": {
+                                    "id": _pf_plan_id or str(uuid.uuid4()),
+                                    "taskSummary": tool_args.get("name", ""),
+                                    "steps": pf_steps,
+                                    "status": "in_progress",
+                                }}
                         elif tool_name == "update_todo_step" and isinstance(tool_args, dict):
                             step_id = tool_args.get("step_id", "")
                             yield {"type": "todo_step_updated", "stepId": step_id, "status": tool_args.get("status", "completed")}

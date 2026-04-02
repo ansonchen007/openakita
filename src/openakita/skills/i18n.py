@@ -88,14 +88,19 @@ def write_i18n(skill_dir: Path, data: dict[str, dict[str, str]]) -> None:
     """将 i18n 数据写入 agents/openai.yaml。
 
     如果 agents/openai.yaml 已存在，合并 i18n 字段；否则创建新文件。
+    YAML 解析失败时中止写入以防止数据丢失。
     """
     yaml_file = skill_dir / OPENAI_YAML_PATH
     existing: dict = {}
     if yaml_file.exists():
         try:
             existing = yaml.safe_load(yaml_file.read_text(encoding="utf-8")) or {}
-        except Exception:
-            existing = {}
+        except Exception as e:
+            logger.error(
+                "Cannot parse existing %s — aborting write_i18n to prevent data loss: %s",
+                yaml_file, e,
+            )
+            return
 
     existing["i18n"] = data
 
@@ -149,11 +154,12 @@ async def auto_translate_skill(
     if read_i18n(skill_dir):
         return False
 
+    safe_payload = json.dumps({"name": name, "description": description}, ensure_ascii=False)
     prompt = (
         "将以下 AI 技能的名称和描述翻译为简体中文。\n"
         "名称应简短精炼（2-6个汉字），描述应通顺自然。\n"
         "仅返回纯 JSON，不要 markdown 包裹：\n"
-        f'{{"name": "{name}", "description": "{description}"}}'
+        f"{safe_payload}"
     )
 
     try:

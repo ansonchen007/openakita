@@ -1314,6 +1314,13 @@ class Agent:
         # 更新工具列表，添加技能工具
         self._update_skill_tools()
 
+        # 通知首次加载完成，让 API/WS 层同步
+        try:
+            from ..skills.events import notify_skills_changed, SkillEvent
+            notify_skills_changed(SkillEvent.LOAD)
+        except Exception:
+            pass
+
     def _update_shell_tool_description(self) -> None:
         """在 run_shell 描述末尾追加当前操作系统信息（不覆盖原始描述）"""
         import platform
@@ -1546,6 +1553,26 @@ class Agent:
                 executor=self._task_executor.execute,
             )
 
+            # 注册自动禁用通知回调
+            executor_ref = self._task_executor
+
+            async def _on_auto_disabled(task):
+                if task.channel_id and task.chat_id and executor_ref.gateway:
+                    try:
+                        await executor_ref.gateway.send(
+                            channel=task.channel_id,
+                            chat_id=task.chat_id,
+                            text=(
+                                f"⚠️ 任务「{task.name}」已被自动暂停\n\n"
+                                f"原因：连续失败 {task.fail_count} 次\n"
+                                f"如需恢复，请告诉我「恢复任务 {task.id}」"
+                            ),
+                        )
+                    except Exception as e:
+                        logger.debug(f"Auto-disable notification failed: {e}")
+
+            self.task_scheduler.on_task_auto_disabled = _on_auto_disabled
+
             # 启动调度器
             await self.task_scheduler.start()
 
@@ -1642,18 +1669,15 @@ class Agent:
                     changed = True
                 # 适应期 ↔ 正常期切换时，更新触发器
                 if existing_memory_task.trigger_type != desired_trigger:
-                    existing_memory_task.trigger_type = desired_trigger
-                    existing_memory_task.trigger_config = desired_config
-                    existing_memory_task.description = desired_desc
-                    changed = True
-                    # 同步更新内存中的 trigger 实例
-                    from ..scheduler.triggers import Trigger
-                    new_trigger = Trigger.from_config(desired_trigger.value, desired_config)
-                    self.task_scheduler._triggers[memory_task_id] = new_trigger
-                    existing_memory_task.next_run = new_trigger.get_next_run_time()
+                    await self.task_scheduler.update_task(memory_task_id, {
+                        "trigger_type": desired_trigger,
+                        "trigger_config": desired_config,
+                        "description": desired_desc,
+                    })
+                    changed = False  # update_task 已保存
                     logger.info(f"Switched memory task trigger to {desired_trigger.value}: {desired_desc}")
                 if changed:
-                    self.task_scheduler._save_tasks()
+                    await self.task_scheduler.save()
 
         # 任务 2: 系统自检（凌晨 4:00）
         if "system_daily_selfcheck" not in existing_ids:
@@ -1682,7 +1706,7 @@ class Agent:
                     existing_task.action = "system:daily_selfcheck"
                     changed = True
                 if changed:
-                    self.task_scheduler._save_tasks()
+                    await self.task_scheduler.save()
 
         # 任务 3: 活人感心跳（每 30 分钟触发）
         try:
@@ -1733,8 +1757,10 @@ class Agent:
             else:
                 existing_bt = self.task_scheduler.get_task(backup_task_id)
                 if existing_bt and existing_bt.enabled != backup_enabled:
-                    existing_bt.enabled = backup_enabled
-                    self.task_scheduler._save_tasks()
+                    if backup_enabled:
+                        await self.task_scheduler.enable_task(backup_task_id)
+                    else:
+                        await self.task_scheduler.disable_task(backup_task_id)
         except Exception as e:
             logger.warning(f"Failed to register workspace_backup task: {e}")
 
@@ -2980,7 +3006,7 @@ class Agent:
         if mode in ("plan", "ask"):
             from ..tools.handlers.plan import require_todo_for_session
             require_todo_for_session(conversation_id, False)
-        elif intent_result.todo_required and mode == "agent":
+        elif mode == "agent":
             from ..tools.handlers.plan import require_todo_for_session, should_require_todo
             has_multi_actions = should_require_todo(message)
             if intent_result.todo_required or has_multi_actions:
@@ -3587,6 +3613,15 @@ class Agent:
         self._current_session_id = None
         self._current_conversation_id = None
 
+        # 清理 Plan/Todo 模块级状态，防止 handler 内存泄漏
+        for _clean_id in (_sid, _conv_id):
+            if _clean_id:
+                try:
+                    from ..tools.handlers.plan import clear_session_todo_state
+                    clear_session_todo_state(_clean_id)
+                except Exception:
+                    pass
+
         # 释放推理引擎中残留的大对象（working_messages / checkpoints），
         # working_messages 可能持有数十 MB 的工具结果（截图 base64、网页内容等）
         # 注意：不清理 _last_finalized_trace，它由 orchestrator/SSE 读取，
@@ -4033,13 +4068,13 @@ class Agent:
                 yield {
                     "type": "ask_user",
                     "question": (
-                        f"⚠️ 检测到复杂任务（复杂度: {_score}/10）\n\n"
-                        "此任务涉及多文件修改、跨模块调整或破坏性操作。\n"
-                        "建议先在 Plan 模式下进行详细规划，再执行。"
+                        "⚠️ 这个任务比较复杂\n\n"
+                        "涉及多个步骤或跨模块调整，"
+                        "建议先制定计划再动手，避免遗漏。"
                     ),
                     "options": [
-                        {"id": "plan", "label": "切换到 Plan 模式详细规划（推荐）"},
-                        {"id": "execute", "label": "直接在 Agent 模式执行"},
+                        {"id": "plan", "label": "先制定计划再执行（推荐）"},
+                        {"id": "execute", "label": "直接执行"},
                     ],
                 }
                 yield {"type": "done"}

@@ -16,7 +16,7 @@ import asyncio
 import logging
 
 from fastapi import APIRouter, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +48,7 @@ class TaskCreateRequest(BaseModel):
     name: str
     task_type: str = "reminder"  # reminder | task
     trigger_type: str = "once"  # once | interval | cron
-    trigger_config: dict = {}
+    trigger_config: dict = Field(default_factory=dict)
     reminder_message: str | None = None
     prompt: str = ""
     channel_id: str | None = None
@@ -69,16 +69,25 @@ class TaskUpdateRequest(BaseModel):
 
 
 @router.get("/api/scheduler/tasks")
-async def list_tasks(request: Request):
-    """List all scheduled tasks."""
+async def list_tasks(
+    request: Request,
+    offset: int = 0,
+    limit: int = 50,
+    enabled_only: bool = False,
+):
+    """List scheduled tasks with pagination."""
     scheduler = _get_scheduler(request)
     if scheduler is None:
         return {"error": "Agent not initialized", "tasks": []}
 
-    tasks = scheduler.list_tasks()
+    all_tasks = scheduler.list_tasks(enabled_only=enabled_only)
+    total = len(all_tasks)
+    page = all_tasks[offset : offset + limit]
     return {
-        "tasks": [t.to_dict() for t in tasks],
-        "total": len(tasks),
+        "tasks": [t.to_dict() for t in page],
+        "total": total,
+        "offset": offset,
+        "limit": limit,
     }
 
 

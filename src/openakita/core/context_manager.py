@@ -987,7 +987,9 @@ class ContextManager:
             rewrite_parts.append(f"原始任务: {preview}")
 
         if plan_section:
-            rewrite_parts.append(f"\n当前计划状态:\n{plan_section}")
+            # 截断保护：Plan 状态过长时只保留前 2000 字符，避免二次压缩时被丢弃
+            _ps = plan_section if len(plan_section) <= 2000 else plan_section[:2000] + "\n... (计划状态已截断)"
+            rewrite_parts.append(f"\n当前计划状态:\n{_ps}")
 
         if completed_tools:
             unique_tools = list(dict.fromkeys(completed_tools))

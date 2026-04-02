@@ -9,6 +9,7 @@
 - 外部技能 allowlist 管理
 """
 
+import asyncio
 import contextlib
 import json
 import logging
@@ -34,6 +35,37 @@ logger = logging.getLogger(__name__)
 SKILL_GIT_CLONE_TIMEOUT_SECONDS = 120
 SKILL_INSTALL_CIRCUIT_THRESHOLD = 2
 SKILL_INSTALL_CIRCUIT_COOLDOWN_SECONDS = 300
+
+ALLOWED_URL_HOSTS = {
+    "github.com", "raw.githubusercontent.com",
+    "gitee.com", "gitlab.com",
+    "bitbucket.org",
+    "huggingface.co",
+    "skills.sh",
+}
+
+_PRIVATE_IP_PREFIXES = ("10.", "172.16.", "172.17.", "172.18.", "172.19.",
+                        "172.20.", "172.21.", "172.22.", "172.23.", "172.24.",
+                        "172.25.", "172.26.", "172.27.", "172.28.", "172.29.",
+                        "172.30.", "172.31.", "192.168.", "127.", "0.")
+
+
+def _is_url_safe(url: str) -> tuple[bool, str]:
+    """校验 URL 是否安全（仅允许 http/https + 已知主机，拒绝私有 IP）。"""
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return False, "URL 格式无效"
+    if parsed.scheme not in ("http", "https"):
+        return False, f"不支持的协议: {parsed.scheme}（仅支持 http/https）"
+    host = (parsed.hostname or "").lower()
+    if not host:
+        return False, "URL 缺少主机名"
+    if any(host.startswith(p) for p in _PRIVATE_IP_PREFIXES) or host in ("localhost", "[::]", "[::1]"):
+        return False, f"不允许访问内部地址: {host}"
+    if host not in ALLOWED_URL_HOSTS and not any(host.endswith("." + d) for d in ALLOWED_URL_HOSTS):
+        return False, f"主机 {host} 不在允许列表中（支持: {', '.join(sorted(ALLOWED_URL_HOSTS))}）"
+    return True, ""
 
 
 class SkillManager:
@@ -69,6 +101,7 @@ class SkillManager:
         self._catalog_text: str = ""
         self._failure_class_streaks: dict[str, int] = {}
         self._failure_class_last_seen: dict[str, float] = {}
+        self._install_lock: asyncio.Lock | None = None
 
     @property
     def catalog_text(self) -> str:
@@ -136,6 +169,18 @@ class SkillManager:
         Returns:
             安装结果消息
         """
+        if self._install_lock is None:
+            self._install_lock = asyncio.Lock()
+        async with self._install_lock:
+            return await self._install_skill_impl(source, name, subdir, extra_files)
+
+    async def _install_skill_impl(
+        self,
+        source: str,
+        name: str | None = None,
+        subdir: str | None = None,
+        extra_files: list[str] | None = None,
+    ) -> str:
         skills_dir = settings.skills_path
         skills_dir.mkdir(parents=True, exist_ok=True)
 
@@ -359,7 +404,11 @@ class SkillManager:
             target_dir = skills_dir / skill_name
             if target_dir.exists():
                 shutil.rmtree(target_dir)
-            shutil.copytree(skill_source_dir, target_dir)
+            try:
+                shutil.copytree(skill_source_dir, target_dir)
+            except Exception as copy_err:
+                self._cleanup_broken_skill_dir(target_dir)
+                raise RuntimeError(f"copytree failed: {copy_err}") from copy_err
             self._ensure_skill_structure(target_dir)
 
             try:
@@ -405,6 +454,10 @@ class SkillManager:
     ) -> str:
         """从 URL 安装技能（仅接受 raw SKILL.md 文件）"""
         import httpx
+
+        safe, reason = _is_url_safe(url)
+        if not safe:
+            return f"❌ URL 安全检查未通过: {reason}"
 
         skill_dir: Path | None = None
         try:
@@ -527,13 +580,12 @@ class SkillManager:
         return name or "custom-skill"
 
     def _find_skill_md(self, search_dir: Path) -> Path | None:
-        """在目录中查找 SKILL.md"""
+        """在目录中查找 SKILL.md，优先根目录，其次按路径深度确定性选择。"""
         skill_md = search_dir / "SKILL.md"
         if skill_md.exists():
             return skill_md
-        for path in search_dir.rglob("SKILL.md"):
-            return path
-        return None
+        candidates = sorted(search_dir.rglob("SKILL.md"), key=lambda p: len(p.parts))
+        return candidates[0] if candidates else None
 
     def _list_skill_candidates(self, base_dir: Path) -> list[str]:
         """列出可能包含技能的目录"""

@@ -68,6 +68,9 @@ class SkillEntry:
     name_i18n: dict[str, str] = field(default_factory=dict)
     description_i18n: dict[str, str] = field(default_factory=dict)
 
+    # 技能配置 schema（从 SKILL.md frontmatter 传递）
+    config: list[dict] = field(default_factory=list)
+
     # 全局启用 / 禁用标记
     # 用户通过 UI / skills.json 禁用的技能在注册表中保留但标记 disabled=True，
     # 这样 SkillCatalog 和 list_skills 工具会过滤它们，
@@ -124,6 +127,7 @@ class SkillEntry:
             supported_os=list(meta.supported_os),
             required_bins=list(meta.required_bins),
             required_env=list(meta.required_env),
+            config=list(meta.config) if meta.config else [],
             skill_path=str(skill.path),
             source_url=source_url,
             name_i18n=dict(meta.name_i18n),
@@ -208,10 +212,13 @@ class SkillRegistry:
         entry = self._skills.get(key)
         if entry is not None:
             return entry
-        for e in self._skills.values():
-            if e.name == key:
-                return e
-        return None
+        matches = [e for e in self._skills.values() if e.name == key]
+        if len(matches) > 1:
+            logger.warning(
+                "Ambiguous skill name '%s' matches %d entries: %s — returning first",
+                key, len(matches), [m.skill_id for m in matches],
+            )
+        return matches[0] if matches else None
 
     def _resolve_id(self, key: str) -> str | None:
         """将 key 解析为实际的 skill_id。"""
@@ -325,9 +332,11 @@ class SkillRegistry:
         Returns:
             匹配的技能列表
         """
-        results = []
-        query_lower = query.lower()
+        query_lower = query.strip().lower()
+        if not query_lower:
+            return []
 
+        results = []
         for skill in self._skills.values():
             if not include_disabled and (skill.disabled or skill.disable_model_invocation):
                 continue
@@ -341,6 +350,25 @@ class SkillRegistry:
 
         return results
 
+    _STOP_WORDS = frozenset({
+        "the", "a", "an", "is", "are", "was", "were", "be", "been", "being",
+        "have", "has", "had", "do", "does", "did", "will", "would", "could",
+        "should", "may", "might", "shall", "can", "need", "dare", "ought",
+        "used", "to", "of", "in", "for", "on", "with", "at", "by", "from",
+        "as", "into", "through", "during", "before", "after", "above",
+        "below", "between", "out", "off", "over", "under", "again",
+        "further", "then", "once", "here", "there", "when", "where", "why",
+        "how", "all", "each", "every", "both", "few", "more", "most",
+        "other", "some", "such", "no", "nor", "not", "only", "own", "same",
+        "so", "than", "too", "very", "just", "about", "also", "and", "but",
+        "or", "if", "this", "that", "these", "those", "it", "its",
+        "file", "files", "tool", "tools", "use", "using", "data", "work",
+        "make", "like", "new", "way", "help", "get", "set",
+        "的", "了", "和", "是", "在", "有", "不", "与", "或", "及",
+        "对", "将", "从", "到", "等", "用", "为", "把", "被", "让",
+        "可以", "使用", "通过", "支持", "提供", "进行", "功能", "操作",
+    })
+
     def find_relevant(self, context: str) -> list[SkillEntry]:
         """
         根据上下文查找相关技能
@@ -351,25 +379,35 @@ class SkillRegistry:
             context: 上下文文本 (如用户输入)
 
         Returns:
-            可能相关的技能列表
+            可能相关的技能列表，按相关度降序
         """
-        relevant = []
+        if not context or not context.strip():
+            return []
+
         context_lower = context.lower()
+        scored: list[tuple[SkillEntry, int]] = []
 
         for skill in self._skills.values():
-            if skill.disabled:
-                continue
-            if skill.disable_model_invocation:
+            if skill.disabled or skill.disable_model_invocation:
                 continue
 
-            # 检查描述中的关键词
-            desc_words = skill.description.lower().split()
+            score = 0
+            sid = skill.skill_id.lower()
+            sname = skill.name.lower()
+
+            if sid in context_lower or sname in context_lower:
+                score += 10
+
+            desc_words = set(skill.description.lower().split()) - self._STOP_WORDS
             for word in desc_words:
                 if len(word) > 3 and word in context_lower:
-                    relevant.append(skill)
-                    break
+                    score += 1
 
-        return relevant
+            if score > 0:
+                scored.append((skill, score))
+
+        scored.sort(key=lambda x: x[1], reverse=True)
+        return [s for s, _ in scored]
 
     def get_tool_schemas(self) -> list[dict]:
         """
