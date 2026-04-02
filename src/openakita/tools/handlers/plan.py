@@ -85,13 +85,13 @@ _session_handlers: dict[str, "PlanHandler"] = {}
 def _emit_todo_lifecycle_event(session_id: str, event_type: str, plan: dict | None = None) -> None:
     """通过 WebSocket 广播 todo 生命周期事件（供非流式路径使用）"""
     try:
-        import asyncio
         from ...api.routes.websocket import broadcast_event
+        from ...core.engine_bridge import fire_in_api
         data: dict = {"sessionId": session_id, "type": event_type}
         if plan:
             data["planId"] = plan.get("id", "")
             data["status"] = plan.get("status", "")
-        asyncio.ensure_future(broadcast_event(f"todo:{event_type}", data))
+        fire_in_api(broadcast_event(f"todo:{event_type}", data))
     except Exception as e:
         logger.debug(f"[Todo] Failed to emit lifecycle event {event_type}: {e}")
 
@@ -572,7 +572,7 @@ class PlanHandler:
                 if status == "in_progress":
                     deps = step.get("depends_on", [])
                     if deps:
-                        _DONE = {"completed", "skipped"}
+                        _DONE = {"completed", "skipped", "cancelled"}
                         steps_map = {s["id"]: s for s in _plan["steps"]}
                         blocked = [d for d in deps if steps_map.get(d, {}).get("status") not in _DONE]
                         if blocked:
@@ -588,7 +588,7 @@ class PlanHandler:
 
                 if status == "in_progress" and not step.get("started_at"):
                     step["started_at"] = datetime.now().isoformat()
-                elif status in ["completed", "failed", "skipped"]:
+                elif status in ["completed", "failed", "skipped", "cancelled"]:
                     step["completed_at"] = datetime.now().isoformat()
 
                 step_found = True
@@ -1063,15 +1063,23 @@ class PlanHandler:
             return
         plan_file = self.plan_dir / f"{plan['id']}.md"
 
+        def _esc(val: str) -> str:
+            if not val:
+                return '""'
+            if any(c in val for c in (':', '#', '"', "'", '\n', '{', '}', '[', ']')):
+                return '"' + val.replace('\\', '\\\\').replace('"', '\\"').replace('\n', '\\n') + '"'
+            return val
+
+        _name = plan.get("task_summary", "")
         content = f"""---
 id: {plan["id"]}
-name: {plan["task_summary"]}
+name: {_esc(_name)}
 status: {plan["status"]}
 created_at: {plan["created_at"]}
 completed_at: {plan.get("completed_at") or ""}
 ---
 
-# 任务计划：{plan["task_summary"]}
+# 任务计划：{_name}
 
 ## 步骤列表
 

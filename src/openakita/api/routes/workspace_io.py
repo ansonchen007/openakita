@@ -227,10 +227,10 @@ def _register_backup_task(scheduler: object, settings: dict) -> None:
         deletable=False,
     )
     import asyncio
-    loop = asyncio.get_event_loop()
-    if loop.is_running():
+    try:
+        loop = asyncio.get_running_loop()
         loop.create_task(scheduler.add_task(task))
-    else:
+    except RuntimeError:
         asyncio.run(scheduler.add_task(task))
     logger.info("[Workspace IO] Registered backup scheduler task")
 

@@ -370,7 +370,22 @@ class Agent:
         # 初始化技能系统 (SKILL.md 规范)
         self.skill_registry = SkillRegistry()
         self.skill_loader = SkillLoader(self.skill_registry)
-        self.skill_catalog = SkillCatalog(self.skill_registry)
+
+        # F6/F9: usage tracker + watcher (created early, wired after load)
+        from ..skills.usage import SkillUsageTracker
+        self._skill_usage_tracker = SkillUsageTracker(
+            settings.project_root / "data" / "skill_usage.json"
+        )
+        self.skill_catalog = SkillCatalog(
+            self.skill_registry, usage_tracker=self._skill_usage_tracker,
+        )
+
+        # F8: conditional activation manager
+        from ..skills.activation import SkillActivationManager
+        self._skill_activation = SkillActivationManager()
+
+        # F9: skill file watcher (started after skills are loaded)
+        self._skill_watcher = None
 
         # 延迟导入自进化系统（避免循环导入）
         from ..evolution.generator import SkillGenerator
@@ -1314,10 +1329,62 @@ class Agent:
         # 更新工具列表，添加技能工具
         self._update_skill_tools()
 
+        # F8: register conditional skills
+        for skill in self.skill_registry.list_enabled():
+            if skill.paths:
+                self._skill_activation.register_conditional(skill)
+
+        # F9: start skill file watcher
+        self._start_skill_watcher()
+
         # 通知首次加载完成，让 API/WS 层同步
         try:
             from ..skills.events import notify_skills_changed, SkillEvent
             notify_skills_changed(SkillEvent.LOAD)
+        except Exception:
+            pass
+
+    def _start_skill_watcher(self) -> None:
+        """F9: Start watching skill directories for hot-reload."""
+        try:
+            from ..skills.watcher import SkillWatcher
+            watch_dirs = [
+                settings.skills_path,
+                settings.project_root / ".cursor" / "skills",
+            ]
+            self._skill_watcher = SkillWatcher(
+                directories=watch_dirs,
+                on_change=self._on_skills_dir_changed,
+            )
+            self._skill_watcher.start()
+        except Exception as e:
+            logger.debug("Failed to start skill watcher: %s", e)
+
+    def _on_skills_dir_changed(self) -> None:
+        """F9: Callback when skill files change on disk."""
+        try:
+            from ..skills.watcher import clear_all_skill_caches
+            clear_all_skill_caches()
+            loaded = self.skill_loader.load_all(settings.project_root)
+            self.skill_catalog.invalidate_cache()
+            self._skill_catalog_text = self.skill_catalog.generate_catalog()
+            self._update_skill_tools()
+            from ..skills.events import notify_skills_changed, SkillEvent
+            notify_skills_changed(SkillEvent.HOT_RELOAD)
+            logger.info("Hot-reloaded %d skills after file change", loaded)
+        except Exception as e:
+            logger.warning("Skill hot-reload failed: %s", e)
+
+    def _cleanup_skill_resources(self) -> None:
+        """F9: Release all skill-related resources on shutdown."""
+        if self._skill_watcher:
+            self._skill_watcher.stop()
+            self._skill_watcher = None
+        if hasattr(self, "_skill_activation"):
+            self._skill_activation.clear()
+        try:
+            from .policy import get_policy_engine
+            get_policy_engine().clear_skill_allowlists()
         except Exception:
             pass
 
@@ -7265,6 +7332,17 @@ NEXT: 建议的下一步（如有）"""
             errors: 遇到的错误列表
         """
         logger.info("Shutting down agent...")
+
+        # F9: 清理技能相关资源
+        self._cleanup_skill_resources()
+
+        # 关闭 SkillStoreClient (如有)
+        skill_store_client = getattr(self, "_skill_store_client", None)
+        if skill_store_client and hasattr(skill_store_client, "close"):
+            try:
+                await skill_store_client.close()
+            except Exception:
+                pass
 
         # 结束记忆会话
         self.memory_manager.end_session(

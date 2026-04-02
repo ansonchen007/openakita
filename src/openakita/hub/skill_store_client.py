@@ -49,11 +49,16 @@ async def _retry_request(
 ) -> httpx.Response:
     """Execute an HTTP request with retry + exponential backoff for 5xx/timeout and 429."""
     last_exc: Exception | None = None
+    last_resp: httpx.Response | None = None
     for attempt in range(max_retries + 1):
         try:
             resp = await client.request(method, url, **kwargs)
+            last_resp = resp
             if resp.status_code == 429:
-                retry_after = float(resp.headers.get("Retry-After", _RATE_LIMIT_BACKOFF))
+                try:
+                    retry_after = float(resp.headers.get("Retry-After", _RATE_LIMIT_BACKOFF))
+                except (ValueError, TypeError):
+                    retry_after = _RATE_LIMIT_BACKOFF
                 wait = min(retry_after, 30.0) + random.uniform(0, 1)
                 logger.warning("Rate limited (429) on %s, waiting %.1fs", url, wait)
                 await asyncio.sleep(wait)
@@ -78,6 +83,8 @@ async def _retry_request(
                 await asyncio.sleep(wait)
             else:
                 raise
+    if last_resp is not None:
+        return last_resp
     raise last_exc  # type: ignore[misc]
 
 

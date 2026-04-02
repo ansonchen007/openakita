@@ -1593,7 +1593,12 @@ def get_prompt_debug_info(
     if skill_catalog:
         skills_index = skill_catalog.get_index_catalog()
         skills_detail = skill_catalog.get_catalog()
-        info["catalogs"]["skills"] = estimate_tokens(skills_index) + estimate_tokens(skills_detail)
+        _skills_rule_overhead = 200
+        info["catalogs"]["skills"] = (
+            estimate_tokens(skills_index)
+            + estimate_tokens(skills_detail)
+            + _skills_rule_overhead
+        )
 
     if mcp_catalog:
         mcp_text = mcp_catalog.get_catalog()

@@ -328,6 +328,10 @@ class ScheduledTask:
             return
         if self.status == TaskStatus.SCHEDULED and self.enabled:
             return
+        if self.status == TaskStatus.SCHEDULED and not self.enabled:
+            self.enabled = True
+            self.updated_at = datetime.now()
+            return
         if not self._check_transition(TaskStatus.SCHEDULED):
             return
         self.enabled = True

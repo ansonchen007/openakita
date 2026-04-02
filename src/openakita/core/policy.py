@@ -383,6 +383,9 @@ class PolicyEngine:
         # Pending UI confirmations: tool_id → {tool_name, params}
         # Populated when SSE security_confirm is sent; consumed by API callback.
         self._pending_ui_confirms: dict[str, dict[str, Any]] = {}
+        # F7: Temporary allowlists granted by skill activation.
+        # key = skill_id, value = set of tool names
+        self._skill_allowlists: dict[str, set[str]] = {}
 
     @property
     def config(self) -> SecurityConfig:
@@ -580,6 +583,15 @@ class PolicyEngine:
         if not self._config.enabled:
             return PolicyResult(decision=PolicyDecision.ALLOW, reason="Security disabled")
 
+        # F7: Skill-granted temporary allowlist bypass
+        if self._is_skill_allowed(tool_name):
+            self._on_allow(tool_name)
+            return PolicyResult(
+                decision=PolicyDecision.ALLOW,
+                reason="Allowed by skill temporary allowlist",
+                metadata={"skill_allowlist": True},
+            )
+
         # Bypass CONFIRM if user recently approved an identical action
         if self._is_recently_confirmed(tool_name, params):
             return PolicyResult(
@@ -626,6 +638,37 @@ class PolicyEngine:
 
         self._on_allow(tool_name)
         return PolicyResult(decision=PolicyDecision.ALLOW)
+
+    # ----- F7: Skill temporary allowlist ------------------------------------
+
+    def _is_skill_allowed(self, tool_name: str) -> bool:
+        """Check if tool_name is temporarily allowed by any active skill."""
+        for allowed_set in self._skill_allowlists.values():
+            if tool_name in allowed_set:
+                return True
+        return False
+
+    def add_skill_allowlist(self, skill_id: str, tool_names: list[str]) -> None:
+        """Grant temporary tool access for a skill context."""
+        if tool_names:
+            self._skill_allowlists[skill_id] = set(tool_names)
+            logger.debug(
+                "[Policy] Skill '%s' granted temporary access to: %s",
+                skill_id, tool_names,
+            )
+
+    def remove_skill_allowlist(self, skill_id: str) -> None:
+        """Revoke temporary tool access for a skill context."""
+        removed = self._skill_allowlists.pop(skill_id, None)
+        if removed:
+            logger.debug(
+                "[Policy] Revoked skill '%s' temporary access to: %s",
+                skill_id, removed,
+            )
+
+    def clear_skill_allowlists(self) -> None:
+        """Revoke all skill-granted allowlists."""
+        self._skill_allowlists.clear()
 
     # ----- L1: Zone policy --------------------------------------------------
 

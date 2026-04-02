@@ -241,6 +241,14 @@ class SkillsHandler:
         if usage_tracker:
             usage_tracker.record(skill.skill_id)
 
+        # F7: inject allowed_tools into policy engine
+        if skill.allowed_tools:
+            try:
+                from openakita.core.policy import get_policy_engine
+                get_policy_engine().add_skill_allowlist(skill.skill_id, skill.allowed_tools)
+            except Exception:
+                pass
+
         exposed = build_skill_exposure(skill)
         body = skill.get_body() or "(无详细指令)"
 
@@ -288,6 +296,10 @@ class SkillsHandler:
             output += f"**许可证**: {skill.license}\n"
         if skill.compatibility:
             output += f"**兼容性**: {skill.compatibility}\n"
+        if skill.model:
+            output += f"**推荐模型**: {skill.model}\n"
+        if skill.execution_context and skill.execution_context != "inline":
+            output += f"**执行模式**: {skill.execution_context}\n"
 
         # F4: display argument schema
         if skill.arguments:

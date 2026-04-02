@@ -183,28 +183,37 @@ class TaskExecutor:
         chat_id = task.chat_id
 
         # 检查主通道适配器是否存在且运行中
-        adapter = self.gateway._adapters.get(channel_id) if hasattr(self.gateway, '_adapters') else None
+        adapter = (
+            self.gateway.get_adapter(channel_id)
+            if hasattr(self.gateway, 'get_adapter')
+            else None
+        )
         channel_active = adapter is not None and getattr(adapter, 'is_running', False)
 
-        msg_id = await self.gateway.send(
-            channel=channel_id,
-            chat_id=chat_id,
-            text=message,
-        )
+        try:
+            msg_id = await self.gateway.send(
+                channel=channel_id,
+                chat_id=chat_id,
+                text=message,
+            )
+        except Exception as e:
+            logger.warning(
+                f"TaskExecutor: reminder {task.id} primary send error: {e}"
+            )
+            msg_id = None
+            channel_active = False
 
         if msg_id is not None:
             logger.info(f"TaskExecutor: reminder {task.id} delivered (msg_id={msg_id})")
             return True
 
         if channel_active:
-            # 通道活跃但未返回 msg_id（如 QQ 官方机器人），大概率已送达
             logger.warning(
                 f"TaskExecutor: reminder {task.id} sent to active channel "
                 f"{channel_id}/{chat_id} but no msg_id returned (likely delivered)"
             )
             return True
 
-        # 通道不活跃且发送失败，尝试备用通道
         logger.warning(
             f"TaskExecutor: reminder {task.id} failed on primary channel "
             f"{channel_id}/{chat_id} (inactive), trying fallback channels"
@@ -222,9 +231,13 @@ class TaskExecutor:
             if (channel, chat_id) == primary:
                 continue  # 主通道已失败，跳过
 
-            adapter = self.gateway._adapters.get(channel) if hasattr(self.gateway, '_adapters') else None
-            if adapter and not getattr(adapter, 'is_running', False):
-                continue  # 跳过不活跃的通道
+            adapter = (
+                self.gateway.get_adapter(channel)
+                if hasattr(self.gateway, 'get_adapter')
+                else None
+            )
+            if not adapter or not getattr(adapter, 'is_running', False):
+                continue
 
             try:
                 msg_id = await self.gateway.send(
@@ -383,7 +396,8 @@ class TaskExecutor:
                     self._run_agent(agent, prompt), timeout=task_timeout
                 )
             except TimeoutError:
-                error_msg = f"任务执行超时（超过 {task_timeout // 60} 分钟未完成）"
+                timeout_display = f"{task_timeout // 60} 分钟" if task_timeout >= 60 else f"{task_timeout} 秒"
+                error_msg = f"任务执行超时（超过 {timeout_display} 未完成）"
                 logger.error(f"TaskExecutor: task {task.id} timed out after {task_timeout}s")
                 if not skip_end_notification:
                     await self._send_end_notification(task, success=False, message=error_msg)
@@ -519,11 +533,8 @@ class TaskExecutor:
                 from ..core.im_context import reset_im_context
                 reset_im_context(tokens)
                 agent._im_context_tokens = None
-            else:
-                from ..core.im_context import set_im_context
-                set_im_context(session=None, gateway=None)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Failed to cleanup IM context: {e}")
 
     async def _create_agent(self) -> Any:
         """创建 Agent 实例（不启动 scheduler，避免重复执行任务）"""

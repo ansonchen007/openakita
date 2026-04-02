@@ -39,8 +39,8 @@ export function FloatingPlanBar({ plan }: { plan: ChatTodo }) {
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
   const TERMINAL_STATES = ["completed", "failed", "skipped", "cancelled"];
-  const succeeded = plan.steps.filter((s) => s.status === "completed").length;
   const resolved = plan.steps.filter((s) => TERMINAL_STATES.includes(s.status)).length;
+  const failed = plan.steps.filter((s) => s.status === "failed").length;
   const total = plan.steps.length;
   const pct = total > 0 ? Math.round((resolved / total) * 100) : 0;
   const allDone = resolved === total && total > 0;
@@ -62,7 +62,7 @@ export function FloatingPlanBar({ plan }: { plan: ChatTodo }) {
           </span>
         </div>
         <div className="floatingTodoHeaderRight">
-          <span className="floatingTodoProgress">{succeeded}/{total}</span>
+          <span className="floatingTodoProgress">{resolved}/{total}{failed > 0 ? ` (${failed} 失败)` : ""}</span>
           <span className="floatingTodoChevron" style={{ transform: expanded ? "rotate(180deg)" : "rotate(0deg)" }}>
             <IconChevronDown size={14} />
           </span>

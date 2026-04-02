@@ -274,10 +274,10 @@ class CronTrigger(Trigger):
         start = start.replace(second=0, microsecond=0)
 
         current = start
-        # 最多尝试 4 年的月份（48 个月），每月内最多 31*24*60 次分钟检查
-        max_months = 48
+        # 每次迭代最少前进 1 分钟，最多搜索约 4 年（48 月 × 31 天）
+        max_iterations = 48 * 31
 
-        for _ in range(max_months):
+        for _ in range(max_iterations):
             if current.month not in self.month_spec:
                 # 跳到下一个匹配的月份
                 current = self._next_matching_month(current)
@@ -289,7 +289,7 @@ class CronTrigger(Trigger):
                current.weekday() not in self._convert_weekday(self.weekday_spec):
                 # 跳到下一天
                 current = (current + timedelta(days=1)).replace(hour=0, minute=0)
-                if current > start + timedelta(days=max_months * 31):
+                if current > start + timedelta(days=max_iterations):
                     break
                 continue
 

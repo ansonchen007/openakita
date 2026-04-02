@@ -108,15 +108,16 @@ class TaskScheduler:
         now = datetime.now()
         missed_tasks: list[ScheduledTask] = []
 
-        for task in self._tasks.values():
-            if task.is_active:
-                if task.next_run is None:
-                    self._update_next_run(task)
-                elif task.next_run < now:
-                    missed_tasks.append(task)
-                    self._recalculate_missed_run(task, now)
+        async with self._lock:
+            for task in self._tasks.values():
+                if task.is_active:
+                    if task.next_run is None:
+                        self._update_next_run(task)
+                    elif task.next_run < now:
+                        missed_tasks.append(task)
+                        self._recalculate_missed_run(task, now)
 
-        self._save_tasks()
+            self._save_tasks()
 
         # 启动调度循环
         self._scheduler_task = asyncio.create_task(self._scheduler_loop())
@@ -149,8 +150,9 @@ class TaskScheduler:
                 f"Waiting for {len(running_ids)} running tasks to finish "
                 f"(timeout={graceful_timeout}s): {running_ids}"
             )
-            deadline = asyncio.get_event_loop().time() + graceful_timeout
-            while self._running_tasks and asyncio.get_event_loop().time() < deadline:
+            loop = asyncio.get_running_loop()
+            deadline = loop.time() + graceful_timeout
+            while self._running_tasks and loop.time() < deadline:
                 await asyncio.sleep(0.5)
 
             still_running = list(self._running_tasks)
@@ -159,14 +161,18 @@ class TaskScheduler:
                     f"Force-stopping: {len(still_running)} tasks still running "
                     f"after {graceful_timeout}s timeout, resetting to SCHEDULED: {still_running}"
                 )
-                for tid in still_running:
-                    task = self._tasks.get(tid)
-                    if task and task.status == TaskStatus.RUNNING:
-                        task.status = TaskStatus.SCHEDULED
-                        task.updated_at = datetime.now()
-                self._running_tasks.clear()
+                async with self._lock:
+                    for tid in still_running:
+                        task = self._tasks.get(tid)
+                        if task and task.status == TaskStatus.RUNNING:
+                            task.status = TaskStatus.SCHEDULED
+                            task.updated_at = datetime.now()
+                    self._running_tasks.clear()
+                    self._save_tasks()
+                return
 
-        self._save_tasks()
+        async with self._lock:
+            self._save_tasks()
 
         logger.info("TaskScheduler stopped")
 
@@ -446,9 +452,10 @@ class TaskScheduler:
             self._advance_next_run(task)
             logger.error(f"Task {task.id} failed: {error_msg}", exc_info=True)
 
-        self._executions.append(execution)
-        self._save_tasks()
-        self._save_executions()
+        async with self._lock:
+            self._executions.append(execution)
+            self._save_tasks()
+            self._save_executions()
 
         return execution
 

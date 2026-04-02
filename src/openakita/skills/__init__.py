@@ -34,7 +34,9 @@ from .registry import (
     get_skill,
     register_skill,
 )
+from .activation import SkillActivationManager
 from .usage import SkillUsageTracker
+from .watcher import SkillWatcher, clear_all_skill_caches
 
 __all__ = [
     # Parser
@@ -60,4 +62,9 @@ __all__ = [
     "notify_skills_changed",
     # Usage
     "SkillUsageTracker",
+    # Activation
+    "SkillActivationManager",
+    # Watcher
+    "SkillWatcher",
+    "clear_all_skill_caches",
 ]

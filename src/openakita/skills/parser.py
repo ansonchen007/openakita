@@ -328,7 +328,12 @@ class SkillParser:
         # F1: 新字段解析
         when_to_use = str(data.get("when-to-use", "") or "")
         keywords_raw = data.get("keywords", [])
-        keywords = [str(k) for k in keywords_raw] if isinstance(keywords_raw, list) else []
+        if isinstance(keywords_raw, list):
+            keywords = [str(k) for k in keywords_raw]
+        elif isinstance(keywords_raw, str):
+            keywords = [k.strip() for k in keywords_raw.split(",") if k.strip()]
+        else:
+            keywords = []
         arguments_raw = data.get("arguments", [])
         arguments = [a for a in arguments_raw if isinstance(a, dict)] if isinstance(arguments_raw, list) else []
         argument_hint = str(data.get("argument-hint", "") or "")
@@ -394,10 +399,10 @@ class SkillParser:
         errors = []
         meta = skill.metadata
 
-        # Name length
+        # Name length (soft recommendation; hard limit is 128 in _validate_name)
         if len(meta.name) > 64:
             errors.append(
-                f"Skill name '{meta.name[:30]}...' exceeds 64 characters ({len(meta.name)})"
+                f"Skill name '{meta.name[:30]}...' exceeds recommended 64 characters ({len(meta.name)})"
             )
 
         # Directory name vs expected

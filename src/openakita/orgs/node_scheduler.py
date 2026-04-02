@@ -140,9 +140,13 @@ class OrgNodeScheduler:
                 result = await self._execute_schedule(org_id, node_id, sched)
 
                 result_text = str(result.get("result", "")) if isinstance(result, dict) else str(result)
-                has_issue = result.get("success") is False if isinstance(result, dict) else (
-                    "异常" in result_text or "错误" in result_text or "error" in result_text.lower()
-                )
+                keyword_check = "异常" in result_text or "错误" in result_text or "error" in result_text.lower()
+                if isinstance(result, dict) and "error" in result:
+                    has_issue = True
+                elif isinstance(result, dict) and "success" in result:
+                    has_issue = result["success"] is False
+                else:
+                    has_issue = keyword_check
 
                 if has_issue:
                     sched.consecutive_clean = 0

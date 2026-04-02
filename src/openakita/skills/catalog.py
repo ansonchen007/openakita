@@ -209,9 +209,9 @@ Do not infer filesystem paths from the workspace map; `get_skill_info` is author
     def generate_catalog_budgeted(self, budget_chars: int = 0) -> str:
         """Generate catalog with three-level degradation if budget_chars is set.
 
-        Level A: full (name + description + when_to_use)
-        Level B: compact (name + when_to_use hint)
-        Level C: index (names only)
+        Level A: full (name + description + when_to_use) via generate_catalog()
+        Level B: name + short hint for each skill
+        Level C: comma-separated names only
 
         If budget_chars <= 0, returns full catalog without budget constraint.
         """
@@ -222,15 +222,25 @@ Do not infer filesystem paths from the workspace map; `get_skill_info` is author
         if len(full) <= budget_chars:
             return full
 
-        compact = self.get_compact_catalog()
-        if len(compact) <= budget_chars:
-            return compact
-
+        # Level B: name + short hint
         with self._lock:
             skills = self._list_model_visible()
             if not skills:
                 return "No skills installed."
-            names = [s.name for s in skills[:50]]
+            b_lines = ["## Skills (compact)"]
+            for s in skills:
+                hint = getattr(s, "when_to_use", "") or ""
+                if hint:
+                    b_lines.append(f"- **{s.name}**: {hint[:60]}")
+                else:
+                    desc_short = (s.description or "")[:40]
+                    b_lines.append(f"- **{s.name}**: {desc_short}")
+            level_b = "\n".join(b_lines)
+            if len(level_b) <= budget_chars:
+                return level_b
+
+            # Level C: names only
+            names = [s.name for s in skills]
             return f"Skills ({len(skills)}): {', '.join(names)}"
 
     def get_skill_summary(self, skill_name: str) -> str | None:
