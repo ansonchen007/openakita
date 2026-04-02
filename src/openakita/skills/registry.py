@@ -15,6 +15,33 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+_MARKETPLACE_HOSTS = {"github.com/openakita", "openakita.com", "skill.openakita.com"}
+
+_RESTRICTED_TOOLS_FOR_UNTRUSTED = frozenset({
+    "run_shell", "run_command", "execute_command",
+    "write_file", "delete_file",
+    "run_skill_script", "execute_skill",
+})
+
+
+def _infer_trust_level(skill: "ParsedSkill", source_url: str | None) -> str:
+    """Infer trust level from skill metadata and origin."""
+    if getattr(skill.metadata, "system", False):
+        return "builtin"
+    if not source_url:
+        # Check if the skill is from the builtin directory
+        if skill.path:
+            from pathlib import Path
+            path_str = str(Path(skill.path)).replace("\\", "/").lower()
+            if "/builtin/" in path_str or "/site-packages/" in path_str:
+                return "builtin"
+        return "local"
+    url_lower = source_url.lower()
+    for host in _MARKETPLACE_HOSTS:
+        if host in url_lower:
+            return "marketplace"
+    return "remote"
+
 
 @dataclass
 class SkillEntry:
@@ -82,6 +109,13 @@ class SkillEntry:
     hooks: dict = field(default_factory=dict)
     model: str | None = None
 
+    # F12: 信任等级 ("builtin" | "local" | "marketplace" | "remote")
+    # builtin: 随安装包分发的内置技能
+    # local: 用户本地创建的技能
+    # marketplace: 从官方市场安装的技能
+    # remote: 从第三方 URL/Git 安装的技能（不可信）
+    trust_level: str = "local"
+
     # 全局启用 / 禁用标记
     # 用户通过 UI / skills.json 禁用的技能在注册表中保留但标记 disabled=True，
     # 这样 SkillCatalog 和 list_skills 工具会过滤它们，
@@ -98,6 +132,26 @@ class SkillEntry:
     def get_display_description(self, lang: str = "zh") -> str:
         """按语言返回显示描述，找不到则回退到 description"""
         return self.description_i18n.get(lang, self.description)
+
+    @property
+    def skill_dir(self) -> "Path":
+        """Return the skill's directory path."""
+        from pathlib import Path
+        if self.skill_path:
+            p = Path(self.skill_path)
+            return p.parent if p.name.upper() == "SKILL.MD" else p
+        return Path(".")
+
+    @property
+    def is_trusted(self) -> bool:
+        """Whether this skill comes from a trusted source."""
+        return self.trust_level in ("builtin", "local", "marketplace")
+
+    def get_restricted_tools(self) -> frozenset[str]:
+        """Return tools that should be blocked for untrusted skills."""
+        if self.is_trusted:
+            return frozenset()
+        return _RESTRICTED_TOOLS_FOR_UNTRUSTED
 
     @classmethod
     def from_parsed_skill(
@@ -120,6 +174,9 @@ class SkillEntry:
                 source_url = source_file.read_text(encoding="utf-8").strip() or None
             except Exception:
                 pass
+
+        # F12: determine trust level
+        trust_level = _infer_trust_level(skill, source_url)
 
         return cls(
             skill_id=skill_id or meta.name,
@@ -148,6 +205,7 @@ class SkillEntry:
             paths=list(meta.paths),
             hooks=dict(meta.hooks) if meta.hooks else {},
             model=meta.model,
+            trust_level=trust_level,
             skill_path=str(skill.path),
             source_url=source_url,
             name_i18n=dict(meta.name_i18n),

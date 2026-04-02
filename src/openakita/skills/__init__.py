@@ -35,6 +35,7 @@ from .registry import (
     register_skill,
 )
 from .activation import SkillActivationManager
+from .skill_hooks import SkillHookRunner, create_hook_runner, validate_hooks
 from .usage import SkillUsageTracker
 from .watcher import SkillWatcher, clear_all_skill_caches
 
@@ -64,6 +65,10 @@ __all__ = [
     "SkillUsageTracker",
     # Activation
     "SkillActivationManager",
+    # Hooks
+    "SkillHookRunner",
+    "create_hook_runner",
+    "validate_hooks",
     # Watcher
     "SkillWatcher",
     "clear_all_skill_caches",

@@ -122,14 +122,25 @@ class SkillWatcher:
 def clear_all_skill_caches() -> None:
     """Clear all skill-related caches across the system.
 
-    Utility function called by the watcher callback and
-    other cache invalidation paths.
+    Unified cache invalidation entry point called by:
+    - Hot-reload watcher callback
+    - Manual reload operations
+    - Skill install/uninstall flows
     """
     logger.debug("Clearing all skill caches")
 
+    # F13: Clear loader internal caches
     try:
         from .loader import SkillLoader
         if hasattr(SkillLoader, "_load_cache"):
             SkillLoader._load_cache = {}
+    except Exception:
+        pass
+
+    # F13: Clear parser memoization cache
+    try:
+        from .parser import SkillParser
+        if hasattr(SkillParser, "_parse_cache"):
+            SkillParser._parse_cache.clear()
     except Exception:
         pass

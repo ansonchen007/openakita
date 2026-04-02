@@ -179,6 +179,9 @@ class SkillParser:
     # YAML frontmatter 正则
     FRONTMATTER_PATTERN = re.compile(r"^---\s*\n(.*?)\n---\s*\n(.*)$", re.DOTALL)
 
+    # F13: mtime-based parse cache — key: (resolved_path, mtime), value: ParsedSkill
+    _parse_cache: dict[tuple[str, float], "ParsedSkill"] = {}
+
     def parse_file(self, path: Path) -> ParsedSkill:
         """
         解析 SKILL.md 文件
@@ -196,8 +199,25 @@ class SkillParser:
         if not path.exists():
             raise FileNotFoundError(f"SKILL.md not found: {path}")
 
+        # F13: check mtime-based cache
+        resolved = str(path.resolve())
+        try:
+            mtime = path.stat().st_mtime
+        except OSError:
+            mtime = 0.0
+        cache_key = (resolved, mtime)
+        cached = self._parse_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
         content = path.read_text(encoding="utf-8")
-        return self.parse_content(content, path)
+        result = self.parse_content(content, path)
+
+        # Store in cache (limit size to prevent unbounded growth)
+        if len(self._parse_cache) > 500:
+            self._parse_cache.clear()
+        self._parse_cache[cache_key] = result
+        return result
 
     def parse_content(self, content: str, path: Path) -> ParsedSkill:
         """
