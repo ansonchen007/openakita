@@ -48,7 +48,7 @@ function messageReducer(state: ChatMessage[], action: MessageAction): ChatMessag
   }
 }
 
-const __DEV__ = typeof process !== "undefined" && process.env?.NODE_ENV === "development";
+const __DEV__ = typeof globalThis !== "undefined" && (globalThis as Record<string, unknown>).__DEV__ === true || import.meta.env?.DEV === true;
 
 // ── Conversation Actions ──
 

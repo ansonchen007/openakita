@@ -183,7 +183,7 @@ function ChainEntryLine({ entry, onSkipStep }: { entry: ChainEntry; onSkipStep?:
       const isError = entry.status === "error";
       const icon = isError ? <IconX size={11} /> : <IconCheck size={11} />;
       const cls = isError ? "chainNarrToolEnd chainNarrToolError" : "chainNarrToolEnd";
-      const summary = summarizeToolResult(entry.tool, entry.result, isError, t);
+      const summary = summarizeToolResult(entry.tool, entry.result, isError, t as unknown as (key: string, fallbackOrOpts?: string | Record<string, unknown>) => string);
       return (
         <div className={cls}>
           {icon}
@@ -247,7 +247,7 @@ function ChainGroupItem({ group, onToggle, isLast, streaming, onSkipStep }: {
       </div>
       {showContent && (
         <div className="chainNarrFlow">
-          {group.entries.map((entry, i) => (
+          {group.entries.map((entry: ChainEntry, i: number) => (
             <ChainEntryLine key={i} entry={entry} onSkipStep={onSkipStep} />
           ))}
           {isActive && group.entries.length > 0 && (

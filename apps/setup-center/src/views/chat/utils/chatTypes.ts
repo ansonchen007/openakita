@@ -20,7 +20,7 @@ import type {
   ChainToolCall,
   ChainEntry,
   ChainSummaryItem,
-} from "../../types";
+} from "../../../types";
 
 export type {
   ChatMessage,
