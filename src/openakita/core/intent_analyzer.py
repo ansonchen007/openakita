@@ -63,6 +63,7 @@ class IntentResult:
     force_tool: bool = False
     todo_required: bool = False
     suggest_plan: bool = False
+    suppress_plan: bool = False
     complexity: ComplexitySignal = field(default_factory=ComplexitySignal)
     raw_output: str = ""
     fast_reply: bool = False
@@ -262,9 +263,10 @@ class IntentAnalyzer:
     ) -> IntentResult:
         """Analyze user message intent. Rule-based shortcut for obvious greetings,
         LLM analysis for everything else."""
-        fast_result = _try_fast_chat_shortcut(message, has_history=has_history)
-        if fast_result is not None:
-            return fast_result
+        # fast_reply 快捷路径已禁用，所有消息统一走 LLM 意图分析
+        # fast_result = _try_fast_chat_shortcut(message, has_history=has_history)
+        # if fast_result is not None:
+        #     return fast_result
 
         try:
             response = await self.brain.compiler_think(
@@ -369,6 +371,9 @@ def _parse_intent_output(raw_output: str, message: str) -> IntentResult:
     if intent in (IntentType.TASK,):
         result.complexity = _analyze_complexity(message, result)
         result.suggest_plan = result.complexity.should_suggest_plan
+        if result.complexity.score < 2:
+            result.todo_required = False
+            result.suppress_plan = True
         if result.suggest_plan:
             logger.info(
                 f"[IntentAnalyzer] Complex task detected (score={result.complexity.score}), "

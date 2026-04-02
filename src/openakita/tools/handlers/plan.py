@@ -413,17 +413,6 @@ class PlanHandler:
 
         plan_id = f"plan_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{secrets.token_hex(3)}"
 
-        # 创建 Plan 后：确保工具护栏至少追问 1 次，避免“无确认文本”直接结束
-        # 注意：chat 循环里也会基于 active plan 动态提升 effective retries，这里是额外的全局兜底。
-        try:
-            from ...config import settings as _settings
-
-            if int(getattr(_settings, "force_tool_call_max_retries", 1)) < 1:
-                _settings.force_tool_call_max_retries = 1
-                logger.info("[Plan] force_tool_call_max_retries bumped to 1 after create_todo")
-        except Exception:
-            pass
-
         steps = params.get("steps", [])
         if isinstance(steps, str):
             try:

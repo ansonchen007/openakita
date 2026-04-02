@@ -317,6 +317,10 @@ async def _stream_chat(
             _full_reply += chunk
             if len(_reply_preview) < 120:
                 _reply_preview += chunk
+        elif event_type == "text_replace" and data and "content" in data:
+            _full_reply = data["content"]
+            _reply_chars = len(_full_reply)
+            _reply_preview = _full_reply[:120]
         elif event_type == "chain_text" and data and "content" in data:
             chunk = data["content"]
             _reply_chars += len(chunk)

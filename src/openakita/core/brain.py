@@ -41,7 +41,12 @@ from ..llm.types import (
     VideoBlock,
     VideoContent,
 )
-from .token_tracking import record_usage as _record_token_usage
+from .token_tracking import (
+    TokenTrackingContext,
+    record_usage as _record_token_usage,
+    reset_tracking_context,
+    set_tracking_context,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -560,6 +565,58 @@ class Brain:
         self._record_usage(response)
 
         return self._convert_response_to_anthropic(response)
+
+    async def messages_create_stream(
+        self,
+        use_thinking: bool = None,
+        thinking_depth: str | None = None,
+        **kwargs,
+    ):
+        """流式版本的 messages_create，yield Provider 原始流事件 (dict)。
+
+        参数准备与 messages_create_async 一致，但调用 LLMClient.chat_stream()
+        逐事件 yield，供 StreamAccumulator 消费。Token 用量由调用方在流结束后
+        通过 StreamAccumulator 获取的 usage 信息自行记录。
+        """
+        if use_thinking is None:
+            use_thinking = self.is_thinking_enabled()
+
+        llm_messages = self._convert_messages_to_llm(kwargs.get("messages", []))
+        system = kwargs.get("system", "")
+        llm_tools = self._convert_tools_to_llm(kwargs.get("tools", []))
+        max_tokens = kwargs.get("max_tokens", self.max_tokens)
+        conversation_id = kwargs.get("conversation_id")
+        extra_params = kwargs.get("extra_params")
+
+        logger.info(
+            f"[Brain] messages_create_stream called: msg_count={len(llm_messages)}, "
+            f"max_tokens={max_tokens}, use_thinking={use_thinking}, "
+            f"tools_count={len(llm_tools) if llm_tools else 0}, model_kwarg={kwargs.get('model', 'N/A')}"
+        )
+
+        self._dump_llm_request(system, llm_messages, llm_tools, caller="messages_create_stream")
+
+        _tt = set_tracking_context(TokenTrackingContext(
+            session_id=kwargs.get("conversation_id", ""),
+            operation_type="chat_react_iteration_stream",
+            channel="api",
+            iteration=kwargs.get("iteration", 0),
+            agent_profile_id=kwargs.get("agent_profile_id", "default"),
+        ))
+        try:
+            async for event in self._llm_client.chat_stream(
+                messages=llm_messages,
+                system=system,
+                tools=llm_tools,
+                max_tokens=max_tokens,
+                enable_thinking=use_thinking,
+                thinking_depth=thinking_depth,
+                conversation_id=conversation_id,
+                extra_params=extra_params,
+            ):
+                yield event
+        finally:
+            reset_tracking_context(_tt)
 
     # ========================================================================
     # Token 用量记录

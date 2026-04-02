@@ -80,7 +80,7 @@ class Intervention:
 
 
 # -- 配置常量 --
-TOOL_THRASH_WINDOW = 6
+TOOL_THRASH_WINDOW = 10
 TOOL_THRASH_FAIL_THRESHOLD = 3
 EDIT_THRASH_WINDOW = 10
 EDIT_THRASH_THRESHOLD = 3
@@ -88,6 +88,7 @@ REASONING_SIMILARITY_THRESHOLD = 0.80
 REASONING_SIMILARITY_WINDOW = 3
 TOKEN_ANOMALY_THRESHOLD = 40000
 SIGNATURE_REPEAT_WARN = 3
+SIGNATURE_REPEAT_STRATEGY_SWITCH = 4
 SIGNATURE_REPEAT_TERMINATE = 5
 PLAN_DRIFT_WINDOW = 5
 EXTREME_ITERATION_THRESHOLD = 50
@@ -251,7 +252,9 @@ class RuntimeSupervisor:
         if token_intervention:
             interventions.append(token_intervention)
 
-        extreme_intervention = self._check_extreme_iterations(iteration)
+        extreme_intervention = self._check_extreme_iterations(
+            iteration, has_active_todo=has_active_todo,
+        )
         if extreme_intervention:
             interventions.append(extreme_intervention)
 
@@ -304,7 +307,7 @@ class RuntimeSupervisor:
     # ==================== 检测器 ====================
 
     def _check_signature_repeat(self, iteration: int) -> Intervention | None:
-        """签名重复检测（从 ReasoningEngine._detect_loops 迁移增强）"""
+        """签名重复检测：3次NUDGE -> 4次STRATEGY_SWITCH -> 5次TERMINATE"""
         recent = self._signature_history[-TOOL_THRASH_WINDOW:]
         if len(recent) < self._signature_repeat_warn:
             return None
@@ -320,6 +323,37 @@ class RuntimeSupervisor:
                 should_terminate=True,
             )
 
+        if most_common_count >= SIGNATURE_REPEAT_STRATEGY_SWITCH:
+            return Intervention(
+                level=InterventionLevel.STRATEGY_SWITCH,
+                pattern=PatternType.SIGNATURE_REPEAT,
+                message=f"Repeated signature '{most_common_sig[:60]}' ({most_common_count}x) — rollback",
+                should_inject_prompt=True,
+                should_rollback=True,
+                prompt_injection=(
+                    "[系统提示] 检测到连续相同工具调用已达 4 次，系统已回滚。"
+                    "如果任务已完成，请直接回复用户最终结果，不要再调用任何工具。"
+                    "如果确实需要继续，必须使用完全不同的工具或参数。"
+                    "禁止再次调用与之前相同的工具+参数组合。"
+                ),
+            )
+
+        # 交替模式检测：窗口内仅 1-2 种签名以 ping-pong 方式反复切换
+        if len(set(recent)) <= 2 and len(recent) >= 6:
+            transitions = sum(1 for i in range(len(recent) - 1) if recent[i] != recent[i + 1])
+            if transitions >= len(recent) // 2:
+                return Intervention(
+                    level=InterventionLevel.STRATEGY_SWITCH,
+                    pattern=PatternType.SIGNATURE_REPEAT,
+                    message=f"Alternating tool pattern ({transitions} transitions in {len(recent)} calls)",
+                    should_inject_prompt=True,
+                    should_rollback=True,
+                    prompt_injection=(
+                        "[系统提示] 检测到工具调用在两个操作间交替循环。"
+                        "请停止当前模式，直接回复用户结果。"
+                    ),
+                )
+
         if most_common_count >= self._signature_repeat_warn:
             return Intervention(
                 level=InterventionLevel.NUDGE,
@@ -328,7 +362,7 @@ class RuntimeSupervisor:
                 should_inject_prompt=True,
                 prompt_injection=(
                     "[系统提示] 你在最近几轮中用完全相同的参数重复调用了同一个工具。"
-                    "请评估：1. 任务已完成则停止调用。2. 遇到困难则换方法。"
+                    "请评估：1. 任务已完成则停止调用并回复用户。2. 遇到困难则换方法。"
                 ),
             )
 
@@ -445,20 +479,39 @@ class RuntimeSupervisor:
 
         return None
 
-    def _check_extreme_iterations(self, iteration: int) -> Intervention | None:
-        """极端迭代阈值检测"""
+    def _check_extreme_iterations(
+        self, iteration: int, *, has_active_todo: bool = False,
+    ) -> Intervention | None:
+        """极端迭代阈值检测。
+
+        无 Plan/Todo 的简单任务直接 TERMINATE；有 Plan 时仍 ESCALATE 给用户。
+        """
+        if self._consecutive_tool_rounds < self._extreme_iteration_threshold:
+            return None
+
         if self._consecutive_tool_rounds == self._extreme_iteration_threshold:
-            return Intervention(
-                level=InterventionLevel.ESCALATE,
-                pattern=PatternType.EXTREME_ITERATIONS,
-                message=f"Reached {self._extreme_iteration_threshold} consecutive iterations",
-                should_inject_prompt=True,
-                should_escalate=True,
-                prompt_injection=(
-                    f"[系统提示] 当前任务已连续执行了 {self._extreme_iteration_threshold} 轮。"
-                    "请向用户汇报进度并询问是否继续。"
-                ),
-            )
+            if has_active_todo:
+                return Intervention(
+                    level=InterventionLevel.ESCALATE,
+                    pattern=PatternType.EXTREME_ITERATIONS,
+                    message=f"Reached {self._extreme_iteration_threshold} consecutive iterations (Plan active, escalating)",
+                    should_inject_prompt=True,
+                    should_escalate=True,
+                    prompt_injection=(
+                        f"[系统提示] 当前任务已连续执行了 {self._extreme_iteration_threshold} 轮。"
+                        "请向用户汇报进度并询问是否继续。"
+                    ),
+                )
+            else:
+                return Intervention(
+                    level=InterventionLevel.TERMINATE,
+                    pattern=PatternType.EXTREME_ITERATIONS,
+                    message=(
+                        f"Simple task exceeded {self._extreme_iteration_threshold} "
+                        f"iterations without active Plan, terminating"
+                    ),
+                    should_terminate=True,
+                )
 
         return None
 
@@ -498,23 +551,40 @@ class RuntimeSupervisor:
         )
 
     def _check_unproductive_loop(self, iteration: int) -> Intervention | None:
-        """检测连续多轮只调用行政/元工具、无实际产出的空转"""
-        if iteration < UNPRODUCTIVE_WINDOW:
+        """检测连续多轮只调用行政/元工具的空转。3轮NUDGE，5轮STRATEGY_SWITCH。"""
+        if iteration < 3:
             return None
-        recent = self._tool_call_history[-UNPRODUCTIVE_WINDOW:]
-        if len(recent) < UNPRODUCTIVE_WINDOW:
-            return None
-        if all(entry["tool_name"] in UNPRODUCTIVE_ADMIN_TOOLS for entry in recent):
+
+        recent_5 = self._tool_call_history[-5:]
+        recent_3 = self._tool_call_history[-3:]
+
+        if len(recent_5) >= 5 and all(
+            entry["tool_name"] in UNPRODUCTIVE_ADMIN_TOOLS for entry in recent_5
+        ):
+            return Intervention(
+                level=InterventionLevel.STRATEGY_SWITCH,
+                pattern=PatternType.UNPRODUCTIVE_LOOP,
+                message=f"Last 5 tool calls are all administrative — escalating",
+                should_inject_prompt=True,
+                should_rollback=True,
+                prompt_injection=(
+                    "[系统提示] 连续 5 轮仅调用管理类工具，系统已回滚。"
+                    "请直接回复用户结果，或执行实质操作（读取文件、编写代码、调用 API 等）。"
+                ),
+            )
+
+        if len(recent_3) >= 3 and all(
+            entry["tool_name"] in UNPRODUCTIVE_ADMIN_TOOLS for entry in recent_3
+        ):
             return Intervention(
                 level=InterventionLevel.NUDGE,
                 pattern=PatternType.UNPRODUCTIVE_LOOP,
-                message=f"Last {UNPRODUCTIVE_WINDOW} tool calls are all administrative",
+                message=f"Last 3 tool calls are all administrative",
                 should_inject_prompt=True,
                 prompt_injection=(
-                    "[系统提示] 你最近连续多轮都只在调用管理/计划类工具"
-                    "（如 create_todo、search_memory），没有执行任何实质性操作。"
-                    "请立即开始执行具体工作：读取文件、编写代码、调用 API 等。"
-                    "如果任务本身已完成，请直接回复结果。"
+                    "[系统提示] 你最近连续多轮都只在调用管理/计划类工具，"
+                    "没有执行任何实质性操作。"
+                    "请立即开始执行具体工作，或直接回复结果。"
                 ),
             )
         return None

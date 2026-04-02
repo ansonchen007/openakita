@@ -62,8 +62,8 @@ class Settings(BaseSettings):
     # 当模型在“可能需要工具”的任务中只给文本不调用工具时，Agent 可追问 1 次以推动工具调用。
     # 设为 0 可完全关闭该行为（推荐 IM 闲聊/客服式对话场景）。
     force_tool_call_max_retries: int = Field(
-        default=1,
-        description="当模型未调用工具时，最多追问要求调用工具的次数（0=禁用）",
+        default=0,
+        description="当模型未调用工具时，最多追问要求调用工具的次数（0=禁用，信任模型自主判断）",
     )
     force_tool_call_im_floor: int = Field(
         default=1,
@@ -472,9 +472,9 @@ class Settings(BaseSettings):
     supervisor_enabled: bool = Field(default=True, description="是否启用运行时监督器 (RuntimeSupervisor)")
     task_budget_tokens: int = Field(default=0, description="单次任务最大 token 消耗 (0=不限制)")
     task_budget_cost: float = Field(default=0.0, description="单次任务最大成本 USD (0=不限制)")
-    task_budget_duration: int = Field(default=0, description="单次任务最大时长秒 (0=不限制)")
-    task_budget_iterations: int = Field(default=0, description="单次任务最大迭代次数 (0=不限制)")
-    task_budget_tool_calls: int = Field(default=0, description="单次任务最大工具调用次数 (0=不限制)")
+    task_budget_duration: int = Field(default=600, description="单次任务最大时长秒 (0=不限制，默认 600=10分钟)")
+    task_budget_iterations: int = Field(default=50, description="单次任务最大迭代次数 (0=不限制，默认 50)")
+    task_budget_tool_calls: int = Field(default=30, description="单次任务最大工具调用次数 (0=不限制，默认 30)")
 
     # === 追踪配置 ===
     tracing_enabled: bool = Field(default=True, description="是否启用 Agent 追踪（轻量模式默认开启）")
