@@ -123,6 +123,44 @@ DEFAULT_DISABLED_SKILLS: frozenset[str] = frozenset({
     "openakita/skills@xiaohongshu-creator",
     "openakita/skills@youtube-summarizer",
     "openakita/skills@yuque-skills",
+    # IM 办公 CLI
+    "openakita/skills@feishu-cli",
+    "openakita/skills@wecom-cli",
+    "openakita/skills@dingtalk-cli",
+    # AI 视频生成
+    "openakita/skills@seedance-video",
+    # 出行与地图
+    "openakita/skills@amap-maps",
+    "openakita/skills@fliggy-travel",
+    "openakita/skills@didi-ride",
+    # 腾讯生态
+    "openakita/skills@qq-channel",
+    "openakita/skills@tencent-meeting",
+    "openakita/skills@tencent-survey",
+    "openakita/skills@tencent-news",
+    "openakita/skills@tencent-ima",
+    # 百度系 Skills
+    "openakita/skills@baidu-search",
+    "openakita/skills@baidu-netdisk",
+    "openakita/skills@baidu-baike",
+    "openakita/skills@baidu-maps",
+    "openakita/skills@baidu-scholar",
+    "openakita/skills@miaoda-app-builder",
+    "openakita/skills@baidu-paddleocr-doc",
+    "openakita/skills@baidu-paddleocr-text",
+    "openakita/skills@baidu-deep-research",
+    "openakita/skills@baidu-ecommerce",
+    "openakita/skills@baidu-marketing",
+    "openakita/skills@baidu-picture-book",
+    "openakita/skills@baidu-ppt-gen",
+    "openakita/skills@baidu-video-notes",
+    "openakita/skills@baidu-yijian",
+    "openakita/skills@baidu-famou",
+    "openakita/skills@xiaodu-control",
+    # 电商工具
+    "openakita/skills@taobaoke-tool",
+    # 网易云音乐
+    "openakita/skills@netease-music",
 })
 
 
