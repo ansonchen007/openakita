@@ -1120,6 +1120,11 @@ export function ChatView({
       setChatMode(next);
       setMessages((prev) => [...prev, { id: genId(), role: "system", content: next === "plan" ? "已开启 Plan 模式" : "已关闭 Plan 模式", timestamp: Date.now() }]);
     }},
+    { id: "ask", label: "问答模式", description: "开启/关闭 Ask 模式，仅问答不执行工具", action: () => {
+      const next = chatMode === "ask" ? "agent" : "ask";
+      setChatMode(next);
+      setMessages((prev) => [...prev, { id: genId(), role: "system", content: next === "ask" ? "已开启问答模式（仅问答，不执行工具）" : "已退出问答模式", timestamp: Date.now() }]);
+    }},
     { id: "clear", label: "清空对话", description: "清除当前对话的所有消息", action: () => {
       setMessages([]);
       if (activeConvId) {
@@ -2305,6 +2310,11 @@ export function ChatView({
                     options: event.options,
                     questions: askQuestions,
                   };
+                }
+                // AskUserBlock renders the question — clear streamed content
+                // if it's a duplicate/prefix of the ask question to avoid showing it twice
+                if (currentContent && event.question && event.question.includes(currentContent.trim())) {
+                  currentContent = "";
                 }
                 break;
               }
