@@ -357,6 +357,7 @@ a:hover {
   align-items: center;
   gap: 8px;
   padding: 8px 10px;
+  min-height: 38px;
   border-radius: 10px;
   cursor: pointer;
   user-select: none;
@@ -365,6 +366,14 @@ a:hover {
   color: var(--muted);
   border: 1px solid transparent;
   transition: background 0.15s, color 0.15s;
+}
+
+.navItem > svg {
+  flex-shrink: 0;
+}
+
+.navItem > span {
+  line-height: 1.2;
 }
 
 .navItem:hover {
@@ -385,12 +394,15 @@ a:hover {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 6px 10px 4px 10px;
-  margin-top: 6px;
+  min-height: 38px;
+  padding: 8px 10px;
+  margin-top: 4px;
   cursor: pointer;
   user-select: none;
-  transition: background 0.15s;
-  border-radius: 6px;
+  transition: background 0.15s, color 0.15s;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  color: var(--muted);
 }
 
 .navGroupHeader:hover {
@@ -400,19 +412,25 @@ a:hover {
 .navGroupLabelWrap {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
+  min-width: 0;
+  flex: 1;
 }
 
 .navGroupIcon {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
+  width: 16px;
+  min-width: 16px;
   color: var(--muted2);
   transition: color 0.15s;
 }
 
 .navGroupLabel {
-  font-size: 12px;
-  font-weight: 650;
+  font-size: 13px;
+  line-height: 1.2;
+  font-weight: 600;
   letter-spacing: 0.2px;
   color: var(--muted);
   transition: color 0.15s;
@@ -421,8 +439,11 @@ a:hover {
 .navGroupChevron {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
+  width: 16px;
+  min-width: 16px;
   color: var(--muted2);
-  opacity: 0.5;
+  opacity: 0.65;
   transition: opacity 0.15s;
 }
 
@@ -436,14 +457,51 @@ a:hover {
 }
 
 .navGroupItems {
+  position: relative;
+  margin: 4px 0 6px 14px;
   padding-left: 10px;
 }
 
-.navGroupItems .navItem {
-  font-size: 12.5px;
+.navGroupItems::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 4px;
+  bottom: 4px;
+  width: 1px;
+  background: linear-gradient(
+    to bottom,
+    transparent 0%,
+    color-mix(in srgb, var(--line) 82%, transparent) 12%,
+    color-mix(in srgb, var(--line) 92%, transparent) 88%,
+    transparent 100%
+  );
 }
 
-.sidebarCollapsed .navGroupHeader { justify-content: center; padding: 4px 0; }
+.navGroupItems .navItem {
+  font-size: 13px;
+  min-height: 36px;
+  padding: 7px 10px 7px 12px;
+  border-radius: 9px;
+  position: relative;
+}
+
+.navGroupItems .navItem::before {
+  content: "";
+  position: absolute;
+  left: -10px;
+  top: 50%;
+  width: 8px;
+  height: 1px;
+  transform: translateY(-50%);
+  background: color-mix(in srgb, var(--line) 90%, transparent);
+}
+
+.sidebarCollapsed .navGroupHeader {
+  justify-content: center;
+  min-height: 38px;
+  padding: 8px 0;
+}
 
 /* ─── Config section (collapsible) ─── */
 
@@ -3792,7 +3850,7 @@ button.btnApplyRestart:hover {
 .agentOrbitStrip {
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: 6px;
   margin-left: 4px;
   padding: 0 4px;
   overflow: visible;
@@ -3853,9 +3911,9 @@ button.btnApplyRestart:hover {
 
 .agentOrbitPulse {
   position: absolute;
-  inset: -3px;
+  inset: -2px;
   border-radius: 50%;
-  border: 2px solid var(--brand);
+  border: 1.5px solid var(--brand);
   opacity: 0;
   animation: orbitPulseRing 1.5s ease-out infinite;
   pointer-events: none;
