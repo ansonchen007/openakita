@@ -74,6 +74,10 @@ export function PlanApprovalPanel({
             <IconEdit size={14} />
             {t("chat.rejectPlan", "修改计划")}
           </button>
+          <button className="planApprovalReject" onClick={onDismiss}>
+            <IconX size={14} />
+            {t("common.cancel", "取消")}
+          </button>
         </div>
       )}
     </div>
