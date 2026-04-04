@@ -5018,7 +5018,6 @@ class ReasoningEngine:
         return any(re.search(pat, _tail) for pat in confirmation_patterns)
 
     @staticmethod
-    @staticmethod
     def _effective_force_retries(base_retries: int, conversation_id: str | None) -> int:
         """计算有效 ForceToolCall 重试次数。
 
