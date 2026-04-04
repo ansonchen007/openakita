@@ -22,6 +22,23 @@ from datetime import datetime
 from enum import Enum
 
 
+def normalize_tags(val: object) -> list[str]:
+    """Ensure *val* is always ``list[str]``.
+
+    LLMs sometimes return tags as a comma-separated string instead of an
+    array.  This helper gracefully coerces any input into a safe list so
+    that downstream ``.map()`` / iteration never crashes.
+    """
+    if isinstance(val, list):
+        return [str(t) for t in val if t]
+    if isinstance(val, str) and val:
+        return [t.strip() for t in val.replace("\u3001", ",").split(",") if t.strip()]
+    return []
+
+
+_normalize_tags = normalize_tags
+
+
 class MemoryType(Enum):
     """记忆类型"""
 

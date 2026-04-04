@@ -1942,6 +1942,8 @@ class Agent:
             if intent.intent == IntentType.CHAT:
                 _mode = "ask"
                 _skip_catalogs = True
+            elif intent.intent == IntentType.QUERY:
+                _skip_catalogs = True
 
         prompt = await self.prompt_assembler.build_system_prompt_compiled(
             task_description, session_type=session_type, context_window=ctx_window,
@@ -3939,6 +3941,44 @@ class Agent:
                 except Exception as e:
                     logger.error(f"[FastReply] Failed: {e}")
                     response_text = "你好！有什么我可以帮你的吗？"
+            elif (
+                _intent
+                and _intent.intent == _IT.QUERY
+                and getattr(_intent, "fast_reply", False)
+            ):
+                # Fast-path for simple factual queries (math, date, definitions)
+                # No tools passed → LLM answers directly
+                try:
+                    _runtime_info = ""
+                    try:
+                        from ..prompt.builder import _build_runtime_section
+                        _runtime_info = _build_runtime_section() or ""
+                    except Exception:
+                        pass
+
+                    _identity_snippet = ""
+                    if hasattr(self, "identity") and hasattr(self.identity, "get_system_prompt"):
+                        _identity_snippet = (self.identity.get_system_prompt(include_active_task=False) or "")[:500]
+
+                    _fast_system = (
+                        f"{_identity_snippet}\n\n"
+                        f"{_runtime_info}\n\n"
+                        "用户提出了一个简单的知识/计算/日期问题。"
+                        "请直接给出准确、简洁的回答。不要使用任何工具。"
+                        "如果涉及日期/时间，请根据上面的运行环境信息回答。"
+                    ).strip()
+
+                    logger.info(f"[FastQuery] Answering '{message}' without tools")
+                    _fast_resp = await self.brain.think_lightweight(
+                        prompt=message,
+                        system=_fast_system,
+                    )
+                    response_text = clean_llm_response(
+                        _fast_resp.content if _fast_resp.content else ""
+                    ) or "抱歉，我无法回答这个问题。"
+                except Exception as e:
+                    logger.error(f"[FastQuery] Failed: {e}")
+                    response_text = "抱歉，我无法回答这个问题。"
             else:
                 # All non-fast paths (CHAT/TASK/QUERY/COMMAND/FOLLOW_UP) → ReasoningEngine
                 response_text = await self._chat_with_tools_and_context(
@@ -4185,6 +4225,60 @@ class Agent:
                     logger.error(f"[FastReply] Failed: {e}")
                     yield {"type": "text_delta", "content": "你好！有什么我可以帮你的吗？"}
                     _reply_text = "你好！有什么我可以帮你的吗？"
+                yield {"type": "done"}
+
+                await self._finalize_session(
+                    response_text=_reply_text,
+                    session=session,
+                    session_id=session_id,
+                    task_monitor=task_monitor,
+                )
+                return
+
+            if (
+                _intent
+                and _intent.intent == _IT.QUERY
+                and getattr(_intent, "fast_reply", False)
+            ):
+                # Fast-path for simple factual queries (math, date, definitions)
+                # No tools passed → LLM answers directly
+                try:
+                    _runtime_info = ""
+                    try:
+                        from ..prompt.builder import _build_runtime_section
+                        _runtime_info = _build_runtime_section() or ""
+                    except Exception:
+                        pass
+
+                    _identity_snippet = ""
+                    if hasattr(self, "identity") and hasattr(self.identity, "get_system_prompt"):
+                        _identity_snippet = (self.identity.get_system_prompt(include_active_task=False) or "")[:500]
+
+                    _fast_system = (
+                        f"{_identity_snippet}\n\n"
+                        f"{_runtime_info}\n\n"
+                        "用户提出了一个简单的知识/计算/日期问题。"
+                        "请直接给出准确、简洁的回答。不要使用任何工具。"
+                        "如果涉及日期/时间，请根据上面的运行环境信息回答。"
+                    ).strip()
+
+                    logger.info(f"[FastQuery-Stream] Answering '{message}' without tools")
+                    _fast_response = await self.brain.think_lightweight(
+                        prompt=message,
+                        system=_fast_system,
+                    )
+                    _reply_text = clean_llm_response(
+                        _fast_response.content if _fast_response.content else ""
+                    )
+                    if _reply_text:
+                        yield {"type": "text_delta", "content": _reply_text}
+                    else:
+                        yield {"type": "text_delta", "content": "抱歉，我无法回答这个问题。"}
+                        _reply_text = "抱歉，我无法回答这个问题。"
+                except Exception as e:
+                    logger.error(f"[FastQuery-Stream] Failed: {e}")
+                    yield {"type": "text_delta", "content": "抱歉，我无法回答这个问题。"}
+                    _reply_text = "抱歉，我无法回答这个问题。"
                 yield {"type": "done"}
 
                 await self._finalize_session(

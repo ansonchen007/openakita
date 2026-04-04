@@ -4318,7 +4318,6 @@ class ReasoningEngine:
             )
             return clean_llm_response(stripped_text)
 
-        max_no_tool_retries = self._effective_force_retries(base_force_retries, conversation_id)
         no_tool_call_count += 1
 
         if no_tool_call_count <= max_no_tool_retries:
