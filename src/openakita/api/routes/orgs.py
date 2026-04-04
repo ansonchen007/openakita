@@ -20,7 +20,6 @@ from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse
 
 from openakita.core.engine_bridge import to_engine
-from openakita.memory.types import normalize_tags
 
 ALLOWED_AVATAR_TYPES = {"image/png", "image/jpeg", "image/jpg", "image/webp", "image/svg+xml"}
 MAX_AVATAR_SIZE = 2 * 1024 * 1024  # 2 MB
@@ -528,31 +527,48 @@ def _purge_old_commands() -> None:
         _command_store.pop(cid, None)
 
 
-def _bridge_command_to_session(
-    sm,
-    org_id: str,
-    target_node_id: str | None,
-    content: str,
-    result: dict,
+def _bridge_session_chat_id(org_id: str, target_node_id: str | None) -> str:
+    """Compute the frontend-matching chat_id.
+
+    Must stay in sync with OrgChatPanel.sessionId():
+      nodeId ? `org_${orgId}_node_${nodeId}` : `org_${orgId}`
+    """
+    return f"org_{org_id}_node_{target_node_id}" if target_node_id else f"org_{org_id}"
+
+
+def _bridge_persist_user_message(
+    sm, org_id: str, target_node_id: str | None, content: str,
 ) -> None:
-    """Write user command + result to SessionManager so OrgChatPanel can restore history."""
+    """Persist user command to session IMMEDIATELY so it survives even if execution fails."""
     if not sm:
         return
-    # Must match frontend OrgChatPanel.sessionId():
-    #   nodeId ? `org_${orgId}_node_${nodeId}` : `org_${orgId}`
-    # Use the frontend-requested target_node_id (not the internally-routed node)
-    # to ensure the bridge writes to the same session the UI reads from.
-    frontend_chat_id = f"org_{org_id}_node_{target_node_id}" if target_node_id else f"org_{org_id}"
+    chat_id = _bridge_session_chat_id(org_id, target_node_id)
     try:
         session = sm.get_session(
-            channel="desktop",
-            chat_id=frontend_chat_id,
-            user_id="desktop_user",
+            channel="desktop", chat_id=chat_id, user_id="desktop_user",
+            create_if_missing=True,
+        )
+        if session:
+            session.add_message("user", content)
+            sm.mark_dirty()
+    except Exception as exc:
+        logger.warning("[OrgCmd] failed to persist user message to session: %s", exc)
+
+
+def _bridge_persist_result(
+    sm, org_id: str, target_node_id: str | None, result: dict,
+) -> None:
+    """Persist command result (assistant reply or error) to session."""
+    if not sm:
+        return
+    chat_id = _bridge_session_chat_id(org_id, target_node_id)
+    try:
+        session = sm.get_session(
+            channel="desktop", chat_id=chat_id, user_id="desktop_user",
             create_if_missing=True,
         )
         if not session:
             return
-        session.add_message("user", content)
         if result.get("error"):
             session.add_message("system", f"命令执行失败: {result['error']}")
         elif result.get("result"):
@@ -562,7 +578,7 @@ def _bridge_command_to_session(
             session.add_message("assistant", str(text))
         sm.mark_dirty()
     except Exception as exc:
-        logger.debug(f"[OrgCmd] session bridge failed: {exc}")
+        logger.warning("[OrgCmd] failed to persist result to session: %s", exc)
 
 
 @router.post("/{org_id}/command")
@@ -591,13 +607,18 @@ async def send_command(request: Request, org_id: str):
 
     sm = getattr(request.app.state, "session_manager", None)
 
+    # Persist user message IMMEDIATELY — survives even if execution crashes
+    _bridge_persist_user_message(sm, org_id, target_node, content)
+
     async def _run() -> None:
         from openakita.api.routes.websocket import broadcast_event
 
         try:
             result = await rt.send_command(org_id, target_node, content)
-            _command_store[command_id].update(status="done", result=result, updated_at=time.time())
-            _bridge_command_to_session(sm, org_id, target_node, content, result)
+            _command_store[command_id].update(
+                status="done", result=result, updated_at=time.time(),
+            )
+            _bridge_persist_result(sm, org_id, target_node, result)
             await broadcast_event(
                 "org:command_done",
                 {
@@ -608,15 +629,9 @@ async def send_command(request: Request, org_id: str):
             )
         except Exception as exc:
             _command_store[command_id].update(
-                status="error", error=str(exc), updated_at=time.time()
+                status="error", error=str(exc), updated_at=time.time(),
             )
-            _bridge_command_to_session(
-                sm,
-                org_id,
-                target_node,
-                content,
-                {"error": str(exc)},
-            )
+            _bridge_persist_result(sm, org_id, target_node, {"error": str(exc)})
             await broadcast_event(
                 "org:command_done",
                 {
@@ -959,7 +974,7 @@ async def add_memory(request: Request, org_id: str):
             content,
             source_node="user",
             memory_type=mt,
-            tags=normalize_tags(body.get("tags")),
+            tags=body.get("tags", []),
             importance=body.get("importance", 0.5),
         )
     elif scope == MemoryScope.DEPARTMENT:
@@ -971,7 +986,7 @@ async def add_memory(request: Request, org_id: str):
             content,
             "user",
             memory_type=mt,
-            tags=normalize_tags(body.get("tags")),
+            tags=body.get("tags", []),
             importance=body.get("importance", 0.5),
         )
     else:
@@ -982,7 +997,7 @@ async def add_memory(request: Request, org_id: str):
             node_id,
             content,
             memory_type=mt,
-            tags=normalize_tags(body.get("tags")),
+            tags=body.get("tags", []),
             importance=body.get("importance", 0.5),
         )
     return entry.to_dict()
