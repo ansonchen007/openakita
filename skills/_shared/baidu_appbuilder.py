@@ -192,8 +192,16 @@ def print_response(result: Any, stream: bool = False) -> None:
 
 def run_skill_query(args: argparse.Namespace, query: str) -> None:
     """通用 skill 执行入口：构造客户端 -> 调用 -> 输出"""
-    client = client_from_args(args)
+    try:
+        client = client_from_args(args)
+    except AppBuilderError as e:
+        print(json.dumps({"error": str(e)}, ensure_ascii=False), file=sys.stderr)
+        sys.exit(1)
     stream = getattr(args, "stream", False)
     cid = getattr(args, "conversation_id", None)
-    result = client.run(query, stream=stream, conversation_id=cid)
+    try:
+        result = client.run(query, stream=stream, conversation_id=cid)
+    except AppBuilderError as e:
+        print(json.dumps({"error": str(e)}, ensure_ascii=False), file=sys.stderr)
+        sys.exit(1)
     print_response(result, stream=stream)

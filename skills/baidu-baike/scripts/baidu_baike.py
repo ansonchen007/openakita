@@ -1,78 +1,89 @@
 #!/usr/bin/env python3
-"""百度百科 API 封装 CLI 工具。
+"""百度百科词条查询 CLI 工具。
 
-查询百度百科词条摘要信息。
-
-环境变量:
-    BAIDU_API_KEY  （可选，当前公开接口无需认证）
+通过百度百科页面获取词条摘要信息。
 
 示例:
     python3 baidu_baike.py search "量子计算"
-    python3 baidu_baike.py search "人工智能" --length 1000
+    python3 baidu_baike.py search "人工智能"
 """
 
 import argparse
+import html
 import json
+import re
 import sys
 import urllib.error
 import urllib.parse
 import urllib.request
 
-BAIKE_API = "https://baike.baidu.com/api/openapi/BaikeLemmaCardApi"
+UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
 
 
-def search_baike(keyword: str, bk_length: int = 600) -> dict:
-    params = urllib.parse.urlencode({
-        "scope": "103",
-        "format": "json",
-        "appid": "379020",
-        "bk_key": keyword,
-        "bk_length": bk_length,
-    })
-    url = f"{BAIKE_API}?{params}"
-    req = urllib.request.Request(url, headers={
-        "User-Agent": "Mozilla/5.0 (compatible; BaikeCLI/1.0)",
-    })
+def search_baike(keyword: str) -> dict:
+    encoded = urllib.parse.quote(keyword)
+    url = f"https://baike.baidu.com/search/word?word={encoded}"
+    req = urllib.request.Request(url, headers={"User-Agent": UA})
     with urllib.request.urlopen(req, timeout=15) as resp:
-        raw = resp.read().decode()
-    try:
-        return json.loads(raw)
-    except json.JSONDecodeError:
-        return {"raw_response": raw}
+        final_url = resp.url
+        body = resp.read().decode("utf-8", errors="replace")
+
+    result = {"keyword": keyword, "url": final_url}
+
+    m = re.search(r'<meta\s+name="description"\s+content="([^"]*)"', body)
+    if m:
+        result["summary"] = html.unescape(m.group(1)).strip()
+
+    m = re.search(r"<title>([^<]+)</title>", body)
+    if m:
+        raw_title = html.unescape(m.group(1)).replace("_百度百科", "").strip()
+        if "（" in raw_title:
+            parts = raw_title.split("（", 1)
+            result["title"] = parts[0].strip()
+            result["subtitle"] = parts[1].rstrip("）").strip()
+        else:
+            result["title"] = raw_title
+
+    for pattern, key in [
+        (r'"abstract":"((?:[^"\\]|\\.)*)"', "abstract"),
+        (r'"card_name":"((?:[^"\\]|\\.)*)"', "card_name"),
+    ]:
+        m = re.search(pattern, body)
+        if m:
+            try:
+                result[key] = json.loads(f'"{m.group(1)}"')
+            except json.JSONDecodeError:
+                result[key] = m.group(1)
+
+    if "抱歉，百度百科尚未收录" in body or "search/none" in final_url:
+        result["found"] = False
+        result["message"] = f"百度百科未收录「{keyword}」"
+    else:
+        result["found"] = True
+
+    return result
 
 
 def main():
     parser = argparse.ArgumentParser(
         description="百度百科 API CLI — 查询词条摘要",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="示例:\n"
-               "  python3 baidu_baike.py search \"量子计算\"\n"
-               "  python3 baidu_baike.py search \"人工智能\" --length 1000",
+        epilog='示例:\n  python3 baidu_baike.py search "量子计算"',
     )
     sub = parser.add_subparsers(dest="command", required=True)
-
     p_search = sub.add_parser("search", help="搜索百科词条")
     p_search.add_argument("keyword", help="搜索关键词")
-    p_search.add_argument("--length", type=int, default=600,
-                          help="返回摘要长度 (默认 600)")
 
     args = parser.parse_args()
-
     try:
-        if args.command == "search":
-            result = search_baike(args.keyword, args.length)
-        else:
-            parser.print_help()
-            sys.exit(1)
-
+        result = search_baike(args.keyword)
         print(json.dumps(result, ensure_ascii=False, indent=2))
     except urllib.error.HTTPError as e:
         body = e.read().decode() if e.fp else ""
-        print(json.dumps({"error": str(e), "detail": body}, ensure_ascii=False, indent=2),
-              file=sys.stderr)
+        print(json.dumps({"error": str(e), "detail": body}, ensure_ascii=False), file=sys.stderr)
         sys.exit(1)
     except Exception as e:
-        print(json.dumps({"error": str(e)}, ensure_ascii=False, indent=2), file=sys.stderr)
+        print(json.dumps({"error": str(e)}, ensure_ascii=False), file=sys.stderr)
         sys.exit(1)
 
 
