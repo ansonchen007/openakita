@@ -112,6 +112,7 @@ export function Sidebar({
 
   const [pluginApps, setPluginApps] = useState<PluginUIApp[]>([]);
 
+  const pluginAppsFetchKey = `${httpApiBase}|${serviceRunning}|${view}`;
   useEffect(() => {
     if (!httpApiBase || !serviceRunning) { setPluginApps([]); return; }
     let cancelled = false;
@@ -120,7 +121,7 @@ export function Sidebar({
       .then(data => { if (!cancelled) setPluginApps(Array.isArray(data) ? data : []); })
       .catch(() => { if (!cancelled) setPluginApps([]); });
     return () => { cancelled = true; };
-  }, [httpApiBase, serviceRunning]);
+  }, [pluginAppsFetchKey]);
 
   const capViews: ViewId[] = ["skills", "mcp", "plugins", "memory", "scheduler"];
   const monViews: ViewId[] = ["token_stats", "security"];
