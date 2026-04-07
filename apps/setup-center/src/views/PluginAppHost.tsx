@@ -1,12 +1,12 @@
 /**
- * PluginAppHost — renders a plugin's UI inside an iframe with
+ * PluginAppHost -- renders a plugin's UI inside an iframe with
  * Bridge postMessage communication.
  *
  * Handles: loading skeleton, bridge init, theme/locale forwarding,
  * timeout error state, and cleanup on unmount.
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { PluginBridgeHost } from "../lib/plugin-bridge-host";
 import { getThemePref, THEME_CHANGE_EVENT } from "../theme";
@@ -18,12 +18,13 @@ export type PluginAppHostProps = {
   onViewChange?: (v: ViewId) => void;
 };
 
-const BRIDGE_TIMEOUT_MS = 15_000;
+const BRIDGE_TIMEOUT_MS = 30_000;
 
 export default function PluginAppHost({ pluginId, apiBase, onViewChange }: PluginAppHostProps) {
   const { t, i18n } = useTranslation();
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const bridgeRef = useRef<PluginBridgeHost | null>(null);
+  const connectedRef = useRef(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -42,6 +43,8 @@ export default function PluginAppHost({ pluginId, apiBase, onViewChange }: Plugi
     const iframe = iframeRef.current;
     if (!iframe) return;
 
+    connectedRef.current = false;
+
     const bridge = new PluginBridgeHost({
       pluginId,
       iframe,
@@ -53,25 +56,31 @@ export default function PluginAppHost({ pluginId, apiBase, onViewChange }: Plugi
     });
     bridgeRef.current = bridge;
 
+    let timer: ReturnType<typeof setTimeout> | null = null;
+
     const onBridgeReady = (e: MessageEvent) => {
       if (e.source !== iframe.contentWindow) return;
       const d = e.data;
       if (d && d.__akita_bridge && (d.type === "bridge:ready" || d.type === "bridge:handshake")) {
+        connectedRef.current = true;
+        if (timer) { clearTimeout(timer); timer = null; }
         setLoading(false);
         setError(null);
       }
     };
     window.addEventListener("message", onBridgeReady);
 
-    const timer = setTimeout(() => {
-      if (loading) setError(t("pluginApp.loadTimeout", "Plugin UI failed to initialize within timeout"));
+    timer = setTimeout(() => {
+      if (!connectedRef.current) {
+        setError(t("pluginApp.loadTimeout", "Plugin UI failed to initialize within timeout"));
+      }
     }, BRIDGE_TIMEOUT_MS);
 
     const onTheme = () => bridge.sendThemeChange(getThemePref());
     window.addEventListener(THEME_CHANGE_EVENT, onTheme);
 
     return () => {
-      clearTimeout(timer);
+      if (timer) clearTimeout(timer);
       window.removeEventListener("message", onBridgeReady);
       window.removeEventListener(THEME_CHANGE_EVENT, onTheme);
       bridge.dispose();
@@ -83,7 +92,8 @@ export default function PluginAppHost({ pluginId, apiBase, onViewChange }: Plugi
     bridgeRef.current?.sendLocaleChange(i18n.language);
   }, [i18n.language]);
 
-  const pluginUiUrl = `${apiBase}/api/plugins/${pluginId}/ui/`;
+  const cacheBust = useMemo(() => Date.now(), [pluginId]);
+  const pluginUiUrl = `${apiBase}/api/plugins/${pluginId}/ui/?_v=${cacheBust}`;
 
   return (
     <div style={{ flex: 1, display: "flex", flexDirection: "column", height: "100%", minHeight: 0, position: "relative" }}>
@@ -113,6 +123,7 @@ export default function PluginAppHost({ pluginId, apiBase, onViewChange }: Plugi
             <button
               className="btn btnPrimary"
               onClick={() => {
+                connectedRef.current = false;
                 setError(null);
                 setLoading(true);
                 if (iframeRef.current) {

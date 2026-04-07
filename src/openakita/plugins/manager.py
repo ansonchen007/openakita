@@ -337,11 +337,21 @@ class PluginManager:
     @staticmethod
     def _do_mount_plugin_ui(app: Any, plugin_id: str, ui_dist_dir: str) -> None:
         from fastapi.staticfiles import StaticFiles
+        from starlette.responses import Response
+
         mount_path = f"/api/plugins/{plugin_id}/ui"
+
+        class NoCacheStaticFiles(StaticFiles):
+            async def get_response(self, path: str, scope) -> Response:  # type: ignore[override]
+                resp = await super().get_response(path, scope)
+                resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+                resp.headers["Pragma"] = "no-cache"
+                return resp
+
         try:
             app.mount(
                 mount_path,
-                StaticFiles(directory=ui_dist_dir, html=True),
+                NoCacheStaticFiles(directory=ui_dist_dir, html=True),
                 name=f"plugin-ui-{plugin_id}",
             )
             logger.info("Mounted plugin UI for '%s' at %s", plugin_id, mount_path)
