@@ -2522,7 +2522,8 @@ class ReasoningEngine:
                                 _tool_is_error = True
                             elif _pr.decision == PolicyDecision.CONFIRM:
                                 _risk = _pr.metadata.get("risk_level", "HIGH")
-                                _pe.store_ui_pending(t_id, t_name, t_args if isinstance(t_args, dict) else {}, session_id=conversation_id or "")
+                                _needs_sb = _pr.metadata.get("needs_sandbox", False)
+                                _pe.store_ui_pending(t_id, t_name, t_args if isinstance(t_args, dict) else {}, session_id=conversation_id or "", needs_sandbox=_needs_sb)
                                 yield {
                                     "type": "security_confirm",
                                     "tool": t_name,
@@ -2530,7 +2531,8 @@ class ReasoningEngine:
                                     "id": t_id,
                                     "reason": _pr.reason,
                                     "risk_level": _risk,
-                                    "needs_sandbox": _pr.metadata.get("needs_sandbox", False),
+                                    "needs_sandbox": _needs_sb,
+                                    "options": ["allow_once", "allow_session", "allow_always", "deny"] + (["sandbox"] if _needs_sb else []),
                                 }
                                 r = (
                                     f"⚠️ 需要用户确认: {_pr.reason}\n"
@@ -2717,7 +2719,7 @@ class ReasoningEngine:
                         if _pr.decision == PolicyDecision.CONFIRM:
                             _risk = _pr.metadata.get("risk_level", "HIGH")
                             _needs_sb = _pr.metadata.get("needs_sandbox", False)
-                            _pe.store_ui_pending(tool_id, tool_name, _tool_args_dict, session_id=conversation_id or "")
+                            _pe.store_ui_pending(tool_id, tool_name, _tool_args_dict, session_id=conversation_id or "", needs_sandbox=_needs_sb)
                             yield {
                                 "type": "security_confirm",
                                 "tool": tool_name,
@@ -2726,6 +2728,7 @@ class ReasoningEngine:
                                 "reason": _pr.reason,
                                 "risk_level": _risk,
                                 "needs_sandbox": _needs_sb,
+                                "options": ["allow_once", "allow_session", "allow_always", "deny"] + (["sandbox"] if _needs_sb else []),
                             }
                             result_text = (
                                 f"⚠️ 需要用户确认: {_pr.reason}\n"

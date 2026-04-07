@@ -949,8 +949,37 @@ class FeishuAdapter(ChannelAdapter):
         if action_type == "collapse_folder":
             return self._handle_collapse_folder(value)
 
+        if action_type in ("security_allow", "security_deny", "security_sandbox",
+                           "security_allow_session", "security_allow_always"):
+            return self._handle_security_decision(value)
+
         logger.debug(f"Feishu: unknown card action: {action_type}")
         return {}
+
+    def _handle_security_decision(self, value: dict) -> dict:
+        """Handle security confirmation card button clicks."""
+        action = value.get("action", "")
+        confirm_id = value.get("confirm_id", "")
+        decision_map = {
+            "security_allow": "allow_once",
+            "security_deny": "deny",
+            "security_sandbox": "sandbox",
+            "security_allow_session": "allow_session",
+            "security_allow_always": "allow_always",
+        }
+        decision = decision_map.get(action, "deny")
+        try:
+            from openakita.core.policy import get_policy_engine
+            get_policy_engine().resolve_ui_confirm(confirm_id, decision)
+            labels = {
+                "allow_once": "✅ 已允许", "deny": "❌ 已拒绝",
+                "sandbox": "🔒 沙箱执行", "allow_session": "✅ 会话允许",
+                "allow_always": "✅ 始终允许",
+            }
+            return {"toast": {"type": "success", "content": labels.get(decision, decision)}}
+        except Exception as e:
+            logger.warning(f"Feishu: security decision failed: {e}")
+            return {"toast": {"type": "error", "content": "处理失败"}}
 
     def _handle_expand_folder(self, path: str) -> dict:
         """读取目录内容并返回包含文件树和展开按钮的更新卡片。"""

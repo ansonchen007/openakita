@@ -276,14 +276,23 @@ def _handle_security_confirm_interactive(event: dict, console: Console) -> None:
         )
     )
 
-    choices = ["y", "n"]
-    hint = "[bold]y[/bold]=允许  [bold]n[/bold]=拒绝"
+    choices = ["y", "n", "e", "a"]
+    hint = (
+        "[bold]y[/bold]=允许一次  [bold]n[/bold]=拒绝  "
+        "[bold]e[/bold]=会话允许  [bold]a[/bold]=始终允许"
+    )
     if needs_sandbox:
         choices.append("s")
         hint += "  [bold]s[/bold]=沙箱执行"
 
     decision_str = Prompt.ask(hint, choices=choices, default="n")
-    decision_map = {"y": "allow", "n": "deny", "s": "sandbox"}
+    decision_map = {
+        "y": "allow_once",
+        "n": "deny",
+        "e": "allow_session",
+        "a": "allow_always",
+        "s": "sandbox",
+    }
     decision = decision_map.get(decision_str, "deny")
 
     try:
@@ -292,10 +301,18 @@ def _handle_security_confirm_interactive(event: dict, console: Console) -> None:
         engine = get_policy_engine()
         found = engine.resolve_ui_confirm(confirm_id, decision)
         if found:
-            label = {"allow": "✅ 已允许", "deny": "❌ 已拒绝", "sandbox": "🔒 沙箱执行"}[decision]
-            console.print(f"  {label}")
+            labels = {
+                "allow_once": "✅ 已允许（一次）",
+                "allow_session": "✅ 已允许（本次会话）",
+                "allow_always": "✅ 已允许（始终）",
+                "deny": "❌ 已拒绝",
+                "sandbox": "🔒 沙箱执行",
+            }
+            console.print(f"  {labels.get(decision, decision)}")
         else:
-            console.print(f"  [yellow]⚠️ 确认项已过期或不存在 (id={confirm_id[:8]}…)[/yellow]")
+            console.print(
+                f"  [yellow]⚠️ 确认项已过期或不存在 (id={confirm_id[:8]}…)[/yellow]"
+            )
     except Exception as exc:
         console.print(f"  [red]确认处理失败: {exc}[/red]")
 
