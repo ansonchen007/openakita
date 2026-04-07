@@ -3656,6 +3656,8 @@ class MessageGateway:
                 elif etype == "ask_user":
                     if not reply_text:
                         reply_text = event.get("question", "")
+                elif etype == "security_confirm":
+                    await self._handle_im_security_confirm(session, event, adapter, message)
                 elif etype == "error":
                     err_msg = event.get("message", "")
                     if not reply_text:
@@ -4219,6 +4221,56 @@ class MessageGateway:
             await self.send_to_session(session, text, role="system")
         except Exception as e:
             logger.warning(f"[Security] Failed to send confirmation: {e}")
+
+    async def _handle_im_security_confirm(
+        self, session: "Session", event: dict, adapter, message: "UnifiedMessage",
+    ) -> None:
+        """Handle security_confirm events in IM streaming.
+
+        Send a confirmation card/text to the user, then wait for their reply
+        via the interrupt queue.
+        """
+        tool_name = event.get("tool", "")
+        reason = event.get("reason", "")
+        risk = event.get("risk_level", "HIGH")
+        confirm_id = event.get("id", "")
+
+        await self.send_security_confirm(session, tool_name, reason, risk_level=risk)
+
+        # Wait for user reply via interrupt queue (set by adapter callbacks or
+        # plain-text keyword matching in _handle_message)
+        try:
+            reply_msg = await asyncio.wait_for(
+                self._wait_for_interrupt(session.session_key),
+                timeout=float(session.get_metadata("security_timeout") or 120),
+            )
+            text = reply_msg.message.text.strip().lower() if reply_msg else ""
+        except (TimeoutError, asyncio.TimeoutError):
+            text = ""
+
+        decision = "deny"
+        if text in ("允许", "allow", "yes", "y", "allow_once"):
+            decision = "allow_once"
+        elif text in ("始终允许", "allow_always", "always"):
+            decision = "allow_always"
+        elif text in ("会话允许", "allow_session", "session"):
+            decision = "allow_session"
+        elif text in ("沙箱", "sandbox"):
+            decision = "sandbox"
+
+        try:
+            from ..core.policy import get_policy_engine
+            get_policy_engine().resolve_ui_confirm(confirm_id, decision)
+        except Exception as exc:
+            logger.warning(f"[Security] IM confirm resolve failed: {exc}")
+
+    async def _wait_for_interrupt(self, session_key: str) -> "InterruptMessage | None":
+        """Block until an interrupt message arrives for the session."""
+        queue = self._interrupt_queues.get(session_key)
+        if queue is None:
+            self._interrupt_queues[session_key] = asyncio.PriorityQueue()
+            queue = self._interrupt_queues[session_key]
+        return await queue.get()
 
     async def _try_patch_progress_to_card(
         self, session: Session, new_lines: list[str],

@@ -826,6 +826,7 @@ class ReasoningEngine:
         tools = _filter_tools_by_mode(tools, mode)
         _allowed_tool_names = {t.get("name", "") for t in tools} if mode != "agent" else None
         self._tool_executor._current_mode = mode
+        _initial_tools = tools  # keep reference for refresh detection
 
         # ==================== 主循环 ====================
         logger.info(f"[ReAct] === Loop started (max_iterations={max_iterations}, model={current_model}) ===")
@@ -965,6 +966,18 @@ class ReasoningEngine:
                     state.transition(TaskStatus.REASONING)
                 except ValueError:
                     pass
+
+            # Refresh tools if _discovered_tools changed (e.g. after tool_search)
+            _agent = getattr(self._tool_executor, "_agent_ref", None)
+            if iteration > 0 and _agent and getattr(_agent, "_discovered_tools", None):
+                refreshed = _filter_tools_by_mode(_agent._effective_tools, mode)
+                if {t.get("name") for t in refreshed} != {t.get("name") for t in tools}:
+                    tools = refreshed
+                    _allowed_tool_names = {t.get("name", "") for t in tools} if mode != "agent" else None
+                    logger.info(
+                        "[ReAct] tools refreshed after tool_search discovery (now %d tools)",
+                        len(tools),
+                    )
 
             _thinking_t0 = time.time()  # 思维链: 记录 thinking 开始时间
             try:
@@ -2150,6 +2163,20 @@ class ReasoningEngine:
                 # --- 思维链: 迭代开始事件 ---
                 yield {"type": "iteration_start", "iteration": _iteration + 1}
 
+                # Refresh tools if _discovered_tools changed (e.g. after tool_search)
+                _agent = getattr(self._tool_executor, "_agent_ref", None)
+                if _iteration > 0 and _agent and getattr(_agent, "_discovered_tools", None):
+                    refreshed = _filter_tools_by_mode(_agent._effective_tools, _effective_mode)
+                    if {t.get("name") for t in refreshed} != {t.get("name") for t in tools}:
+                        tools = refreshed
+                        _allowed_tool_names = (
+                            {t.get("name", "") for t in tools} if _effective_mode != "agent" else None
+                        )
+                        logger.info(
+                            "[ReAct-Stream] tools refreshed after tool_search discovery (now %d tools)",
+                            len(tools),
+                        )
+
                 # --- Reason phase (真流式) ---
                 _thinking_t0 = time.time()
                 yield {"type": "thinking_start"}
@@ -2495,7 +2522,8 @@ class ReasoningEngine:
                                 _tool_is_error = True
                             elif _pr.decision == PolicyDecision.CONFIRM:
                                 _risk = _pr.metadata.get("risk_level", "HIGH")
-                                _pe.store_ui_pending(t_id, t_name, t_args if isinstance(t_args, dict) else {}, session_id=conversation_id or "")
+                                _needs_sb = _pr.metadata.get("needs_sandbox", False)
+                                _pe.store_ui_pending(t_id, t_name, t_args if isinstance(t_args, dict) else {}, session_id=conversation_id or "", needs_sandbox=_needs_sb)
                                 yield {
                                     "type": "security_confirm",
                                     "tool": t_name,
@@ -2503,7 +2531,8 @@ class ReasoningEngine:
                                     "id": t_id,
                                     "reason": _pr.reason,
                                     "risk_level": _risk,
-                                    "needs_sandbox": _pr.metadata.get("needs_sandbox", False),
+                                    "needs_sandbox": _needs_sb,
+                                    "options": ["allow_once", "allow_session", "allow_always", "deny"] + (["sandbox"] if _needs_sb else []),
                                 }
                                 r = (
                                     f"⚠️ 需要用户确认: {_pr.reason}\n"
@@ -2690,7 +2719,7 @@ class ReasoningEngine:
                         if _pr.decision == PolicyDecision.CONFIRM:
                             _risk = _pr.metadata.get("risk_level", "HIGH")
                             _needs_sb = _pr.metadata.get("needs_sandbox", False)
-                            _pe.store_ui_pending(tool_id, tool_name, _tool_args_dict, session_id=conversation_id or "")
+                            _pe.store_ui_pending(tool_id, tool_name, _tool_args_dict, session_id=conversation_id or "", needs_sandbox=_needs_sb)
                             yield {
                                 "type": "security_confirm",
                                 "tool": tool_name,
@@ -2699,6 +2728,7 @@ class ReasoningEngine:
                                 "reason": _pr.reason,
                                 "risk_level": _risk,
                                 "needs_sandbox": _needs_sb,
+                                "options": ["allow_once", "allow_session", "allow_always", "deny"] + (["sandbox"] if _needs_sb else []),
                             }
                             result_text = (
                                 f"⚠️ 需要用户确认: {_pr.reason}\n"

@@ -874,6 +874,29 @@ class OpenAIProvider(LLMProvider):
                     f"from {'reasoning_content' if _tool_calls_from_reasoning else 'text'}"
                 )
 
+        # Reasoning 模型容错：content 为空但 reasoning 有内容
+        # 当 reasoning 模型被 max_tokens 截断时，所有输出可能都在 reasoning 字段，
+        # content 为空。此时尝试从 reasoning 中提取结构化内容作为兜底。
+        if not text_content and not has_tool_calls and reasoning_content:
+            import re
+            yaml_match = re.search(
+                r"```(?:yaml)?\s*\n(.+?)```",
+                reasoning_content,
+                re.DOTALL,
+            )
+            if yaml_match:
+                text_content = yaml_match.group(1).strip()
+                logger.warning(
+                    f"[PARSE] content is empty but found structured data in reasoning "
+                    f"({len(text_content)} chars extracted from {len(reasoning_content)} chars reasoning)"
+                )
+            else:
+                logger.warning(
+                    f"[PARSE] content is empty, reasoning has {len(reasoning_content)} chars "
+                    f"but no extractable structured content. Response may be truncated "
+                    f"(model exhausted max_tokens on reasoning before producing content)."
+                )
+
         # 添加文本内容
         if text_content:
             content_blocks.insert(0, TextBlock(text=text_content))

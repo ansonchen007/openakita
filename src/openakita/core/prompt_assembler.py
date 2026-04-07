@@ -138,6 +138,7 @@ class PromptAssembler:
         model_display_name: str = "",
         session_context: dict | None = None,
         mode: str = "agent",
+        model_id: str = "",
         skip_catalogs: bool = False,
     ) -> str:
         """
@@ -155,6 +156,7 @@ class PromptAssembler:
             model_display_name: 当前 LLM 模型显示名称（动态注入）
             session_context: 会话元数据（session_id、通道、类型等）
             mode: 当前模式 (ask/plan/agent)
+            model_id: 模型标识（用于 per-model 基础 prompt）
             skip_catalogs: 是否跳过 Catalogs 层（CHAT 意图使用）
 
         Returns:
@@ -162,13 +164,8 @@ class PromptAssembler:
         """
         from ..prompt.budget import BudgetConfig
         from ..prompt.builder import build_system_prompt
-        from ..prompt.compiler import check_compiled_outdated, compile_all
 
         identity_dir = settings.identity_path
-
-        if check_compiled_outdated(identity_dir):
-            logger.info("Compiled identity files outdated, recompiling...")
-            compile_all(identity_dir)
 
         budget_config = (
             BudgetConfig.for_context_window(context_window)
@@ -194,6 +191,7 @@ class PromptAssembler:
             model_display_name=model_display_name,
             session_context=session_context,
             mode=mode,
+            model_id=model_id,
             skip_catalogs=skip_catalogs,
         )
 

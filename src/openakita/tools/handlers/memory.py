@@ -22,10 +22,6 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-_ADD_MEMORY_COOLDOWN_S = 30
-_ADD_MEMORY_MAX_PER_SESSION = 5
-
-
 class MemoryHandler:
     """
     记忆系统处理器
@@ -81,14 +77,11 @@ class MemoryHandler:
     def __init__(self, agent: "Agent"):
         self.agent = agent
         self._guide_injected: bool = False
-        self._last_add_memory_ts: float = 0.0
-        self._add_memory_count: int = 0
         self._recent_add_contents: list[str] = []
 
     def reset_guide(self) -> None:
         """Reset the one-shot guide flag (call on new session start)."""
         self._guide_injected = False
-        self._add_memory_count = 0
         self._recent_add_contents.clear()
 
     async def handle(self, tool_name: str, params: dict[str, Any]) -> str:
@@ -162,41 +155,16 @@ class MemoryHandler:
             return f"❌ 记忆整理失败: {e}"
 
     def _add_memory(self, params: dict) -> str:
-        """添加记忆（含冷却和去重保护）"""
-        import time as _time
+        """添加记忆（含内容去重保护）"""
         from ...memory.types import Memory, MemoryPriority, MemoryType
 
         content = params["content"]
         mem_type_str = params["type"]
         importance = params.get("importance", 0.5)
 
-        now = _time.monotonic()
-        elapsed = now - self._last_add_memory_ts
-
-        if self._add_memory_count >= _ADD_MEMORY_MAX_PER_SESSION:
-            logger.info(
-                "[MemoryHandler] 本轮已记录 %d 条记忆，暂不再记录。"
-                "系统会自动在对话结束后提取记忆，无需手动反复保存。",
-                self._add_memory_count,
-            )
-            return (
-                "✅ 本轮已记录足够多的记忆，系统会自动提取剩余内容。"
-                "请继续处理用户的实际问题，无需再调用 add_memory。"
-            )
-
-        if elapsed < _ADD_MEMORY_COOLDOWN_S and self._add_memory_count > 0:
-            logger.debug(
-                "[MemoryHandler] add_memory 冷却中 (%.0fs < %ds)",
-                elapsed, _ADD_MEMORY_COOLDOWN_S,
-            )
-            return (
-                "✅ 刚刚已记录过记忆，系统会自动在后台提取更多内容。"
-                "请先继续处理用户的问题，稍后再记录新的记忆。"
-            )
-
         content_key = content.strip()[:100].lower()
         if content_key in self._recent_add_contents:
-            return "✅ 该内容已记录过，无需重复保存。请继续执行其他任务。"
+            return "该内容已记录过，无需重复保存。"
 
         try:
             store = self.agent.memory_manager.store
@@ -244,14 +212,12 @@ class MemoryHandler:
 
         memory_id = self.agent.memory_manager.add_memory(memory)
         if memory_id:
-            self._last_add_memory_ts = now
-            self._add_memory_count += 1
-            if len(self._recent_add_contents) >= 20:
+            if len(self._recent_add_contents) >= 50:
                 self._recent_add_contents.pop(0)
             self._recent_add_contents.append(content_key)
             return f"✅ 已记住: [{mem_type_str}] {content}\nID: {memory_id}"
         else:
-            return "✅ 记忆已存在（语义相似），无需重复记录。请继续执行其他任务或结束。"
+            return "记忆已存在（语义相似），无需重复记录。"
 
     def _search_memory(self, params: dict) -> str:
         """搜索记忆

@@ -258,6 +258,26 @@ class AnthropicProvider(LLMProvider):
             "anthropic-version": self.ANTHROPIC_VERSION,
         }
 
+    @staticmethod
+    def _build_system_blocks(system: str) -> list[dict]:
+        """Split system prompt into static + dynamic blocks for Anthropic prompt caching.
+
+        Uses the '## Developer' section boundary as the split point.
+        The static part (System section) gets cache_control to enable
+        cross-turn prompt caching, reducing token costs significantly.
+        """
+        _BOUNDARY = "\n\n---\n\n## Developer"
+        idx = system.find(_BOUNDARY)
+        if idx == -1:
+            return [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}]
+        static_part = system[:idx]
+        dynamic_part = system[idx:]
+        blocks = [
+            {"type": "text", "text": static_part, "cache_control": {"type": "ephemeral"}},
+            {"type": "text", "text": dynamic_part},
+        ]
+        return blocks
+
     def _build_request_body(self, request: LLMRequest) -> dict:
         """构建请求体。
 
@@ -279,7 +299,7 @@ class AnthropicProvider(LLMProvider):
         # 系统提示: 分段缓存 (静态部分标记 cache_control)
         if request.system:
             if caps.supports_cache:
-                body["system"] = build_cached_system_blocks(request.system)
+                body["system"] = self._build_system_blocks(request.system)
             else:
                 body["system"] = request.system
 

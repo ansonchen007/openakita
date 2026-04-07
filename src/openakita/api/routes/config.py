@@ -202,15 +202,15 @@ class SecurityCommandsUpdate(BaseModel):
 
 
 class SecuritySandboxUpdate(BaseModel):
-    enabled: bool = True
-    backend: str = "auto"
-    sandbox_risk_levels: list[str] = ["HIGH"]
-    exempt_commands: list[str] = []
+    enabled: bool | None = None
+    backend: str | None = None
+    sandbox_risk_levels: list[str] | None = None
+    exempt_commands: list[str] | None = None
 
 
 class SecurityConfirmRequest(BaseModel):
     confirm_id: str
-    decision: str  # "allow" | "deny" | "sandbox"
+    decision: str  # allow_once | allow_session | allow_always | deny | sandbox (legacy: allow)
 
 
 # ─── Routes ────────────────────────────────────────────────────────────
@@ -654,6 +654,55 @@ async def write_agent_mode(body: AgentModeRequest, request: Request):
     return {"status": "ok", "multi_agent_enabled": body.enabled}
 
 
+# ---------------------------------------------------------------------------
+# Tool Loading Configuration
+# ---------------------------------------------------------------------------
+
+
+class ToolLoadingRequest(BaseModel):
+    always_load_tools: list[str] = []
+    always_load_categories: list[str] = []
+
+
+@router.get("/api/config/tool-loading")
+async def read_tool_loading(request: Request):
+    """读取工具常驻加载配置。"""
+    from openakita.config import settings
+
+    available_categories: list[str] = []
+    agent = getattr(request.app.state, "agent", None)
+    if agent and hasattr(agent, "tool_catalog"):
+        try:
+            available_categories = sorted(agent.tool_catalog.get_tool_groups().keys())
+        except Exception:
+            pass
+
+    return {
+        "always_load_tools": settings.always_load_tools,
+        "always_load_categories": settings.always_load_categories,
+        "available_categories": available_categories,
+    }
+
+
+@router.post("/api/config/tool-loading")
+async def write_tool_loading(body: ToolLoadingRequest, request: Request):
+    """更新工具常驻加载配置。立即生效并持久化。"""
+    from openakita.config import runtime_state, settings
+
+    settings.always_load_tools = body.always_load_tools
+    settings.always_load_categories = body.always_load_categories
+    runtime_state.save()
+    logger.info(
+        "[Config API] tool-loading updated: tools=%s, categories=%s",
+        body.always_load_tools, body.always_load_categories,
+    )
+    return {
+        "status": "ok",
+        "always_load_tools": body.always_load_tools,
+        "always_load_categories": body.always_load_categories,
+    }
+
+
 @router.get("/api/config/providers")
 async def list_providers_api():
     """返回后端已注册的 LLM 服务商列表。
@@ -919,10 +968,14 @@ async def write_security_sandbox(body: SecuritySandboxUpdate):
     if "sandbox" not in data["security"]:
         data["security"]["sandbox"] = {}
     sb = data["security"]["sandbox"]
-    sb["enabled"] = body.enabled
-    sb["backend"] = body.backend
-    sb["sandbox_risk_levels"] = body.sandbox_risk_levels
-    sb["exempt_commands"] = body.exempt_commands
+    if body.enabled is not None:
+        sb["enabled"] = body.enabled
+    if body.backend is not None:
+        sb["backend"] = body.backend
+    if body.sandbox_risk_levels is not None:
+        sb["sandbox_risk_levels"] = body.sandbox_risk_levels
+    if body.exempt_commands is not None:
+        sb["exempt_commands"] = body.exempt_commands
     _write_policies_yaml(data)
     try:
         from openakita.core.policy import reset_policy_engine
@@ -952,18 +1005,27 @@ class _PermissionModeBody(BaseModel):
 
 @router.post("/api/config/permission-mode")
 async def write_permission_mode(body: _PermissionModeBody):
-    """设置安全模式（P3-3: 前端安全模式与后端联动）。"""
+    """设置安全模式并持久化到 YAML。"""
     mode = body.mode
-    if mode not in ("cautious", "smart", "trust"):
+    # accept legacy "trust" as alias for "yolo"
+    if mode == "trust":
+        mode = "yolo"
+    if mode not in ("cautious", "smart", "yolo"):
         return {"status": "error", "message": f"无效的安全模式: {mode}"}
     try:
         from openakita.core.policy import get_policy_engine
         pe = get_policy_engine()
         pe._frontend_mode = mode
-        if mode == "trust":
-            pe._config.confirmation.auto_confirm = True
-        else:
-            pe._config.confirmation.auto_confirm = False
+        pe._config.confirmation.mode = mode
+        pe._config.confirmation.auto_confirm = mode == "yolo"
+        # Persist to YAML
+        data = _read_policies_yaml()
+        if data is not None:
+            sec = data.setdefault("security", {})
+            conf = sec.setdefault("confirmation", {})
+            conf["mode"] = mode
+            conf.pop("auto_confirm", None)
+            _write_policies_yaml(data)
         logger.info(f"[Config API] Permission mode set to: {mode}")
         return {"status": "ok", "mode": mode}
     except Exception as e:
@@ -1034,6 +1096,168 @@ async def reset_death_switch():
         engine = get_policy_engine()
         engine.reset_readonly_mode()
         return {"status": "ok", "readonly_mode": False}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+# ── Confirmation config CRUD ─────────────────────────────────────────
+
+
+@router.get("/api/config/security/confirmation")
+async def read_security_confirmation():
+    """Read confirmation config."""
+    data = _read_policies_yaml()
+    if data is None:
+        return {"mode": "smart", "timeout_seconds": 60, "default_on_timeout": "deny", "confirm_ttl": 120}
+    c = data.get("security", {}).get("confirmation", {})
+    return {
+        "mode": c.get("mode", "smart"),
+        "timeout_seconds": c.get("timeout_seconds", 60),
+        "default_on_timeout": c.get("default_on_timeout", "deny"),
+        "confirm_ttl": c.get("confirm_ttl", 120),
+    }
+
+
+class _ConfirmationUpdate(BaseModel):
+    mode: str | None = None
+    timeout_seconds: int | None = None
+    default_on_timeout: str | None = None
+    confirm_ttl: float | None = None
+
+
+@router.post("/api/config/security/confirmation")
+async def write_security_confirmation(body: _ConfirmationUpdate):
+    """Update confirmation config (PATCH semantics)."""
+    data = _read_policies_yaml()
+    if data is None:
+        return {"status": "error", "message": "无法读取配置"}
+    sec = data.setdefault("security", {})
+    conf = sec.setdefault("confirmation", {})
+    if body.mode is not None:
+        m = "yolo" if body.mode == "trust" else body.mode
+        if m not in ("cautious", "smart", "yolo"):
+            return {"status": "error", "message": f"无效 mode: {body.mode}"}
+        conf["mode"] = m
+        conf.pop("auto_confirm", None)
+    if body.timeout_seconds is not None:
+        conf["timeout_seconds"] = body.timeout_seconds
+    if body.default_on_timeout is not None:
+        conf["default_on_timeout"] = body.default_on_timeout
+    if body.confirm_ttl is not None:
+        conf["confirm_ttl"] = body.confirm_ttl
+    _write_policies_yaml(data)
+    try:
+        from openakita.core.policy import reset_policy_engine
+        reset_policy_engine()
+    except Exception:
+        pass
+    return {"status": "ok"}
+
+
+# ── Self-protection config CRUD ──────────────────────────────────────
+
+
+@router.get("/api/config/security/self-protection")
+async def read_self_protection():
+    """Read self-protection config."""
+    data = _read_policies_yaml()
+    if data is None:
+        return {}
+    sp = data.get("security", {}).get("self_protection", {})
+    try:
+        from openakita.core.policy import get_policy_engine
+        pe = get_policy_engine()
+        readonly = pe.readonly_mode
+    except Exception:
+        readonly = False
+    return {
+        "enabled": sp.get("enabled", True),
+        "protected_dirs": sp.get("protected_dirs", []),
+        "death_switch_threshold": sp.get("death_switch_threshold", 3),
+        "death_switch_total_multiplier": sp.get("death_switch_total_multiplier", 3),
+        "audit_to_file": sp.get("audit_to_file", True),
+        "audit_path": sp.get("audit_path", ""),
+        "readonly_mode": readonly,
+    }
+
+
+class _SelfProtectionUpdate(BaseModel):
+    enabled: bool | None = None
+    protected_dirs: list[str] | None = None
+    death_switch_threshold: int | None = None
+    death_switch_total_multiplier: int | None = None
+    audit_to_file: bool | None = None
+    audit_path: str | None = None
+
+
+@router.post("/api/config/security/self-protection")
+async def write_self_protection(body: _SelfProtectionUpdate):
+    """Update self-protection config (PATCH semantics)."""
+    data = _read_policies_yaml()
+    if data is None:
+        return {"status": "error", "message": "无法读取配置"}
+    sec = data.setdefault("security", {})
+    sp = sec.setdefault("self_protection", {})
+    if body.enabled is not None:
+        sp["enabled"] = body.enabled
+    if body.protected_dirs is not None:
+        sp["protected_dirs"] = body.protected_dirs
+    if body.death_switch_threshold is not None:
+        sp["death_switch_threshold"] = body.death_switch_threshold
+    if body.death_switch_total_multiplier is not None:
+        sp["death_switch_total_multiplier"] = body.death_switch_total_multiplier
+    if body.audit_to_file is not None:
+        sp["audit_to_file"] = body.audit_to_file
+    if body.audit_path is not None:
+        sp["audit_path"] = body.audit_path
+    _write_policies_yaml(data)
+    try:
+        from openakita.core.policy import reset_policy_engine
+        reset_policy_engine()
+    except Exception:
+        pass
+    return {"status": "ok"}
+
+
+# ── User allowlist CRUD ──────────────────────────────────────────────
+
+
+@router.get("/api/config/security/allowlist")
+async def read_user_allowlist():
+    """Read the persistent user allowlist."""
+    try:
+        from openakita.core.policy import get_policy_engine
+        return get_policy_engine().get_user_allowlist()
+    except Exception:
+        return {"commands": [], "tools": []}
+
+
+@router.post("/api/config/security/allowlist")
+async def add_allowlist_entry(body: dict):
+    """Add an entry to the persistent user allowlist."""
+    entry_type = body.get("type", "command")
+    entry = {k: v for k, v in body.items() if k != "type"}
+    try:
+        from openakita.core.policy import get_policy_engine
+        pe = get_policy_engine()
+        al = pe._config.user_allowlist
+        if entry_type == "command":
+            al.commands.append(entry)
+        else:
+            al.tools.append(entry)
+        pe._save_user_allowlist()
+        return {"status": "ok"}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+@router.delete("/api/config/security/allowlist/{entry_type}/{index}")
+async def delete_allowlist_entry(entry_type: str, index: int):
+    """Remove an entry from the persistent user allowlist."""
+    try:
+        from openakita.core.policy import get_policy_engine
+        ok = get_policy_engine().remove_allowlist_entry(entry_type, index)
+        return {"status": "ok" if ok else "error", "message": "" if ok else "无效索引"}
     except Exception as e:
         return {"status": "error", "message": str(e)}
 

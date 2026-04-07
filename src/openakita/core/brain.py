@@ -305,13 +305,22 @@ class Brain:
                 self._compiler_on_failure(str(e))
                 logger.warning(f"Compiler LLM failed, falling back to main model: {e}")
 
-        # 回退到主模型（同样禁用思考，以节省时间）
+        # 回退到主模型
+        # 主模型可能是 reasoning 模型（如 mimo-v2-pro），即使 enable_thinking=False
+        # 也会在 reasoning 字段产出思考内容，占用 max_tokens 预算。
+        # 需要增大 max_tokens 确保 reasoning 之后仍有余量产出 content。
         _source = "main_fallback"
+        _fallback_max = max(max_tokens * 4, 2048)
+        if _fallback_max != max_tokens:
+            logger.info(
+                f"[compiler_think] Falling back to main model, "
+                f"bumping max_tokens {max_tokens} → {_fallback_max}"
+            )
         response = await self._llm_client.chat(
             messages=messages,
             system=system,
             enable_thinking=False,
-            max_tokens=max_tokens,
+            max_tokens=_fallback_max,
         )
         self._record_usage(response)
         req_id = self._dump_llm_request(system, messages, [], caller="compiler_think")
@@ -924,11 +933,15 @@ class Brain:
                 continue
 
             if is_deferred:
-                # Deferred: only pass name + short description, empty schema
                 short_desc = description.split("\n")[0][:200] if description else ""
                 result.append(Tool(
                     name=name,
-                    description=f"[use tool_search to see full params] {short_desc}",
+                    description=(
+                        f"[DEFERRED] {short_desc} — "
+                        "Do NOT call this tool directly. "
+                        "You must first call tool_search(query=\"...\") to load "
+                        "its full parameters, then call it in the NEXT turn."
+                    ),
                     input_schema={"type": "object", "properties": {}},
                 ))
                 deferred += 1

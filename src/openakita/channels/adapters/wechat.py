@@ -70,6 +70,7 @@ def _import_httpx():
 DEFAULT_BASE_URL = "https://ilinkai.weixin.qq.com"
 DEFAULT_CDN_BASE_URL = "https://novac2c.cdn.weixin.qq.com/c2c"
 DEFAULT_ILINK_BOT_TYPE = "3"
+DEFAULT_CHANNEL_VERSION = "2.0.0"
 
 # ---------------------------------------------------------------------------
 # 协议兼容参数 — 对齐 @tencent-weixin/openclaw-weixin v2.1.6
