@@ -1974,7 +1974,7 @@
     "confirmTtlDesc": "相同操作在此时间内不再重复弹窗",
     "confirmationSaved": "确认配置已保存",
     "allowlist": "持久化白名单",
-    "allowlistDesc": "通过"始终允许"按钮添加的规则，重启后仍生效。",
+    "allowlistDesc": "通过「始终允许」按钮添加的规则，重启后仍生效。",
     "noAllowlist": "暂无白名单条目",
     "allowlistDeleted": "已删除",
     "selfProtection": "自保护",
