@@ -652,12 +652,37 @@ class TelegramAdapter(ChannelAdapter):
             )
 
     async def _handle_callback_query(self, update: Any, context: Any) -> None:
-        """内联键盘回调（预留，当前仅 ACK 防止客户端转圈）"""
+        """内联键盘回调，处理安全确认按钮等。"""
         query = update.callback_query
-        if query:
-            with contextlib.suppress(Exception):
-                await query.answer()
-            logger.debug(f"Telegram callback_query: data={query.data}")
+        if not query:
+            return
+        data = query.data or ""
+        with contextlib.suppress(Exception):
+            await query.answer()
+
+        # Security confirmation callbacks: sec_<decision>_<confirm_id>
+        if data.startswith("sec_"):
+            parts = data.split("_", 2)
+            if len(parts) >= 3:
+                decision_key = parts[1]
+                confirm_id = parts[2]
+                decision_map = {
+                    "allow": "allow_once",
+                    "session": "allow_session",
+                    "always": "allow_always",
+                    "deny": "deny",
+                    "sandbox": "sandbox",
+                }
+                decision = decision_map.get(decision_key, "deny")
+                try:
+                    from openakita.core.policy import get_policy_engine
+                    get_policy_engine().resolve_ui_confirm(confirm_id, decision)
+                    logger.info(f"[Telegram] Security decision: {decision} for {confirm_id[:8]}")
+                except Exception as e:
+                    logger.warning(f"[Telegram] Security callback failed: {e}")
+                return
+
+        logger.debug(f"Telegram callback_query: data={data}")
 
     async def _handle_message(self, update: Any, context: Any) -> None:
         """处理收到的消息"""
