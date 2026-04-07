@@ -112,6 +112,9 @@
     .progress-bar { height: 3px; background: var(--border); border-radius: 2px; flex: 1; position: relative; cursor: pointer; }
     .progress-bar-fill { height: 100%; background: var(--primary); border-radius: 2px; transition: width .1s; }
     @media (max-width: 860px) { .split-layout { flex-direction: column; } .split-left { width: 100%; min-width: unset; } }
+    .ico { display: inline-flex; align-items: center; justify-content: center; width: 1em; height: 1em; vertical-align: -0.125em; flex-shrink: 0; }
+    .ico svg { width: 100%; height: 100%; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+    .ico-sm { width: 14px; height: 14px; }
   </style>
 </head>
 <body>
@@ -224,6 +227,47 @@ window.__bridge = { apiCall: apiCall, pluginApi: pluginApi, onEvent: onEvent, ge
 const { useState, useEffect, useCallback, useRef } = React;
 const { pluginApi, onEvent, uploadFile } = window.__bridge;
 
+// SVG Icon system — replaces all emoji
+const I = {
+  video: <svg viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="18" rx="2"/><path d="M8 10l5 3-5 3z"/></svg>,
+  play: <svg viewBox="0 0 24 24"><polygon points="5,3 19,12 5,21"/></svg>,
+  pause: <svg viewBox="0 0 24 24"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>,
+  skipBack: <svg viewBox="0 0 24 24"><polygon points="11,19 2,12 11,5"/><polygon points="22,19 13,12 22,5"/></svg>,
+  skipFwd: <svg viewBox="0 0 24 24"><polygon points="13,19 22,12 13,5"/><polygon points="2,19 11,12 2,5"/></svg>,
+  repeat: <svg viewBox="0 0 24 24"><polyline points="17,1 21,5 17,9"/><path d="M3 11V9a4 4 0 014-4h14"/><polyline points="7,23 3,19 7,15"/><path d="M21 13v2a4 4 0 01-4 4H3"/></svg>,
+  download: <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7,10 12,15 17,10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>,
+  refresh: <svg viewBox="0 0 24 24"><polyline points="23,4 23,10 17,10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/></svg>,
+  image: <svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5" fill="currentColor" stroke="none"/><path d="M21 15l-5-5L5 21"/></svg>,
+  film: <svg viewBox="0 0 24 24"><rect x="2" y="2" width="20" height="20" rx="2.18"/><line x1="7" y1="2" x2="7" y2="22"/><line x1="17" y1="2" x2="17" y2="22"/><line x1="2" y1="12" x2="22" y2="12"/><line x1="2" y1="7" x2="7" y2="7"/><line x1="2" y1="17" x2="7" y2="17"/><line x1="17" y1="7" x2="22" y2="7"/><line x1="17" y1="17" x2="22" y2="17"/></svg>,
+  music: <svg viewBox="0 0 24 24"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>,
+  folder: <svg viewBox="0 0 24 24"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>,
+  folderOpen: <svg viewBox="0 0 24 24"><path d="M5 19a2 2 0 01-2-2V6a2 2 0 012-2h4l2 2h9a2 2 0 012 2v1M5 19h14a2 2 0 002-2l1-7H7.5"/></svg>,
+  sparkles: <svg viewBox="0 0 24 24"><path d="M12 2l2.09 6.26L20 10.27l-4.74 3.82L16.18 21 12 17.27 7.82 21l.92-6.91L4 10.27l5.91-2.01z" fill="currentColor" stroke="none"/></svg>,
+  lightbulb: <svg viewBox="0 0 24 24"><path d="M9 21h6M12 3a6 6 0 00-3.32 10.98L9 16h6l.32-2.02A6 6 0 0012 3z"/></svg>,
+  warn: <svg viewBox="0 0 24 24"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>,
+  check: <svg viewBox="0 0 24 24"><polyline points="20,6 9,17 4,12"/></svg>,
+  x: <svg viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>,
+  settings: <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>,
+  key: <svg viewBox="0 0 24 24"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 11-7.78 7.78 5.5 5.5 0 017.78-7.78zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg>,
+  link: <svg viewBox="0 0 24 24"><path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/></svg>,
+  book: <svg viewBox="0 0 24 24"><path d="M4 19.5A2.5 2.5 0 016.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z"/></svg>,
+  bot: <svg viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="10" rx="2"/><circle cx="12" cy="5" r="2"/><line x1="12" y1="7" x2="12" y2="11"/><circle cx="8" cy="16" r="1" fill="currentColor" stroke="none"/><circle cx="16" cy="16" r="1" fill="currentColor" stroke="none"/></svg>,
+  rocket: <svg viewBox="0 0 24 24"><path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 00-2.91-.09z"/><path d="M12 15l-3-3a22 22 0 012-3.95A12.88 12.88 0 0122 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 01-4 2z"/><path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0"/><path d="M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5"/></svg>,
+  scissors: <svg viewBox="0 0 24 24"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><line x1="20" y1="4" x2="8.12" y2="15.88"/><line x1="14.47" y1="14.48" x2="20" y2="20"/><line x1="8.12" y1="8.12" x2="12" y2="12"/></svg>,
+  arrowLeft: <svg viewBox="0 0 24 24"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12,19 5,12 12,5"/></svg>,
+  arrowUp: <svg viewBox="0 0 24 24"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5,12 12,5 19,12"/></svg>,
+  arrowDown: <svg viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><polyline points="19,12 12,19 5,12"/></svg>,
+  plus: <svg viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>,
+  trash: <svg viewBox="0 0 24 24"><polyline points="3,6 5,6 21,6"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg>,
+  camera: <svg viewBox="0 0 24 24"><path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"/><circle cx="12" cy="13" r="4"/></svg>,
+  palette: <svg viewBox="0 0 24 24"><circle cx="13.5" cy="6.5" r="2" fill="currentColor" stroke="none"/><circle cx="17.5" cy="10.5" r="2" fill="currentColor" stroke="none"/><circle cx="8.5" cy="7.5" r="2" fill="currentColor" stroke="none"/><circle cx="6.5" cy="12" r="2" fill="currentColor" stroke="none"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.93 0 1.5-.77 1.5-1.5 0-.37-.13-.7-.37-.97-.24-.26-.37-.6-.37-.97 0-.83.67-1.5 1.5-1.5H16c3.31 0 6-2.69 6-6 0-5.17-4.36-9.06-10-9.06z"/></svg>,
+  ruler: <svg viewBox="0 0 24 24"><path d="M16 4L4 16l4 4L20 8z"/><path d="M8 16l-2-2"/><path d="M12 12l-2-2"/><path d="M16 8l-2-2"/></svg>,
+  fileText: <svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14,2 14,8 20,8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><line x1="10" y1="9" x2="8" y2="9"/></svg>,
+  online: <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4" fill="currentColor"/></svg>,
+  offline: <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/></svg>,
+};
+function Ico({ name, style: s }) { return <span className="ico" style={s}>{I[name]}</span>; }
+
 // ── Constants ──
 const MODES = [
   { id: "t2v", label: "文生视频" },
@@ -296,7 +340,7 @@ function FileUploadZone({ id, accept, multiple, onUpload, label, hint }) {
         <>
           <p style={{fontSize:13}}>{label}</p>
           {hint && <p className="text-xs text-dim" style={{marginTop:4}}>{hint}</p>}
-          {fileName && <p className="text-xs text-success" style={{marginTop:4}}>✓ 已上传: {fileName}</p>}
+          {fileName && <p className="text-xs text-success" style={{marginTop:4}}><Ico name="check"/> 已上传: {fileName}</p>}
         </>
       )}
     </div>
@@ -362,15 +406,15 @@ function VideoPlayer({ task }) {
             style={{width:"100%",height:"100%",objectFit:"contain"}} />
         ) : (
           <div className="empty-state" style={{color:"#fff"}}>
-            <p>{task.status === "failed" ? `❌ ${task.error_message || "生成失败"}` : "等待结果..."}</p>
+            <p>{task.status === "failed" ? `${task.error_message || "生成失败"}` : "等待结果..."}</p>
           </div>
         )}
       </div>
       {(task.video_url || task.local_video_path) && (
         <div className="video-controls">
-          <button onClick={() => stepFrame(-1)} title="逐帧后退">⏮</button>
-          <button onClick={togglePlay}>{playing ? "⏸" : "▶"}</button>
-          <button onClick={() => stepFrame(1)} title="逐帧前进">⏭</button>
+          <button onClick={() => stepFrame(-1)} title="逐帧后退"><Ico name="skipBack"/></button>
+          <button onClick={togglePlay}>{playing ? <Ico name="pause"/> : <Ico name="play"/>}</button>
+          <button onClick={() => stepFrame(1)} title="逐帧前进"><Ico name="skipFwd"/></button>
           <div className="progress-bar" onClick={(e) => {
             const rect = e.currentTarget.getBoundingClientRect();
             const pct = (e.clientX - rect.left) / rect.width;
@@ -380,7 +424,7 @@ function VideoPlayer({ task }) {
           </div>
           <span>{currentTime.toFixed(1)}s / {duration.toFixed(1)}s</span>
           <button onClick={changeSpeed}>{speed}x</button>
-          <button onClick={() => setLoop(!loop)} style={{opacity: loop?1:.5}} title="循环">🔁</button>
+          <button onClick={() => setLoop(!loop)} style={{opacity: loop?1:.5}} title="循环"><Ico name="repeat"/></button>
         </div>
       )}
       {task.revised_prompt && (
@@ -418,12 +462,12 @@ function CreateTab({ models }) {
   const canWebSearch = currentModel?.supports_web_search && mode === "t2v";
 
   const MODE_TIPS = {
-    t2v: "💡 文生视频随机性较大，适合激发灵感。如有明确预期，建议先生图再图生视频",
-    i2v: "💡 建议上传高清高质量图片（300-6000px），图片比例建议与目标视频一致以避免裁切",
-    i2v_end: "💡 首尾帧间的画面由 AI 自动过渡补全，尾帧差异越大效果越戏剧化",
-    multimodal: "💡 提示词中用「图片1」「视频2」「音频1」引用素材，序号为同类素材上传顺序",
-    edit: "💡 描述要替换/增加/删除的元素、时机和位置，强调保持不变的部分",
-    extend: "💡 向前/向后延长视频，或多段串联。描述延长内容 + 过渡方式",
+    t2v: "文生视频随机性较大，适合激发灵感。如有明确预期，建议先生图再图生视频",
+    i2v: "建议上传高清高质量图片（300-6000px），图片比例建议与目标视频一致以避免裁切",
+    i2v_end: "首尾帧间的画面由 AI 自动过渡补全，尾帧差异越大效果越戏剧化",
+    multimodal: "提示词中用「图片1」「视频2」「音频1」引用素材，序号为同类素材上传顺序",
+    edit: "描述要替换/增加/删除的元素、时机和位置，强调保持不变的部分",
+    extend: "向前/向后延长视频，或多段串联。描述延长内容 + 过渡方式",
   };
 
   useEffect(() => {
@@ -469,7 +513,7 @@ function CreateTab({ models }) {
           </div>
         </div>
 
-        {MODE_TIPS[mode] && <div className="tip-bar">{MODE_TIPS[mode]}</div>}
+        {MODE_TIPS[mode] && <div className="tip-bar"><Ico name="lightbulb"/> {MODE_TIPS[mode]}</div>}
 
         {mode === "i2v" && (
           <div className="card">
@@ -487,10 +531,10 @@ function CreateTab({ models }) {
             <div className="grid-2">
               <FileUploadZone id="upload-start-frame" accept="image/*"
                 onUpload={async (file) => { try { await uploadFile(file); } catch(e) { console.error(e); } }}
-                label="🖼️ 首帧图片" hint="起始画面" />
+                label="首帧图片" hint="起始画面" />
               <FileUploadZone id="upload-end-frame" accept="image/*"
                 onUpload={async (file) => { try { await uploadFile(file); } catch(e) { console.error(e); } }}
-                label="🖼️ 尾帧图片" hint="结束画面" />
+                label="尾帧图片" hint="结束画面" />
             </div>
             <p className="text-xs text-dim" style={{marginTop:6}}>首尾帧间的过渡由 AI 自动补全，差异越大效果越戏剧化</p>
           </div>
@@ -504,7 +548,7 @@ function CreateTab({ models }) {
               label="拖拽或点击上传参考素材（可多选）"
               hint="支持图片/视频/音频，提示词中用「图片1」「视频2」引用" />
             <div className="tip-bar" style={{marginTop:8}}>
-              💡 提示词引用方式: 在提示词中写「图片1」「视频2」「音频1」，序号为同类素材的上传顺序
+              <Ico name="lightbulb"/> 提示词引用方式: 在提示词中写「图片1」「视频2」「音频1」，序号为同类素材的上传顺序
             </div>
           </div>
         )}
@@ -526,7 +570,7 @@ function CreateTab({ models }) {
           <div className="flex items-center justify-between" style={{marginTop:8}}>
             <span className="text-xs text-dim">{prompt.length}/5000</span>
             <button className="btn btn-sm" onClick={handleOptimize} disabled={optimizing || !prompt.trim()}>
-              {optimizing ? <span className="spinner" style={{width:12,height:12}}/> : "✨"} AI 优化提示词
+              {optimizing ? <span className="spinner" style={{width:12,height:12}}/> : <Ico name="sparkles"/>} AI 优化提示词
             </button>
           </div>
         </div>
@@ -568,8 +612,8 @@ function CreateTab({ models }) {
           <div className="form-row">
             <label className="label">推理模式</label>
             <div className="flex gap-2">
-              <button className={`mode-btn ${serviceTier==="default"?"active":""}`} onClick={() => setServiceTier("default")}>● 在线</button>
-              <button className={`mode-btn ${serviceTier==="flex"?"active":""}`} onClick={() => setServiceTier("flex")}>○ 离线半价</button>
+              <button className={`mode-btn ${serviceTier==="default"?"active":""}`} onClick={() => setServiceTier("default")}><Ico name="online"/> 在线</button>
+              <button className={`mode-btn ${serviceTier==="flex"?"active":""}`} onClick={() => setServiceTier("flex")}><Ico name="offline"/> 离线半价</button>
             </div>
           </div>
           <div className="grid-2" style={{marginTop:8}}>
@@ -611,8 +655,8 @@ function CreateTab({ models }) {
         <VideoPlayer task={activeTask} />
         {activeTask && (
           <div className="flex gap-2" style={{marginTop:12}}>
-            <button className="btn btn-sm" onClick={() => pluginApi("GET", `/videos/${activeTask.id}/download`)}>⬇ 下载</button>
-            <button className="btn btn-sm" onClick={() => { setActiveTask(null); }}>🔄 新建</button>
+            <button className="btn btn-sm" onClick={() => pluginApi("GET", `/videos/${activeTask.id}/download`)}><Ico name="download"/> 下载</button>
+            <button className="btn btn-sm" onClick={() => { setActiveTask(null); }}><Ico name="refresh"/> 新建</button>
           </div>
         )}
       </div>
@@ -661,10 +705,10 @@ function TaskListTab() {
                 <span>{t.params?.duration || 5}s</span>
                 {t.service_tier === "flex" && <span className="tag tag-blue">Flex半价</span>}
                 {t.is_draft && <span className="tag tag-orange">样片</span>}
-                {t.status === "succeeded" && t.local_video_path && <span className="tag tag-green">📁已下载</span>}
+                {t.status === "succeeded" && t.local_video_path && <span className="tag tag-green">已下载</span>}
                 {t.status === "failed" && <span className="tag tag-red">失败</span>}
                 {t.status === "running" && <span className="tag tag-blue">生成中</span>}
-                {t.status === "succeeded" && !t.local_video_path && <span className="tag tag-green">✓完成</span>}
+                {t.status === "succeeded" && !t.local_video_path && <span className="tag tag-green"><Ico name="check"/>完成</span>}
               </div>
             </div>
           </div>
@@ -675,8 +719,8 @@ function TaskListTab() {
         <VideoPlayer task={selected} />
         {selected && (
           <div className="flex gap-2" style={{marginTop:12}}>
-            <button className="btn btn-sm" onClick={() => pluginApi("GET", `/videos/${selected.id}/download`)}>⬇ 下载</button>
-            <button className="btn btn-sm" onClick={() => pluginApi("POST", `/tasks/${selected.id}/retry`)}>🔄 重试</button>
+            <button className="btn btn-sm" onClick={() => pluginApi("GET", `/videos/${selected.id}/download`)}><Ico name="download"/> 下载</button>
+            <button className="btn btn-sm" onClick={() => pluginApi("POST", `/tasks/${selected.id}/retry`)}><Ico name="refresh"/> 重试</button>
             <button className="btn btn-sm btn-danger" onClick={async () => {
               await pluginApi("DELETE", `/tasks/${selected.id}`);
               setSelected(null); reload();
@@ -714,7 +758,7 @@ function AssetsTab() {
           {assets.map(a => (
             <div key={a.id} className="card" style={{padding:8,textAlign:"center"}}>
               <div style={{width:"100%",aspectRatio:"1",background:"var(--bg)",borderRadius:4,marginBottom:6,display:"flex",alignItems:"center",justifyContent:"center",fontSize:24}}>
-                {{image:"🖼️",video:"🎬",audio:"🎵"}[a.type] || "📁"}
+                {{image:<Ico name="image"/>,video:<Ico name="film"/>,audio:<Ico name="music"/>}[a.type] || <Ico name="folder"/>}
               </div>
               <div className="text-xs" style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{a.original_name || a.id}</div>
               <div className="text-xs text-dim">{a.type} · {a.size_bytes ? Math.round(a.size_bytes/1024)+"KB" : "?"}</div>
@@ -779,7 +823,7 @@ function PromptGuideTab() {
 
       <div className="card" style={{cursor:"pointer"}} onClick={() => toggleSection("templates")}>
         <div className="card-title flex justify-between items-center">
-          <span>📝 模板库（点击查看 / 套用）</span>
+          <span><Ico name="fileText"/> 模板库（点击查看 / 套用）</span>
           <span className="text-dim">{expanded.templates ? "▲" : "▼"}</span>
         </div>
         {expanded.templates && (
@@ -805,7 +849,7 @@ function PromptGuideTab() {
 
       <div className="card" style={{cursor:"pointer"}} onClick={() => toggleSection("cameras")}>
         <div className="card-title flex justify-between items-center">
-          <span>🎥 镜头语言速查</span>
+          <span><Ico name="camera"/> 镜头语言速查</span>
           <span className="text-dim">{expanded.cameras ? "▲" : "▼"}</span>
         </div>
         {expanded.cameras && (
@@ -822,7 +866,7 @@ function PromptGuideTab() {
 
       <div className="card" style={{cursor:"pointer"}} onClick={() => toggleSection("atmosphere")}>
         <div className="card-title flex justify-between items-center">
-          <span>🎨 氛围关键词库</span>
+          <span><Ico name="palette"/> 氛围关键词库</span>
           <span className="text-dim">{expanded.atmosphere ? "▲" : "▼"}</span>
         </div>
         {expanded.atmosphere && (
@@ -841,7 +885,7 @@ function PromptGuideTab() {
 
       <div className="card" style={{cursor:"pointer"}} onClick={() => toggleSection("formulas")}>
         <div className="card-title flex justify-between items-center">
-          <span>📐 提示词公式</span>
+          <span><Ico name="ruler"/> 提示词公式</span>
           <span className="text-dim">{expanded.formulas ? "▲" : "▼"}</span>
         </div>
         {expanded.formulas && (
@@ -859,7 +903,7 @@ function PromptGuideTab() {
       </div>
 
       <div className="card">
-        <div className="card-title">💡 提示词编写技巧</div>
+        <div className="card-title"><Ico name="lightbulb"/> 提示词编写技巧</div>
         <div style={{fontSize:13,color:"var(--text-muted)",lineHeight:2}}>
           <p>1. 建议 80-200 字，不超过 300 字（5000字符上限）</p>
           <p>2. 使用<strong>时间轴格式</strong>让镜头有节奏：「0-3s: 推镜头, 4-6s: 特写」</p>
@@ -994,7 +1038,7 @@ function StoryboardTab() {
     return (
       <div style={{maxWidth:720}}>
         <div className="card">
-          <div className="card-title">📖 故事输入</div>
+          <div className="card-title"><Ico name="book"/> 故事输入</div>
           <div className="form-row">
             <label className="label">故事 / 脚本内容</label>
             <textarea className="input textarea" rows={6} value={story} onChange={e => setStory(e.target.value)}
@@ -1036,7 +1080,7 @@ function StoryboardTab() {
           {ffmpegOk === false && (
             <div style={{padding:12,background:"rgba(245,158,11,.08)",border:"1px solid rgba(245,158,11,.3)",borderRadius:6,marginBottom:14}}>
               <div className="flex items-center gap-2" style={{marginBottom:6}}>
-                <span style={{color:"var(--warning)",fontWeight:600,fontSize:13}}>⚠ ffmpeg 未安装</span>
+                <span style={{color:"var(--warning)",fontWeight:600,fontSize:13}}><Ico name="warn"/> ffmpeg 未安装</span>
                 <span className="text-xs text-dim">（视频拼接功能需要 ffmpeg）</span>
               </div>
               <div style={{fontSize:12,color:"var(--text-muted)",lineHeight:1.8}}>
@@ -1048,26 +1092,26 @@ function StoryboardTab() {
               </div>
               <button className="btn btn-sm" style={{marginTop:8}} onClick={() => {
                 pluginApi("GET", "/long-video/ffmpeg-check").then(r => setFfmpegOk(r.body?.available ?? false)).catch(() => {});
-              }}>🔄 重新检测 ffmpeg</button>
+              }}><Ico name="refresh"/> 重新检测 ffmpeg</button>
             </div>
           )}
 
           {ffmpegOk === true && (
             <div style={{padding:8,background:"rgba(34,197,94,.08)",border:"1px solid rgba(34,197,94,.2)",borderRadius:6,marginBottom:14,fontSize:13,color:"var(--success)"}}>
-              ✓ ffmpeg 已就绪，可以拼接长视频
+              <Ico name="check"/> ffmpeg 已就绪，可以拼接长视频
             </div>
           )}
 
           <div className="flex gap-2 justify-between items-center">
             <div />
             <button className="btn btn-primary" disabled={!story.trim() || decomposing} onClick={decompose}>
-              {decomposing ? "🤖 AI 拆解中..." : "🎬 AI 分镜拆解"}
+              {decomposing ? "AI 拆解中..." : <><Ico name="film"/> AI 分镜拆解</>}
             </button>
           </div>
         </div>
 
         <div className="card">
-          <div className="card-title">💡 使用说明</div>
+          <div className="card-title"><Ico name="lightbulb"/> 使用说明</div>
           <div style={{fontSize:13,color:"var(--text-muted)",lineHeight:1.8}}>
             <p><strong>1.</strong> 输入你的故事或脚本，AI 会将其拆解为多段 Seedance 分镜</p>
             <p><strong>2.</strong> 可以编辑每段分镜的提示词、时长和过渡方式</p>
@@ -1088,13 +1132,13 @@ function StoryboardTab() {
             <p className="text-xs text-dim">点击段落展开编辑，拖动排序，自由调整</p>
           </div>
           <div className="flex gap-2">
-            <button className="btn btn-sm" onClick={() => setStep("input")}>← 返回</button>
-            <button className="btn btn-sm" onClick={addSeg}>+ 添加段</button>
+            <button className="btn btn-sm" onClick={() => setStep("input")}><Ico name="arrowLeft"/> 返回</button>
+            <button className="btn btn-sm" onClick={addSeg}><Ico name="plus"/> 添加段</button>
           </div>
         </div>
 
         <div className="card" style={{marginBottom:14}}>
-          <div className="card-title">⚙️ 生成参数</div>
+          <div className="card-title"><Ico name="settings"/> 生成参数</div>
           <div className="grid-2">
             <div className="form-row">
               <label className="label">模型</label>
@@ -1198,8 +1242,8 @@ function StoryboardTab() {
                   </div>
                 </div>
                 <div className="flex gap-2" style={{marginTop:8}}>
-                  <button className="btn btn-sm" disabled={idx===0} onClick={() => moveSeg(idx, -1)}>↑ 上移</button>
-                  <button className="btn btn-sm" disabled={idx===segments.length-1} onClick={() => moveSeg(idx, 1)}>↓ 下移</button>
+                  <button className="btn btn-sm" disabled={idx===0} onClick={() => moveSeg(idx, -1)}><Ico name="arrowUp"/> 上移</button>
+                  <button className="btn btn-sm" disabled={idx===segments.length-1} onClick={() => moveSeg(idx, 1)}><Ico name="arrowDown"/> 下移</button>
                   <div style={{flex:1}} />
                   <button className="btn btn-sm btn-danger" onClick={() => removeSeg(idx)}>删除</button>
                 </div>
@@ -1213,7 +1257,7 @@ function StoryboardTab() {
             共 {segments.length} 段，预计总时长 {segments.reduce((s, seg) => s + (seg.duration || segDuration), 0)} 秒
           </p>
           <button className="btn btn-primary" disabled={segments.length === 0 || generating} onClick={startGeneration}>
-            🚀 开始生成 ({genMode === "serial" ? "串行接力" : "并行独立"})
+            <Ico name="rocket"/> 开始生成 ({genMode === "serial" ? "串行接力" : "并行独立"})
           </button>
         </div>
       </div>
@@ -1245,7 +1289,7 @@ function StoryboardTab() {
       <div style={{maxWidth:800}}>
         <div className="flex justify-between items-center" style={{marginBottom:14}}>
           <h3 style={{fontSize:16,fontWeight:600}}>
-            {step === "done" ? "✅ 长视频生成完成" : "生成结果"}
+            {step === "done" ? <><Ico name="check"/> 长视频生成完成</> : "生成结果"}
           </h3>
           <div className="flex gap-2">
             <button className="btn btn-sm" onClick={() => { setStep("input"); setSegments([]); setGenResults([]); setConcatPath(""); }}>
@@ -1273,7 +1317,7 @@ function StoryboardTab() {
                 <span style={{fontSize:13}}>{r.prompt ? r.prompt.slice(0, 50) + "..." : segments[idx]?.prompt?.slice(0, 50) || ""}</span>
               </div>
               <span className={"badge badge-" + (r.status === "succeeded" ? "success" : "error")}>
-                {r.status === "succeeded" ? "✓ 成功" : r.error ? "✗ 失败" : r.status || "未知"}
+                {r.status === "succeeded" ? <><Ico name="check"/> 成功</> : r.error ? <><Ico name="x"/> 失败</> : r.status || "未知"}
               </span>
             </div>
             {r.error && <p className="text-xs" style={{color:"var(--danger)",marginTop:6}}>{r.error}</p>}
@@ -1287,11 +1331,11 @@ function StoryboardTab() {
 
         {step === "done" && concatPath && (
           <div className="card" style={{borderLeft:"3px solid var(--success)",background:"rgba(34,197,94,.05)"}}>
-            <div className="card-title">🎬 拼接完成</div>
+            <div className="card-title"><Ico name="film"/> 拼接完成</div>
             <p style={{fontSize:13,color:"var(--text-muted)",wordBreak:"break-all"}}>{concatPath}</p>
             <button className="btn btn-sm" style={{marginTop:8}} onClick={() =>
               pluginApi("POST", "/storage/open-folder", { path: concatPath.replace(/[/\\][^/\\]*$/, "") })
-            }>📂 打开所在文件夹</button>
+            }><Ico name="folderOpen"/> 打开所在文件夹</button>
           </div>
         )}
 
@@ -1299,7 +1343,7 @@ function StoryboardTab() {
           <div style={{marginTop:16}}>
             {!ffmpegOk && (
               <div style={{padding:10,background:"rgba(245,158,11,.08)",border:"1px solid rgba(245,158,11,.2)",borderRadius:6,marginBottom:12,fontSize:12,color:"var(--text-muted)"}}>
-                ⚠ ffmpeg 未安装，无法拼接视频。请安装 ffmpeg 后点击
+                <Ico name="warn"/> ffmpeg 未安装，无法拼接视频。请安装 ffmpeg 后点击
                 <button className="btn btn-sm" style={{margin:"0 4px"}} onClick={() => {
                   pluginApi("GET", "/long-video/ffmpeg-check").then(r => setFfmpegOk(r.body?.available ?? false)).catch(() => {});
                 }}>重新检测</button>
@@ -1308,10 +1352,10 @@ function StoryboardTab() {
             )}
             <div className="flex justify-between items-center">
               <p className="text-sm text-dim">
-                {ffmpegOk ? `✓ 可拼接 ${succCount} 个视频片段` : ""}
+                {ffmpegOk ? <><Ico name="check"/> 可拼接 {succCount} 个视频片段</> : ""}
               </p>
               <button className="btn btn-primary" disabled={!ffmpegOk || concatenating} onClick={doConcat}>
-                {concatenating ? "拼接中..." : `🎞️ 拼接为长视频 (${transition === "crossfade" ? "交叉淡化" : "硬切"})`}
+                {concatenating ? "拼接中..." : <><Ico name="scissors"/> 拼接为长视频 ({transition === "crossfade" ? "交叉淡化" : "硬切"})</>}
               </button>
             </div>
           </div>
@@ -1351,7 +1395,7 @@ function SettingsTab() {
   return (
     <div style={{maxWidth:640}}>
       <div className="setting-section">
-        <h3>🔑 API 配置</h3>
+        <h3><Ico name="key"/> API 配置</h3>
         <div className="form-row">
           <label className="label">ARK API Key</label>
           <div className="flex gap-2">
@@ -1366,7 +1410,7 @@ function SettingsTab() {
       </div>
 
       <div className="setting-section">
-        <h3>⚙️ 默认参数</h3>
+        <h3><Ico name="settings"/> 默认参数</h3>
         <div className="grid-2">
           <div className="form-row">
             <label className="label">默认推理模式</label>
@@ -1399,7 +1443,7 @@ function SettingsTab() {
       </div>
 
       <div className="setting-section">
-        <h3>📂 文件夹设置</h3>
+        <h3><Ico name="folder"/> 文件夹设置</h3>
         <div className="form-row">
           <label className="label">视频输出目录</label>
           <div className="folder-row">
@@ -1459,7 +1503,7 @@ function SettingsTab() {
       </div>
 
       <div className="setting-section">
-        <h3>🔗 Webhook 设置</h3>
+        <h3><Ico name="link"/> Webhook 设置</h3>
         <div className="form-row">
           <label className="label">回调 URL（可选）</label>
           <input className="input" value={config.callback_url || ""} placeholder="https://..."
@@ -1489,10 +1533,10 @@ function App() {
   return (
     <div className="app">
       <div className="header">
-        <h1>🎬 Seedance 视频生成</h1>
+        <h1><Ico name="video"/> Seedance 视频生成</h1>
         <div className="header-right">
           {keyStatus && <span>API Key: {keyStatus}</span>}
-          <button className="btn btn-sm" onClick={() => setActiveTab(5)}>⚙ 设置</button>
+          <button className="btn btn-sm" onClick={() => setActiveTab(5)}><Ico name="settings"/> 设置</button>
         </div>
       </div>
       <div className="tabs">
