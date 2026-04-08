@@ -2110,7 +2110,17 @@ class OrgRuntime:
     def _register_org_tool_handler(
         self, agent: Any, org_id: str, node_id: str
     ) -> None:
-        """Patch agent's ToolExecutor to intercept org_* tool calls and bridge plan tools."""
+        """Patch agent's ToolExecutor to intercept org_* tool calls and bridge plan tools.
+
+        The ReAct execution path is:
+            execute_batch → execute_tool_with_policy → _execute_tool_impl
+
+        We patch ``execute_tool_with_policy`` so that org_* calls are handled
+        **before** both the ``_check_todo_required`` gate and the
+        ``handler_registry.has_tool()`` check in ``_execute_tool_impl``.
+        Without this, org tools are either blocked by the mandatory-todo
+        policy or rejected as "unknown tools".
+        """
         if not hasattr(agent, "reasoning_engine"):
             return
         engine = agent.reasoning_engine
@@ -2118,14 +2128,19 @@ class OrgRuntime:
             return
         executor = engine._tool_executor
 
-        original_execute = executor.execute_tool
+        original_with_policy = executor.execute_tool_with_policy
         tool_handler = self._tool_handler
 
-        async def _patched_execute(tool_name: str, tool_input: dict, **kwargs) -> str:
+        async def _patched_with_policy(
+            tool_name: str, tool_input: dict, policy_result: Any = None,
+            *, session_id: str | None = None,
+        ) -> str:
             self._node_last_activity[f"{org_id}:{node_id}"] = time.monotonic()
             if tool_name.startswith("org_"):
                 return await tool_handler.handle(tool_name, tool_input, org_id, node_id)
-            result = await original_execute(tool_name, tool_input, **kwargs)
+            result = await original_with_policy(
+                tool_name, tool_input, policy_result, session_id=session_id,
+            )
             if tool_name in ("create_plan", "update_plan_step", "complete_plan"):
                 chain_id = getattr(agent, "_org_context", {}).get("current_chain_id") or ""
                 if chain_id:
@@ -2145,7 +2160,7 @@ class OrgRuntime:
                     )
             return result
 
-        executor.execute_tool = _patched_execute
+        executor.execute_tool_with_policy = _patched_with_policy
 
     # ------------------------------------------------------------------
     # File output tracking → blackboard

@@ -1006,13 +1006,29 @@ async def chat_answer(request: Request, body: ChatAnswerRequest):
 async def chat_cancel(request: Request, body: ChatControlRequest):
     """Cancel the current running task for the specified conversation."""
     conv_id = body.conversation_id
+    reason = body.reason or "用户从聊天界面取消任务"
+
+    # Org node sessions (e.g. "org:<org_id>:node:<node_id>") live in
+    # OrgRuntime._agent_cache, not in the chat agent_pool.  Route the
+    # cancel directly to the runtime so the correct Agent is stopped.
+    if conv_id and conv_id.startswith("org:"):
+        parts = conv_id.split(":")
+        if len(parts) >= 4 and parts[2] == "node":
+            org_id, node_id = parts[1], parts[3]
+            rt = getattr(request.app.state, "org_runtime", None)
+            if rt:
+                logger.info(
+                    f"[Chat API] Cancel routed to OrgRuntime: org={org_id}, node={node_id}"
+                )
+                result = await to_engine(rt.cancel_node_task(org_id, node_id, reason))
+                return {"status": "ok", "action": "cancel", "reason": reason, **result}
+
     agent = _get_existing_agent(request, conv_id)
     actual_agent = _resolve_agent(agent) if agent else None
     if actual_agent is None:
         logger.warning("[Chat API] Cancel failed: Agent not initialized")
         return {"status": "error", "message": "Agent not initialized"}
 
-    reason = body.reason or "用户从聊天界面取消任务"
     _conv_id = conv_id or getattr(actual_agent, "_current_conversation_id", None)
     logger.info(f"[Chat API] Cancel 接收到请求: reason={reason!r}, conv_id={_conv_id!r}")
     actual_agent.cancel_current_task(reason, session_id=_conv_id)
