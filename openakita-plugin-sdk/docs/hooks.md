@@ -1,6 +1,6 @@
 # 生命周期钩子 / Lifecycle Hooks
 
-OpenAkita 提供 **10 个钩子**，覆盖插件的完整生命周期：初始化、消息收发、记忆检索、工具调用、会话管理、Prompt 构建和定时任务。
+OpenAkita 提供 **14 个钩子**，覆盖插件的完整生命周期：初始化、消息收发、记忆检索、工具调用（前/后）、会话管理、Prompt 构建、定时任务、配置变更和错误处理。
 
 OpenAkita provides **10 hooks** covering the full plugin lifecycle: initialization, message I/O, memory retrieval, tool execution, session management, prompt assembly, and scheduled tasks.
 
@@ -236,6 +236,83 @@ api.register_hook("on_prompt_build", on_prompt_build)
 **参数 / kwargs:** `prompt: str`（当前系统 Prompt 文本 / current system prompt text）
 
 **返回值 / Return:** `str | None` — 返回的文本将追加到 Prompt 末尾 / returned text is appended to prompt
+
+---
+
+### `on_before_tool_use`
+
+工具调用执行前触发。可检查或记录即将调用的工具。
+
+Fired before a tool call is executed.
+
+```python
+async def on_before_tool_use(**kwargs):
+    api.log(f"About to call: {kwargs['tool_name']}")
+
+api.register_hook("on_before_tool_use", on_before_tool_use)
+```
+
+**权限 / Permission:** `hooks.retrieve`
+
+**参数 / kwargs:** `tool_name: str`, `arguments: dict`
+
+---
+
+### `on_after_tool_use`
+
+工具调用完成后触发（含耗时信息）。
+
+Fired after a tool call completes (with timing info).
+
+```python
+async def on_after_tool_use(**kwargs):
+    api.log(f"{kwargs['tool_name']} took {kwargs['elapsed_ms']:.0f}ms")
+
+api.register_hook("on_after_tool_use", on_after_tool_use)
+```
+
+**权限 / Permission:** `hooks.retrieve`
+
+**参数 / kwargs:** `tool_name: str`, `arguments: dict`, `result: str`, `elapsed_ms: float`
+
+---
+
+### `on_config_change`
+
+插件配置被更新时触发。
+
+Fired when the plugin's configuration is updated.
+
+```python
+async def on_config_change(**kwargs):
+    new_config = kwargs["config"]
+    api.log(f"Config updated for {kwargs['plugin_id']}")
+
+api.register_hook("on_config_change", on_config_change)
+```
+
+**权限 / Permission:** `hooks.basic`
+
+**参数 / kwargs:** `plugin_id: str`, `config: dict`
+
+---
+
+### `on_error`
+
+插件运行时发生错误时触发。
+
+Fired when an error occurs during plugin operation.
+
+```python
+async def on_error(**kwargs):
+    api.log(f"Error in {kwargs['context']}: {kwargs['error']}")
+
+api.register_hook("on_error", on_error)
+```
+
+**权限 / Permission:** `hooks.basic`
+
+**参数 / kwargs:** `plugin_id: str`, `context: str`, `error: str`
 
 ---
 

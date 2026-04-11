@@ -55,7 +55,7 @@ Risk prompts are shown to users during installation.
 | 权限 ID / Permission | API 方法 / API Method | 说明 / Description |
 |---------------------|----------------------|-------------------|
 | `llm.register` | `register_llm_provider()`, `register_llm_registry()` | 注册新的 LLM 提供商 / Register new LLM providers |
-| `hooks.all` | 所有 10 个钩子 / all 10 hooks | 完整钩子访问权 / Full hook access |
+| `hooks.all` | 所有 14 个钩子 / all 14 hooks | 完整钩子访问权 / Full hook access |
 | `memory.replace` | `register_memory_backend()` 替换模式 / replace mode | 替换内置记忆系统 / Replace built-in memory |
 | `system.config.write` | — | 写入全局系统配置 / Write global system config |
 

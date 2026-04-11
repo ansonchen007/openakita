@@ -28,6 +28,8 @@ class MockPluginAPI(PluginAPI):
         self.registered_routes: list = []
         self.sent_messages: list[dict] = []
         self._data_dir = Path(tempfile.mkdtemp())
+        self.registered_ui_event_handlers: dict[str, list[Callable]] = {}
+        self.broadcast_events: list[dict] = []
 
     def log(self, msg: str, level: str = "info") -> None:
         self.logs.append((level, msg))
@@ -90,6 +92,16 @@ class MockPluginAPI(PluginAPI):
 
     def send_message(self, channel: str, chat_id: str, text: str) -> None:
         self.sent_messages.append({"channel": channel, "chat_id": chat_id, "text": text})
+
+    # --- Plugin 2.0: UI support ---
+
+    def broadcast_ui_event(self, event_type: str, data: dict, **kwargs: Any) -> None:
+        self.broadcast_events.append({"type": event_type, "data": data})
+
+    def register_ui_event_handler(
+        self, event_type: str, handler: Callable, **kwargs: Any,
+    ) -> None:
+        self.registered_ui_event_handlers.setdefault(event_type, []).append(handler)
 
 
 def assert_plugin_loads(plugin: PluginBase, api: MockPluginAPI | None = None) -> MockPluginAPI:

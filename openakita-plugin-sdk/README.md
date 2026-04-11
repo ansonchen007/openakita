@@ -24,7 +24,7 @@ python -m openakita_plugin_sdk.scaffold --id my-tool --type tool --dir ./plugins
 
 This creates a complete plugin directory with `plugin.json`, `plugin.py`, and `README.md`.
 
-Available types: `tool`, `channel`, `rag`, `memory`, `llm`, `hook`, `skill`, `mcp`.
+Available types: `tool`, `channel`, `rag`, `memory`, `llm`, `hook`, `skill`, `mcp`, `ui`.
 
 ### Option B: Use decorators
 
@@ -109,10 +109,15 @@ def test_my_plugin():
 | [Testing](docs/testing.md) | MockPluginAPI and test patterns |
 | [Cross-Ecosystem](docs/cross-ecosystem.md) | Compatibility with Claude/Cursor/Codex |
 
+> **Full-stack UI plugin guide and REST API reference** are available in the [plugins repository](https://github.com/openakita/openakita-plugins/tree/main/sdk-docs).
+
 ## SDK Modules
 
 ```python
-from openakita_plugin_sdk import PluginBase, PluginAPI, tool_definition
+from openakita_plugin_sdk import (
+    PluginBase, PluginAPI, PluginManifest, tool_definition,
+    SDK_VERSION, PLUGIN_API_VERSION, PLUGIN_UI_API_VERSION,
+)
 from openakita_plugin_sdk.decorators import tool, hook, auto_register
 from openakita_plugin_sdk.scaffold import scaffold_plugin
 from openakita_plugin_sdk.testing import MockPluginAPI, assert_plugin_loads
