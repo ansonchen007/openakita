@@ -908,6 +908,8 @@ class ReasoningEngine:
         react_trace: list[dict] = []
         _trace_started_at = datetime.now().isoformat()
 
+        _last_discovered_snapshot: frozenset = frozenset()
+
         for iteration in range(max_iterations):
             self._last_working_messages = working_messages
             state.iteration = iteration
@@ -1056,19 +1058,24 @@ class ReasoningEngine:
                 except ValueError:
                     pass
 
-            # Refresh tools if _discovered_tools changed (e.g. after tool_search)
+            # Refresh tools only when _discovered_tools actually changes
+            # (not every iteration — otherwise Supervisor NUDGE that strips
+            # tools to [] gets immediately overridden; see issue #443)
             _agent = getattr(self._tool_executor, "_agent_ref", None)
             if iteration > 0 and _agent and getattr(_agent, "_discovered_tools", None):
-                refreshed = _filter_tools_by_mode(_agent._effective_tools, mode)
-                if {t.get("name") for t in refreshed} != {t.get("name") for t in tools}:
-                    tools = refreshed
-                    _allowed_tool_names = (
-                        {t.get("name", "") for t in tools} if mode != "agent" else None
-                    )
-                    logger.info(
-                        "[ReAct] tools refreshed after tool_search discovery (now %d tools)",
-                        len(tools),
-                    )
+                _current_discovered = frozenset(getattr(_agent, "_discovered_tools", ()))
+                if _current_discovered != _last_discovered_snapshot:
+                    _last_discovered_snapshot = _current_discovered
+                    refreshed = _filter_tools_by_mode(_agent._effective_tools, mode)
+                    if {t.get("name") for t in refreshed} != {t.get("name") for t in tools}:
+                        tools = refreshed
+                        _allowed_tool_names = (
+                            {t.get("name", "") for t in tools} if mode != "agent" else None
+                        )
+                        logger.info(
+                            "[ReAct] tools refreshed after tool_search discovery (now %d tools)",
+                            len(tools),
+                        )
 
             _thinking_t0 = time.time()  # 思维链: 记录 thinking 开始时间
             try:
@@ -1961,12 +1968,21 @@ class ReasoningEngine:
                                 "content": intervention.prompt_injection,
                             }
                         )
-                        tools = []
+                        if intervention.throttled_tool_names:
+                            _blocked = set(intervention.throttled_tool_names)
+                            tools = [t for t in tools if t.get("name") not in _blocked]
+                            logger.info(
+                                f"[Supervisor] NUDGE: removed throttled tools {_blocked}, "
+                                f"{len(tools)} tools remain "
+                                f"(iter={iteration}, pattern={intervention.pattern.value})"
+                            )
+                        else:
+                            tools = []
+                            logger.info(
+                                f"[Supervisor] NUDGE: tools stripped to force text response "
+                                f"(iter={iteration}, pattern={intervention.pattern.value})"
+                            )
                         max_no_tool_retries = 0
-                        logger.info(
-                            f"[Supervisor] NUDGE: tools stripped to force text response "
-                            f"(iter={iteration}, pattern={intervention.pattern.value})"
-                        )
 
         self._last_working_messages = working_messages
         self._save_react_trace(
@@ -2255,6 +2271,8 @@ class ReasoningEngine:
                 f"[ReAct-Stream] === Loop started (max_iterations={max_iterations}, model={current_model}) ==="
             )
 
+            _last_discovered_snapshot: frozenset = frozenset()
+
             for _iteration in range(max_iterations):
                 self._last_working_messages = working_messages
                 state.iteration = _iteration
@@ -2399,21 +2417,26 @@ class ReasoningEngine:
                 # --- 思维链: 迭代开始事件 ---
                 yield {"type": "iteration_start", "iteration": _iteration + 1}
 
-                # Refresh tools if _discovered_tools changed (e.g. after tool_search)
+                # Refresh tools only when _discovered_tools actually changes
+                # (not every iteration — otherwise Supervisor NUDGE that strips
+                # tools to [] gets immediately overridden; see issue #443)
                 _agent = getattr(self._tool_executor, "_agent_ref", None)
                 if _iteration > 0 and _agent and getattr(_agent, "_discovered_tools", None):
-                    refreshed = _filter_tools_by_mode(_agent._effective_tools, _effective_mode)
-                    if {t.get("name") for t in refreshed} != {t.get("name") for t in tools}:
-                        tools = refreshed
-                        _allowed_tool_names = (
-                            {t.get("name", "") for t in tools}
-                            if _effective_mode != "agent"
-                            else None
-                        )
-                        logger.info(
-                            "[ReAct-Stream] tools refreshed after tool_search discovery (now %d tools)",
-                            len(tools),
-                        )
+                    _current_discovered = frozenset(getattr(_agent, "_discovered_tools", ()))
+                    if _current_discovered != _last_discovered_snapshot:
+                        _last_discovered_snapshot = _current_discovered
+                        refreshed = _filter_tools_by_mode(_agent._effective_tools, _effective_mode)
+                        if {t.get("name") for t in refreshed} != {t.get("name") for t in tools}:
+                            tools = refreshed
+                            _allowed_tool_names = (
+                                {t.get("name", "") for t in tools}
+                                if _effective_mode != "agent"
+                                else None
+                            )
+                            logger.info(
+                                "[ReAct-Stream] tools refreshed after tool_search discovery (now %d tools)",
+                                len(tools),
+                            )
 
                 # --- Reason phase (真流式) ---
                 _thinking_t0 = time.time()
@@ -3607,12 +3630,21 @@ class ReasoningEngine:
                                     "content": intervention.prompt_injection,
                                 }
                             )
-                            tools = []
+                            if intervention.throttled_tool_names:
+                                _blocked = set(intervention.throttled_tool_names)
+                                tools = [t for t in tools if t.get("name") not in _blocked]
+                                logger.info(
+                                    f"[Supervisor] NUDGE: removed throttled tools {_blocked}, "
+                                    f"{len(tools)} tools remain "
+                                    f"(iter={_iteration}, pattern={intervention.pattern.value})"
+                                )
+                            else:
+                                tools = []
+                                logger.info(
+                                    f"[Supervisor] NUDGE: tools stripped to force text response "
+                                    f"(iter={_iteration}, pattern={intervention.pattern.value})"
+                                )
                             max_no_tool_retries = 0
-                            logger.info(
-                                f"[Supervisor] NUDGE: tools stripped to force text response "
-                                f"(iter={_iteration}, pattern={intervention.pattern.value})"
-                            )
 
                     continue  # Next iteration
 
