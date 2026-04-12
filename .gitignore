@@ -246,3 +246,6 @@ claude_code/
 # Cursor commit message drafts
 .commitmsg
 .commitmsg_responses
+
+# QQ Bot SDK logs
+botpy.log*
