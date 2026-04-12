@@ -28,7 +28,7 @@ from models import (
 )
 from prompt_optimizer import (
     PROMPT_TEMPLATES, CAMERA_KEYWORDS, ATMOSPHERE_KEYWORDS,
-    MODE_FORMULAS, optimize_prompt,
+    MODE_FORMULAS, optimize_prompt, PromptOptimizeError,
 )
 from task_manager import TaskManager
 
@@ -594,17 +594,23 @@ class Plugin(PluginBase):
         async def optimize_prompt_endpoint(body: PromptOptimizeBody) -> dict:
             brain = self._api.get_brain()
             if not brain:
-                return {"ok": False, "error": "LLM not available", "result": body.prompt}
-            result = await optimize_prompt(
-                brain=brain,
-                user_prompt=body.prompt,
-                mode=body.mode,
-                duration=body.duration,
-                ratio=body.ratio,
-                asset_summary=body.asset_summary,
-                level=body.level,
-            )
-            return {"ok": True, "result": result}
+                return {"ok": False, "error": "LLM 不可用，请在主设置中配置 LLM"}
+            try:
+                result = await optimize_prompt(
+                    brain=brain,
+                    user_prompt=body.prompt,
+                    mode=body.mode,
+                    duration=body.duration,
+                    ratio=body.ratio,
+                    asset_summary=body.asset_summary,
+                    level=body.level,
+                )
+                return {"ok": True, "result": result}
+            except PromptOptimizeError as e:
+                return {"ok": False, "error": str(e)}
+            except Exception as e:
+                logger.error("Prompt optimize endpoint error: %s", e)
+                return {"ok": False, "error": f"优化失败: {e}"}
 
         # --- Assets ---
 

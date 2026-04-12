@@ -42,6 +42,7 @@
     .btn-primary { background: var(--primary); color: #fff; border-color: var(--primary); }
     .btn-primary:hover { background: var(--primary-hover); }
     .btn-primary:disabled { opacity: .5; cursor: not-allowed; }
+    .btn:disabled { opacity: .5; cursor: not-allowed; }
     .btn-sm { padding: 4px 10px; font-size: 12px; }
     .btn-danger { color: var(--danger); border-color: var(--danger); }
     .input { width: 100%; padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--text); font-size: 13px; outline: none; }
@@ -611,9 +612,19 @@ function CreateTab({ models, onGoToTasks }) {
     if (!prompt.trim()) return;
     setOptimizing(true);
     try {
-      const r = await pluginApi("POST", "/prompt-optimize", { prompt, mode, duration, ratio });
-      if (r.body?.result) setPrompt(r.body.result);
-    } catch {}
+      var base = _ctx ? "/api/plugins/" + _ctx.pluginId : "/api/plugins/seedance-video";
+      const r = await directFetch("POST", base + "/prompt-optimize", { prompt, mode, duration, ratio });
+      if (r.body?.ok && r.body?.result && r.body.result !== prompt) {
+        setPrompt(r.body.result);
+        showToast("提示词优化完成", "success");
+      } else if (!r.body?.ok) {
+        showToast("提示词优化失败: " + (r.body?.error || r.body?.detail || "LLM 不可用"), "error");
+      } else {
+        showToast("提示词无需优化或 LLM 返回了相同内容", "warning");
+      }
+    } catch (e) {
+      showToast("提示词优化请求失败: " + (e.message || "网络错误"), "error");
+    }
     setOptimizing(false);
   };
 

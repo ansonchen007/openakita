@@ -52,6 +52,10 @@ LEVEL_INSTRUCTIONS = {
 }
 
 
+class PromptOptimizeError(Exception):
+    """Raised when prompt optimization fails."""
+
+
 async def optimize_prompt(
     brain: Any,
     user_prompt: str,
@@ -61,7 +65,11 @@ async def optimize_prompt(
     asset_summary: str = "无",
     level: str = "professional",
 ) -> str:
-    """Call the host LLM to refine a user prompt into Seedance format."""
+    """Call the host LLM to refine a user prompt into Seedance format.
+
+    Raises PromptOptimizeError on failure instead of silently returning the
+    original prompt, so the caller can surface the error to the user.
+    """
     level_instruction = LEVEL_INSTRUCTIONS.get(level, LEVEL_INSTRUCTIONS["professional"])
 
     user_msg = OPTIMIZE_USER_TEMPLATE.format(
@@ -74,10 +82,21 @@ async def optimize_prompt(
         level_instruction=level_instruction,
     )
 
+    if hasattr(brain, "think_lightweight"):
+        try:
+            result = await brain.think_lightweight(prompt=user_msg, system=OPTIMIZE_SYSTEM_PROMPT)
+            text = getattr(result, "content", "") or (result.get("content", "") if isinstance(result, dict) else str(result))
+            if text.strip():
+                return text
+        except Exception as e:
+            logger.warning("think_lightweight failed, falling back to think: %s", e)
+
     try:
         if hasattr(brain, "think"):
             result = await brain.think(prompt=user_msg, system=OPTIMIZE_SYSTEM_PROMPT)
             text = getattr(result, "content", "") or (result.get("content", "") if isinstance(result, dict) else str(result))
+            if not text.strip():
+                raise PromptOptimizeError("LLM 返回了空内容")
             return text
         elif hasattr(brain, "chat"):
             result = await brain.chat(
@@ -86,13 +105,17 @@ async def optimize_prompt(
                     {"role": "user", "content": user_msg},
                 ]
             )
-            return result.get("content", "") if isinstance(result, dict) else str(result)
+            text = result.get("content", "") if isinstance(result, dict) else str(result)
+            if not text.strip():
+                raise PromptOptimizeError("LLM 返回了空内容")
+            return text
         else:
-            logger.warning("Brain object has no think() or chat() method")
-            return user_prompt
+            raise PromptOptimizeError("Brain 对象没有 think() 或 chat() 方法")
+    except PromptOptimizeError:
+        raise
     except Exception as e:
         logger.error("Prompt optimization failed: %s", e)
-        return user_prompt
+        raise PromptOptimizeError(f"LLM 调用失败: {e}") from e
 
 
 # ── Built-in prompt templates ──

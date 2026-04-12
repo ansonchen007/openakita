@@ -260,7 +260,8 @@ class PluginManager:
         granted = self._resolve_permissions(manifest, state_entry.granted_permissions)
         state_entry.granted_permissions = granted
 
-        data_dir = plugin_dir
+        data_dir = self._plugins_dir.parent / "plugin_data" / manifest.id
+        data_dir.mkdir(parents=True, exist_ok=True)
         api = PluginAPI(
             plugin_id=manifest.id,
             manifest=manifest,
@@ -867,10 +868,10 @@ class PluginManager:
     def get_plugin_logs(self, plugin_id: str, lines: int = 100) -> str:
         loaded = self._loaded.get(plugin_id)
         if loaded is not None:
-            log_dir = loaded.plugin_dir / "logs"
+            log_dir = loaded.api._data_dir / "logs"
         else:
-            found = self._find_plugin_dir(plugin_id)
-            log_dir = (found / "logs") if found else (self._plugins_dir / plugin_id / "logs")
+            data_dir = self._plugins_dir.parent / "plugin_data" / plugin_id
+            log_dir = data_dir / "logs"
 
         log_file = log_dir / f"{plugin_id}.log"
         if not log_file.exists():
