@@ -1500,6 +1500,7 @@
     "skillsModeAll": "All Skills",
     "skillsModeInclusive": "Only selected skills",
     "skillsModeExclusive": "Exclude selected skills",
+    "skillSearchPlaceholder": "Search skills…",
     "category": "Category",
     "categoryAll": "All",
     "categoryGeneral": "General",

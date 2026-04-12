@@ -1500,6 +1500,7 @@
     "skillsModeAll": "全部技能",
     "skillsModeInclusive": "仅使用勾选的技能",
     "skillsModeExclusive": "排除勾选的技能",
+    "skillSearchPlaceholder": "搜索技能…",
     "category": "分类",
     "categoryAll": "全部",
     "categoryGeneral": "通用基础",
