@@ -83,6 +83,7 @@ export type StreamEvent =
   | { type: "sub_agent_state"; agent_id?: string; agentId?: string; session_id?: string; sessionId?: string; status?: string; reason?: string; protocol_version?: number }
   | { type: "artifact"; artifact_type: string; file_url: string; path: string; name: string; caption: string; size?: number }
   | { type: "security_confirm"; tool: string; tool_name?: string; args: Record<string, unknown>; id?: string; call_id?: string; confirm_id?: string; reason: string; risk_level: string; needs_sandbox: boolean; protocol_version?: number }
+  | { type: "death_switch"; active: boolean; reason?: string }
   | { type: "ui_preference"; theme?: string; language?: string }
   | { type: "error"; message: string }
   | { type: "done"; reason?: string; usage?: { input_tokens: number; output_tokens: number; total_tokens?: number; context_tokens?: number; context_limit?: number } };

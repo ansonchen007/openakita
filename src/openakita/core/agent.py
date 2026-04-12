@@ -208,7 +208,7 @@ risks_or_ambiguities: [风险或歧义点列表，如果没有则为空]
 - 不要解决任务
 - 不要给建议
 - 不要输出最终答案
-- 不要假设执行能力的限制（如"AI无法操作浏览器"等）
+- 不要编造能力：不得虚构「工具在用户本机执行」等事实；但若任务涉及**用户本机才可观测的效果**（本机 GUI、本机安装、游戏内 overlay 等），必须在 `constraints` 或 `risks_or_ambiguities` 中**如实**写出「默认仅在 OpenAkita 宿主执行、与用户聊天设备可能不同域」等部署边界——这与「假设能力限制」不同，是事实约束
 - 只输出 YAML 格式的结构化任务定义
 - 保持简洁，每项不超过一句话
 
@@ -624,7 +624,7 @@ class Agent:
         # 上下文管理器（委托自 _compress_context 等）
         self.context_manager = ContextManager(brain=self.brain)
 
-        # 响应处理器（委托自 _verify_task_completion 等）
+        # 响应处理器（任务完成度复核见 ResponseHandler.verify_task_completion，由 ReasoningEngine 调用）
         self.response_handler = ResponseHandler(
             brain=self.brain,
             memory_manager=self.memory_manager,
@@ -5110,25 +5110,8 @@ class Agent:
             return False
 
     def _get_last_user_request(self, messages: list[dict]) -> str:
-        """获取最后一条用户请求（当前任务的原始请求）"""
-        from .tool_executor import smart_truncate
-
-        for msg in reversed(messages):
-            if msg.get("role") == "user":
-                content = msg.get("content", "")
-                if isinstance(content, str) and not content.startswith("[系统]"):
-                    result, _ = smart_truncate(content, 3000, save_full=False, label="user_request")
-                    return result
-                elif isinstance(content, list):
-                    for part in content:
-                        if isinstance(part, dict) and part.get("type") == "text":
-                            text = part.get("text", "")
-                            if not text.startswith("[系统]"):
-                                result, _ = smart_truncate(
-                                    text, 3000, save_full=False, label="user_request"
-                                )
-                                return result
-        return ""
+        """获取最后一条用户请求（与 TaskVerify 同源，委托 ResponseHandler）。"""
+        return ResponseHandler.get_last_user_request(messages)
 
     @staticmethod
     def _build_tool_fallback_summary(
@@ -5154,147 +5137,6 @@ class Agent:
             return f"任务已执行完毕（使用了工具：{tool_summary}），但模型未生成文本总结。如需详情请重新提问。"
 
         return None
-
-    async def _verify_task_completion(
-        self,
-        user_request: str,
-        assistant_response: str,
-        executed_tools: list[str],
-        delivery_receipts: list[dict] | None = None,
-    ) -> bool:
-        """
-        任务完成度复核
-
-        让 LLM 判断当前响应是否真正完成了用户的意图，
-        而不是仅仅返回了中间状态的文本。
-
-        Args:
-            user_request: 用户原始请求
-            assistant_response: 助手当前响应
-            executed_tools: 已执行的工具列表
-
-        Returns:
-            True 如果任务已完成，False 如果需要继续执行
-        """
-        delivery_receipts = delivery_receipts or []
-
-        # === Quick completion check (evidence-based) ===
-        # 交付型任务：必须以 deliver_artifacts 的成功回执作为“已交付”证据，而不是仅凭工具名。
-        if "deliver_artifacts" in (executed_tools or []):
-            delivered = [r for r in delivery_receipts if r.get("status") == "delivered"]
-            if delivered:
-                logger.info(
-                    f"[TaskVerify] deliver_artifacts delivered={len(delivered)}, marking as completed"
-                )
-                return True
-
-        # Plan 明确完成：允许快速完成（避免卡在 verify）
-        if "complete_todo" in (executed_tools or []):
-            logger.info("[TaskVerify] complete_todo executed, marking as completed")
-            return True
-
-        # 如果响应宣称“已发送/已交付”，但没有任何交付证据，默认判定未完成（避免空口刷屏）
-        if (
-            any(
-                k in (assistant_response or "")
-                for k in ("已发送", "已交付", "已发给你", "已发给您")
-            )
-            and not delivery_receipts
-            and "deliver_artifacts" not in (executed_tools or [])
-        ):
-            logger.info("[TaskVerify] delivery claim without receipts/tools, marking as INCOMPLETE")
-            return False
-
-        # === Plan 步骤检查：如果有活跃 Plan 且有未完成步骤，强制继续执行 ===
-        from ..tools.handlers.plan import get_todo_handler_for_session, has_active_todo
-
-        conversation_id = getattr(self, "_current_conversation_id", None) or getattr(
-            self, "_current_session_id", None
-        )
-        if conversation_id and has_active_todo(conversation_id):
-            handler = get_todo_handler_for_session(conversation_id)
-            plan = handler.get_plan_for(conversation_id) if handler else None
-            if plan:
-                steps = plan.get("steps", [])
-                pending = [s for s in steps if s.get("status") in ("pending", "in_progress")]
-
-                if pending:
-                    pending_ids = [s.get("id", "?") for s in pending[:3]]
-                    logger.info(
-                        f"[TaskVerify] Plan has {len(pending)} pending steps: {pending_ids}, forcing continue"
-                    )
-                    return False
-
-                if plan.get("status") != "completed":
-                    logger.info(
-                        "[TaskVerify] All plan steps done but plan not formally completed, proceeding to LLM verification"
-                    )
-                    # 继续执行 LLM 验证，不强制返回 False
-
-        # 依赖 LLM 进行判断
-        from .tool_executor import smart_truncate
-
-        user_display, _ = smart_truncate(user_request, 3000, save_full=False, label="verify_user")
-        response_display, _ = smart_truncate(
-            assistant_response, 8000, save_full=False, label="verify_response"
-        )
-
-        verify_prompt = f"""请判断以下交互是否已经**完成**用户的意图。
-
-## 用户消息
-{user_display}
-
-## 助手响应
-{response_display}
-
-## 已执行的工具
-{", ".join(executed_tools) if executed_tools else "无"}
-
-## 附件交付回执（如有）
-{delivery_receipts if delivery_receipts else "无"}
-
-## 判断标准
-
-### 非任务类消息（直接判 COMPLETED）
-- 如果用户消息是**闲聊/问候**（如"在吗""你好""在不在""嗨""干嘛呢"），助手已礼貌回复 → **COMPLETED**
-- 如果用户消息是**简单确认/反馈**（如"好的""收到""嗯""哦"），助手已简短回应 → **COMPLETED**
-- 如果用户消息是**简单问答**（如"几点了""天气怎么样"），助手已给出回答 → **COMPLETED**
-
-### 任务类消息
-- 如果已执行 write_file 工具，说明文件已保存，保存任务完成
-- 如果已执行 browser_navigate/browser_click 等浏览器工具，说明浏览器操作已执行
-- 工具执行成功即表示该操作完成，不要求响应文本中包含文件内容
-- 如果响应只是说"现在开始..."、"让我..."且没有工具执行，说明任务还在进行中
-- 如果响应包含明确的操作确认（如"已完成"、"已发送"、"已保存"），任务完成
-
-## 回答要求
-请用以下格式回答：
-STATUS: COMPLETED 或 INCOMPLETE
-EVIDENCE: 完成的证据（如有）
-MISSING: 缺失的内容（如有）
-NEXT: 建议的下一步（如有）"""
-
-        try:
-            response = await self.brain.think_lightweight(
-                prompt=verify_prompt,
-                system="你是一个任务完成度判断助手。请分析任务是否完成，并说明证据和缺失项。",
-                max_tokens=512,
-            )
-
-            result = response.content.strip().upper() if response.content else ""
-            # 建议 33: 改进的完成度判断
-            is_completed = "STATUS: COMPLETED" in result or (
-                "COMPLETED" in result and "INCOMPLETE" not in result
-            )
-
-            logger.info(
-                f"[TaskVerify] user_request={user_request[:50]}... response={assistant_response[:50]}... result={result} -> {is_completed}"
-            )
-            return is_completed
-
-        except Exception as e:
-            logger.warning(f"[TaskVerify] Failed to verify: {e}, assuming INCOMPLETE")
-            return False  # 验证失败时不要默认完成，交由上层计数器做兜底退出
 
     async def _cancellable_llm_call(self, cancel_event: asyncio.Event, **kwargs) -> Any:
         """将 LLM 调用包装为可取消的 asyncio.Task，配合 cancel_event 竞速。

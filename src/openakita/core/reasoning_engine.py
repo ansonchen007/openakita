@@ -2272,6 +2272,7 @@ class ReasoningEngine:
             )
 
             _last_discovered_snapshot: frozenset = frozenset()
+            _death_switch_notified = False
 
             for _iteration in range(max_iterations):
                 self._last_working_messages = working_messages
@@ -3067,6 +3068,16 @@ class ReasoningEngine:
                             _deny_summary = self._summarize_tool_result(tool_name, result_text)
                             if _deny_summary:
                                 yield {"type": "chain_text", "content": _deny_summary}
+                            if _pe.readonly_mode and not _death_switch_notified:
+                                yield {"type": "death_switch", "active": True, "reason": _pr.reason}
+                                _death_switch_notified = True
+                            if _pe.readonly_mode:
+                                result_text = (
+                                    f"{result_text}\n\n"
+                                    "[DEATH SWITCH] Agent 已进入只读模式，所有非只读操作将被拒绝。"
+                                    "请立即停止尝试修改/写入/执行操作，仅使用读取类工具。"
+                                    "等待用户手动解除只读模式后再继续。"
+                                )
                             tool_results_for_msg.append(
                                 {
                                     "type": "tool_result",

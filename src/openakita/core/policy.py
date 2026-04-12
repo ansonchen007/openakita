@@ -1201,6 +1201,16 @@ class PolicyEngine:
                 f"[Policy] 死亡开关触发: 连续拒绝={self._consecutive_denials}, "
                 f"累计拒绝={self._total_denials}, Agent 进入只读模式"
             )
+            try:
+                from openakita.api.routes.websocket import broadcast_event
+
+                asyncio.ensure_future(broadcast_event(
+                    "security:death_switch",
+                    {"active": True, "consecutive": self._consecutive_denials,
+                     "total": self._total_denials},
+                ))
+            except Exception:
+                pass
         self._audit(tool_name, params, result)
 
     def _on_allow(self, tool_name: str, params: dict[str, Any] | None = None) -> None:

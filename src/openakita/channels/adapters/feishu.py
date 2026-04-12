@@ -1398,18 +1398,20 @@ class FeishuAdapter(ChannelAdapter):
         """发送"思考中..."占位卡片（首次调用时发送，后续调用跳过）。
 
         Gateway 的 _keep_typing 每 4 秒调用一次，仅第一次生成卡片。
+        卡片已存在时直接返回，不清空流式状态（与 dingtalk 等适配器一致）。
         """
         sk = self._make_session_key(chat_id, thread_id)
-        self._streaming_finalized.discard(sk)
-        self._streaming_thinking.pop(sk, None)
-        self._streaming_thinking_ms.pop(sk, None)
-        self._streaming_chain.pop(sk, None)
         if sk in self._typing_suppressed:
             return
         if sk in self._thinking_cards:
             return
         if not self._client:
             return
+        # 仅在真正创建新卡片时初始化流式状态
+        self._streaming_finalized.discard(sk)
+        self._streaming_thinking.pop(sk, None)
+        self._streaming_thinking_ms.pop(sk, None)
+        self._streaming_chain.pop(sk, None)
         self._typing_start_time[sk] = time.time()
         self._typing_status[sk] = "处理中"
         reply_to = self._last_user_msg.pop(sk, None) or thread_id
@@ -1594,20 +1596,30 @@ class FeishuAdapter(ChannelAdapter):
         final: bool = False,
     ) -> bool:
         """更新占位卡片内容。优先 CardKit element update（无次数限制），
-        回退至 im.v1.message.patch（有 20-30 次限制）。"""
+        回退至 im.v1.message.patch（有 20-30 次限制）。
+
+        注意：CardKit（schemaV2）创建的卡片不能用 PatchMessage（schemaV1）更新，
+        因此 CardKit 卡片失败时不走 PatchMessage 回退。
+        """
         # --- CardKit 路径 ---
         ck = self._cardkit_cards.get(sk) if sk else None
         if ck:
             card_id, element_id = ck
             try:
                 await self._update_cardkit_element(card_id, element_id, new_content)
-                if final:
-                    await self._finish_cardkit_card(card_id)
-                return True
             except Exception as e:
-                logger.debug(f"Feishu: CardKit element update failed, falling back: {e}")
+                logger.warning(f"Feishu: CardKit element update failed: {e}")
+                return False
+            if final:
+                try:
+                    await self._finish_cardkit_card(card_id)
+                except Exception as e:
+                    logger.info(
+                        f"Feishu: CardKit finish failed (content already updated): {e}"
+                    )
+            return True
 
-        # --- PatchMessage 回退 ---
+        # --- PatchMessage 回退（仅用于非 CardKit 创建的 schemaV1 卡片） ---
         card = self._build_card_json(new_content, sk, final=final)
         request = (
             lark_oapi.api.im.v1.PatchMessageRequest.builder()
@@ -1689,7 +1701,7 @@ class FeishuAdapter(ChannelAdapter):
             await self._patch_card_content(card_id, display, sk)
             self._streaming_last_patch[sk] = now
         except Exception as e:
-            logger.debug(f"Feishu: stream_thinking patch failed (non-fatal): {e}")
+            logger.info(f"Feishu: stream_thinking patch failed (non-fatal): {e}")
 
     async def stream_chain_text(
         self,
@@ -1720,7 +1732,7 @@ class FeishuAdapter(ChannelAdapter):
                 await self._patch_card_content(card_id, display, sk)
                 self._streaming_last_patch[sk] = now
             except Exception as e:
-                logger.debug(f"Feishu: stream_chain_text patch failed (non-fatal): {e}")
+                logger.info(f"Feishu: stream_chain_text patch failed (non-fatal): {e}")
 
     _THINKING_DISPLAY_MAX = 800
 
@@ -1790,7 +1802,7 @@ class FeishuAdapter(ChannelAdapter):
                 await self._patch_card_content(card_id, display_text, sk)
                 self._streaming_last_patch[sk] = now
             except Exception as e:
-                logger.debug(f"Feishu: streaming patch failed (non-fatal): {e}")
+                logger.info(f"Feishu: streaming patch failed (non-fatal): {e}")
 
     async def finalize_stream(
         self,

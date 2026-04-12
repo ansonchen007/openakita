@@ -135,6 +135,7 @@ export function ChatView({
   const planMode = chatMode === "plan";
   const [pendingApproval, setPendingApproval] = useState<PlanApprovalEvent | null>(null);
   const pendingApprovalRef = useRef<PlanApprovalEvent | null>(null);
+  const [deathSwitchActive, setDeathSwitchActive] = useState(false);
   const [streamingTick, setStreamingTick] = useState(0);
   const [sidebarOpen, setSidebarOpen] = useState(() => typeof window !== "undefined" && window.innerWidth > 768);
   const [sidebarPinned, setSidebarPinned] = useState(() => {
@@ -924,6 +925,19 @@ export function ChatView({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [apiBaseUrl, getClientId]);
 
+  // ── 死亡开关状态初始化 + WS 监听 ──
+  useEffect(() => {
+    safeFetch(`${apiBaseUrl}/api/config/security/self-protection`)
+      .then(r => r.json())
+      .then(data => { if (data?.readonly_mode) setDeathSwitchActive(true); })
+      .catch(() => {});
+    return onWsEvent((event, data) => {
+      if (event !== "security:death_switch") return;
+      const d = data as Record<string, unknown> | null;
+      if (d && typeof d.active === "boolean") setDeathSwitchActive(d.active);
+    });
+  }, [apiBaseUrl]);
+
   // ── IM 通道掉线主动告警：监听 im:channel_status 事件 ──
   useEffect(() => {
     return onWsEvent((event, raw) => {
@@ -1253,6 +1267,16 @@ export function ChatView({
       }).catch(() => {
         setMessages(prev => [...prev, { id: genId(), role: "system", content: t("chat.skillsLoadFail", "无法加载技能列表。"), timestamp: Date.now() }]);
       });
+    }},
+    { id: "unlock", label: "解除只读", description: "重置死亡开关，解除 Agent 只读模式", action: () => {
+      safeFetch(`${apiBase}/api/config/security/death-switch/reset`, { method: "POST" })
+        .then(() => {
+          setDeathSwitchActive(false);
+          setMessages((prev) => [...prev, { id: genId(), role: "system", content: "死亡开关已重置，Agent 已退出只读模式。", timestamp: Date.now() }]);
+        })
+        .catch(() => {
+          setMessages((prev) => [...prev, { id: genId(), role: "system", content: "重置失败，请检查后端服务状态。", timestamp: Date.now() }]);
+        });
     }},
     { id: "help", label: "帮助", description: "显示可用命令列表", action: () => {} },
   ];
@@ -2312,6 +2336,10 @@ export function ChatView({
                   }
                   return newConfirm;
                 });
+                break;
+              }
+              case "death_switch": {
+                setDeathSwitchActive(event.active);
                 break;
               }
               case "sub_agent_state": {
@@ -3659,6 +3687,27 @@ export function ChatView({
           const activePlan = [...messages].reverse().find((m) => m.todo && m.todo.status !== "completed" && m.todo.status !== "failed" && m.todo.status !== "cancelled")?.todo;
           return activePlan ? <FloatingPlanBar plan={activePlan} /> : null;
         })()}
+
+        {/* 死亡开关只读模式 Banner */}
+        {deathSwitchActive && (
+          <div className="flex items-center gap-3 border-t border-red-500/30 bg-red-500/10 px-4 py-2.5 text-sm">
+            <span style={{ fontSize: 16 }}>&#x1F6D1;</span>
+            <span style={{ flex: 1, color: "var(--destructive, #ef4444)" }}>
+              Agent 处于只读模式 — 死亡开关已触发，所有写入操作被阻止
+            </span>
+            <button
+              onClick={() => {
+                safeFetch(`${apiBase}/api/config/security/death-switch/reset`, { method: "POST" })
+                  .then(() => {
+                    setDeathSwitchActive(false);
+                    setMessages((prev) => [...prev, { id: genId(), role: "system", content: "死亡开关已重置，Agent 已退出只读模式。", timestamp: Date.now() }]);
+                  })
+                  .catch(() => {});
+              }}
+              style={{ padding: "4px 12px", borderRadius: 6, border: "1px solid var(--destructive, #ef4444)", background: "var(--destructive, #ef4444)", color: "#fff", cursor: "pointer", fontSize: 12, whiteSpace: "nowrap" }}
+            >解除只读</button>
+          </div>
+        )}
 
         {/* 长闲置回归提示 (6.7) */}
         {idleReturnPrompt && (

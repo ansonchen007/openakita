@@ -41,6 +41,7 @@ class StreamEventType(StrEnum):
 
     # ── Security / Interaction ──
     SECURITY_CONFIRM = "security_confirm"
+    DEATH_SWITCH = "death_switch"
     ASK_USER = "ask_user"
 
     # ── Todo / Plan ──
@@ -75,6 +76,10 @@ def normalize_stream_event(event: dict | None) -> dict:
         payload.setdefault("tool_name", payload.get("tool", ""))
         payload.setdefault("confirm_id", payload.get("id", ""))
         payload.setdefault("call_id", payload.get("id", ""))
+
+    if event_type == StreamEventType.DEATH_SWITCH.value:
+        payload.setdefault("active", False)
+        payload.setdefault("reason", "")
 
     if event_type == StreamEventType.TODO_CREATED.value and isinstance(payload.get("plan"), dict):
         plan = dict(payload["plan"])

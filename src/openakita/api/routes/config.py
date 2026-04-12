@@ -1140,9 +1140,15 @@ async def reset_death_switch():
 
         engine = get_policy_engine()
         engine.reset_readonly_mode()
-        return {"status": "ok", "readonly_mode": False}
     except Exception as e:
         return {"status": "error", "message": str(e)}
+    try:
+        from openakita.api.routes.websocket import broadcast_event
+
+        await broadcast_event("security:death_switch", {"active": False})
+    except Exception:
+        pass
+    return {"status": "ok", "readonly_mode": False}
 
 
 # ── Confirmation config CRUD ─────────────────────────────────────────

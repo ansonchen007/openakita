@@ -3786,15 +3786,13 @@ class MessageGateway:
                     )
                 elif etype == "thinking_delta":
                     _thinking_buf += event.get("content", "")
-                    if can_stream_thinking:
-                        thinking_content = event.get("content", "")
-                        if thinking_content:
-                            await adapter.stream_thinking(
-                                message.chat_id,
-                                thinking_content,
-                                thread_id=message.thread_id,
-                                is_group=is_group,
-                            )
+                    if can_stream_thinking and _thinking_buf:
+                        await adapter.stream_thinking(
+                            message.chat_id,
+                            _thinking_buf,
+                            thread_id=message.thread_id,
+                            is_group=is_group,
+                        )
                 elif etype == "thinking_end":
                     if can_stream_thinking and hasattr(adapter, "stream_thinking"):
                         dur_ms = event.get("duration_ms", 0)

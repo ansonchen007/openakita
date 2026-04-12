@@ -344,6 +344,26 @@ class ResponseHandler:
             )
             return False
 
+        _delivered_ok = any(r.get("status") == "delivered" for r in delivery_receipts)
+        # 宣称用户在本机已看到界面/窗口，但无交付回执等可证实路径（与「空口交付」同构）
+        if (
+            any(
+                k in (assistant_response or "")
+                for k in (
+                    "你应该能看到",
+                    "你屏幕上",
+                    "你桌面上",
+                    "你的桌面",
+                    "在你电脑上",
+                    "你玩游戏时能看到",
+                )
+            )
+            and not _delivered_ok
+            and "deliver_artifacts" not in (executed_tools or [])
+        ):
+            logger.info("[TaskVerify] user-visible UI claim without delivery/evidence, INCOMPLETE")
+            return False
+
         # LLM 判断
         from .tool_executor import smart_truncate
 
@@ -357,7 +377,11 @@ class ResponseHandler:
             _plan_section = (
                 f"\n## Plan 状态\n"
                 f"当前 Plan 有未完成步骤: {plan_fail_reason}\n"
-                f"注意: Plan 步骤未更新不代表任务未完成。如果实际工具已执行成功，应判 COMPLETED。\n"
+                f"注意: 若用户意图是**宿主内**任务（工作区写文件、宿主 shell、宿主浏览器自动化等），"
+                f"工具已成功执行且与 Plan 一致时可判 COMPLETED。"
+                f"若用户意图是**用户本机可观测**（本机 GUI 窗口、本机软件安装、游戏内 overlay 等），"
+                f"仅宿主侧 run_shell 等成功**不足**；需有交付回执、用户可在自己机器上执行的明确步骤，"
+                f"或助手已清楚说明「效果在宿主、用户屏不可见」并给出可行替代方案。\n"
             )
 
         verify_prompt = f"""请判断以下交互是否已经**完成**用户的意图。
@@ -374,6 +398,10 @@ class ResponseHandler:
 ## 附件交付回执（如有）
 {delivery_receipts if delivery_receipts else "无"}
 {_plan_section}
+## 执行域前提（必读）
+
+工具在 **OpenAkita 宿主**执行，与用户发消息的设备/IM 客户端**默认不同域**。宿主上命令成功 ≠ 用户本机已出现窗口或已安装软件。
+
 ## 判断标准
 
 ### 非任务类消息（直接判 COMPLETED）
@@ -381,16 +409,25 @@ class ResponseHandler:
 - 如果用户消息是**简单确认/反馈**，助手已简短回应 → **COMPLETED**
 - 如果用户消息是**简单问答**，助手已给出回答 → **COMPLETED**
 
-### 任务类消息
-- 如果已执行 write_file 工具，说明文件已保存，保存任务完成
-- 工具执行成功即表示该操作完成
-- 如果响应只是说"现在开始..."且没有工具执行，任务还在进行中
-- 如果响应包含明确的操作确认，任务完成
+### 任务类消息 — 分层完成标准
 
-### 上游平台/系统限制（需谨慎区分）
-- 如果助手**已实际尝试**执行任务，但遇到**上游平台或 API 本身不支持**的硬性限制（例如：某 IM 平台的 API 根本不提供某功能、目标服务返回明确的"功能未开放"错误），且助手已向用户**解释了原因** → **COMPLETED**（这种情况下重试毫无意义）
-- 但如果只是**某一条执行路径失败**（如文件不存在、权限不足、某个命令报错），助手还有其他可尝试的替代方案 → **INCOMPLETE**（应继续尝试）
-- 关键判断：问题是**不可绕过的平台级限制**还是**可以换个方式解决的执行问题**？前者完成，后者继续
+**A. 宿主内可验证的完成**（以下任一满足且用户意图属此类 → 可 COMPLETED）
+- 已执行 write_file / edit_file 等且目标为工作区内保存文件
+- 已执行浏览器工具且意图是在**宿主侧**操作网页
+- 已有 **deliver_artifacts** 成功回执（status=delivered），且用户要的是可交付产物
+- 已调用 **complete_todo** 且 Plan 语义已闭环
+- 工具在宿主执行成功，且用户请求**未要求**在用户本人电脑屏幕/本机系统中看到效果
+
+**B. 用户本机可观测的完成**（用户明确要求在本机看到窗口、本机安装、游戏画面内效果等）
+- 仅有宿主侧 run_shell / Python 成功**不能**单独作为完成证据
+- 需至少其一：成功交付（回执）、回复中含用户可在**自己机器**上执行的明确命令/步骤并已给出、或助手明确说明边界且用户目标已调整为可达成形态
+
+**C. 仍在进行中**
+- 响应仅为「现在开始…」「让我…」且关键工具未执行 → **INCOMPLETE**
+
+**D. 上游平台硬性限制**
+- 助手已实际尝试且遇不可绕过的 API/平台限制，并已向用户解释 → **COMPLETED**
+- 若仍有其他可行路径（换命令、换文件路径等）→ **INCOMPLETE**
 
 ## 回答要求
 STATUS: COMPLETED 或 INCOMPLETE
@@ -401,7 +438,10 @@ NEXT: 建议的下一步"""
         try:
             response = await self._brain.think_lightweight(
                 prompt=verify_prompt,
-                system="你是一个任务完成度判断助手。请分析任务是否完成，并说明证据和缺失项。",
+                system=(
+                    "你是任务完成度判断助手。OpenAkita 工具在宿主环境执行，与用户聊天设备通常不是同一台机器；"
+                    "必须区分「宿主内已验证完成」与「用户本机可观测完成」，不要仅凭宿主命令退出成功判定后者已完成。"
+                ),
                 max_tokens=512,
             )
 
