@@ -4802,12 +4802,7 @@ function MainApp() {
       );
     }
     if (view === "org_editor") {
-      return (
-        <OrgEditorView
-          apiBaseUrl={apiBaseUrl}
-          visible={view === "org_editor"}
-        />
-      );
+      return null;
     }
     if (view === "pixel_office") {
       return (
@@ -5144,7 +5139,17 @@ function MainApp() {
               }}
             />
           </div>
-          <div className="content" style={{ display: view !== "chat" ? undefined : "none", flex: 1, minHeight: 0 }}>
+          <div style={{ display: view === "org_editor" ? undefined : "none", flex: 1, minHeight: 0 }}>
+            <OrgEditorView apiBaseUrl={apiBaseUrl} visible={view === "org_editor"} />
+          </div>
+          <div
+            className="content"
+            style={{
+              display: view !== "chat" && view !== "org_editor" ? undefined : "none",
+              flex: 1,
+              minHeight: 0,
+            }}
+          >
             <Suspense fallback={<div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%", opacity: 0.5 }}><div className="spinner" style={{ width: 24, height: 24 }} /></div>}>
             {renderStepContent()}
             </Suspense>
