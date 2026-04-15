@@ -249,6 +249,8 @@ class ProjectStore:
 
     def recalc_progress(self, task_id: str) -> int | None:
         """Recalculate progress_pct from children. Returns new value or None if task not found."""
+        from openakita.orgs.models import TaskStatus
+
         self._reload_if_changed()
         task, proj = self.get_task(task_id)
         if not task or not proj:
@@ -256,7 +258,7 @@ class ProjectStore:
         children = self.get_subtasks(task_id)
         if not children:
             return task.progress_pct
-        total = sum(c.progress_pct for c in children)
+        total = sum(100 if c.status == TaskStatus.ACCEPTED else c.progress_pct for c in children)
         new_pct = total // len(children)
         self._update_task_field(task_id, "progress_pct", new_pct)
         return new_pct

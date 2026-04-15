@@ -182,10 +182,7 @@ export function OrgChatPanel({ orgId, nodeId, apiBaseUrl, compact, showHeader, t
             if (!_pendingCmds.has(convId)) break;
             _pendingCmds.delete(convId);
             const resultText = data.result?.result || data.result?.error || data.error || JSON.stringify(data);
-            const progressSummary = pending.progressLines.length > 0
-              ? pending.progressLines.join("\n\n") + "\n\n---\n\n"
-              : "";
-            const content = progressSummary + resultText;
+            const content = resultText;
             if (mountedRef.current) {
               setMessages(prev => prev.map(m => m.id === phId ? { ...m, content, streaming: false } : m));
               setSending(false);
@@ -289,14 +286,24 @@ export function OrgChatPanel({ orgId, nodeId, apiBaseUrl, compact, showHeader, t
           const task = (d.current_task || "") as string;
           const taskBrief = task.length > 80 ? task.slice(0, 80) + "…" : task;
           pushProgress(`● **${nn(nid)}** 开始处理${taskBrief ? `：${taskBrief}` : ""}`);
-        } else if (st === "idle") pushProgress(`✓ **${nn(nid)}** 完成`);
+        } else if (st === "idle") {
+          const label = `✓ **${nn(nid)}** 完成`;
+          const startIdx = progressLines.findIndex(l => l.startsWith(`● **${nn(nid)}**`));
+          if (startIdx >= 0) {
+            progressLines[startIdx] = label;
+            if (mountedRef.current) {
+              const preview = progressLines.slice(-6).join("\n\n");
+              setMessages(prev => prev.map(m => m.id === placeholderId ? { ...m, content: preview } : m));
+            }
+          } else {
+            pushProgress(label);
+          }
+        }
         else if (st === "error") pushProgress(`✗ **${nn(nid)}** 出错`);
       } else if (event === "org:task_delegated") {
         const task = ((d.task || "") as string);
         const taskBrief = task.length > 80 ? task.slice(0, 80) + "…" : task;
         pushProgress(`→ **${nn(nid)}** → **${nn(toN)}** 分配任务：${taskBrief}`);
-      } else if (event === "org:task_complete") {
-        pushProgress(`✓ **${nn(nid)}** 任务完成`);
       } else if (event === "org:blackboard_update") {
         pushProgress(`~ **${nn(nid)}** 更新黑板`);
       }
@@ -348,10 +355,7 @@ export function OrgChatPanel({ orgId, nodeId, apiBaseUrl, compact, showHeader, t
           const result = d.result as Record<string, unknown> | null;
           const error = d.error as string | undefined;
           const resultText = String((result && (result.result || result.error)) || error || JSON.stringify(d));
-          const progressSummary = progressLines.length > 0
-            ? progressLines.join("\n\n") + "\n\n---\n\n"
-            : "";
-          finalContent = progressSummary + resultText;
+          finalContent = resultText;
           finalizeResult(finalContent);
         });
 
@@ -366,10 +370,7 @@ export function OrgChatPanel({ orgId, nodeId, apiBaseUrl, compact, showHeader, t
               if (!resolved) {
                 resolved = true;
                 const resultText = pd.result?.result || pd.result?.error || pd.error || JSON.stringify(pd);
-                const progressSummary = progressLines.length > 0
-                  ? progressLines.join("\n\n") + "\n\n---\n\n"
-                  : "";
-                finalContent = progressSummary + resultText;
+                finalContent = resultText;
                 finalizeResult(finalContent);
               }
             }

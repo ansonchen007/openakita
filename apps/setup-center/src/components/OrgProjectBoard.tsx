@@ -1326,7 +1326,7 @@ function TaskDetailContent({
         return (
           <Card className="border-dashed">
             <CardContent className="p-3 flex items-center justify-between gap-2">
-              <span className="text-muted-foreground">此任务尚未派发</span>
+              <span className="min-w-0 flex-1 text-muted-foreground">此任务尚未派发</span>
               <Button variant="outline" size="sm" onClick={onDispatch} disabled={dispatchingTaskId === task.id}>
                 <Play className="h-3 w-3 mr-1" />{dispatchingTaskId === task.id ? "派发中…" : "派发"}
               </Button>
@@ -1337,7 +1337,7 @@ function TaskDetailContent({
         return (
           <Card>
             <CardContent className="p-3 flex items-center justify-between gap-2">
-              <span>正在由 <strong>{assigneeName}</strong> 执行中</span>
+              <span className="min-w-0 flex-1">正在由 <strong>{assigneeName}</strong> 执行中</span>
               <Button variant="destructive" size="sm" onClick={onCancel} disabled={cancellingTaskId === task.id}>
                 <X className="h-3 w-3 mr-1" />{cancellingTaskId === task.id ? "终止中…" : "终止"}
               </Button>
@@ -1355,7 +1355,7 @@ function TaskDetailContent({
             </CardHeader>
             <CardContent className="p-3 pt-1 flex flex-col gap-2">
               {task.deliverable_content ? (
-                <div className="bg-muted/50 rounded p-2 text-xs whitespace-pre-wrap max-h-40 overflow-y-auto">
+                <div className="bg-muted/50 rounded p-2 text-xs whitespace-pre-wrap break-all max-h-40 overflow-y-auto">
                   {task.deliverable_content}
                 </div>
               ) : (
@@ -1378,7 +1378,7 @@ function TaskDetailContent({
             <CardContent className="p-3 flex flex-col gap-2">
               <span className="text-green-700 dark:text-green-400 font-medium">已验收通过</span>
               {task.deliverable_content ? (
-                <div className="bg-muted/50 rounded p-2 text-xs whitespace-pre-wrap max-h-40 overflow-y-auto">
+                <div className="bg-muted/50 rounded p-2 text-xs whitespace-pre-wrap break-all max-h-40 overflow-y-auto">
                   {task.deliverable_content}
                 </div>
               ) : task.delivery_summary ? (
@@ -1391,7 +1391,7 @@ function TaskDetailContent({
         return (
           <Card className="border-red-500/50">
             <CardContent className="p-3 flex items-center justify-between gap-2">
-              <span className="text-red-600 dark:text-red-400">已打回</span>
+              <span className="min-w-0 flex-1 text-red-600 dark:text-red-400">已打回</span>
               <Button variant="outline" size="sm" onClick={onDispatch} disabled={dispatchingTaskId === task.id}>
                 <RefreshCw className="h-3 w-3 mr-1" />{dispatchingTaskId === task.id ? "…" : "重新派发"}
               </Button>
@@ -1403,7 +1403,7 @@ function TaskDetailContent({
         return (
           <Card className="border-dashed">
             <CardContent className="p-3 flex items-center justify-between gap-2">
-              <span className="text-muted-foreground">{task.status === "blocked" ? "任务已阻塞" : "任务已取消"}</span>
+              <span className="min-w-0 flex-1 text-muted-foreground">{task.status === "blocked" ? "任务已阻塞" : "任务已取消"}</span>
               <Button variant="outline" size="sm" onClick={onDispatch} disabled={dispatchingTaskId === task.id}>
                 <RefreshCw className="h-3 w-3 mr-1" />{dispatchingTaskId === task.id ? "…" : "重新派发"}
               </Button>

@@ -558,13 +558,14 @@ class OrgRuntime:
 
         self._suppress_post_hook.pop(org_id, None)
 
-        result = await self._activate_and_run(org, target, tagged_content, chain_id=chain_id)
-
         if self._is_stop_intent(content):
             await self._soft_stop_org(org_id)
+            result = await self._activate_and_run(org, target, tagged_content, chain_id=chain_id)
             if chain_id and isinstance(result, dict):
                 result["chain_id"] = chain_id
             return result
+
+        result = await self._activate_and_run(org, target, tagged_content, chain_id=chain_id)
 
         if self._has_active_delegations(org_id, target.id):
             final = await self._wait_delegation_completion(org_id, target.id, timeout=300)
@@ -1334,6 +1335,9 @@ class OrgRuntime:
             logger.debug(f"Skipping expired message {msg.id}")
             return
 
+        if self._suppress_post_hook.get(org_id):
+            return
+
         org = self._active_orgs.get(org_id) or self._manager.get(org_id)
         if not org:
             return
@@ -1793,6 +1797,8 @@ class OrgRuntime:
         Processes up to *max_msgs* messages (0 = fill all available
         concurrency slots).  Returns the number of messages dispatched.
         """
+        if self._suppress_post_hook.get(org.id):
+            return 0
         messenger = self.get_messenger(org.id)
         if not messenger:
             return 0
@@ -1880,10 +1886,9 @@ class OrgRuntime:
 
             role_title = node.role_title or node.id
             prompt = (
-                f"[任务完成通知] {role_title} 刚完成了一项任务。\n"
-                f"请查看是否有待处理的交付物需要验收。\n"
-                f"如果没有待验收的内容，无需任何操作。\n"
-                f"⚠️ 不要主动发起新任务或扩展工作范围。"
+                f"[通知] {role_title} 已完成一项任务。\n"
+                f"如有待验收的交付物，请处理。如无，则无需任何操作。\n"
+                f"⚠️ 禁止：不要分配新任务、不要扩展工作范围、不要主动发起任何工作。"
             )
             await self._activate_and_run(org, parent, prompt)
         except Exception as e:
@@ -1892,6 +1897,7 @@ class OrgRuntime:
     _STOP_KEYWORDS = frozenset({
         "暂停", "停止", "取消", "别做了", "先不做", "到此为止",
         "不要继续", "停下来", "先暂停", "不用做了", "够了",
+        "终止", "中止", "全部停止", "不做了",
     })
 
     def _is_stop_intent(self, content: str) -> bool:
@@ -1904,11 +1910,13 @@ class OrgRuntime:
         if not org:
             return
         for node in org.nodes:
-            if node.level > 0 and node.status == NodeStatus.BUSY:
+            if node.status == NodeStatus.BUSY:
                 try:
                     await self.cancel_node_task(org_id, node.id)
                 except Exception:
                     pass
+            elif node.status in (NodeStatus.WAITING, NodeStatus.ERROR):
+                self._set_node_status(org, node, NodeStatus.IDLE, "soft_stop")
             if messenger:
                 messenger.clear_node_pending(node.id)
         self.get_event_store(org_id).emit("soft_stop", "user", {})
@@ -2091,6 +2099,8 @@ class OrgRuntime:
                 if mode == "autonomous":
                     last_activity = self._heartbeat._last_activity.get(org_id, 0)
                     if last_activity > 0 and (now - last_activity) >= silence_threshold:
+                        if self._suppress_post_hook.get(org_id):
+                            continue
                         roots = org.get_root_nodes()
                         if roots:
                             root = roots[0]
@@ -2173,6 +2183,8 @@ class OrgRuntime:
 
                         node_last_probed[node.id] = now
                         node_thresholds[node.id] = min(threshold * 1.5, 600)
+                        if self._suppress_post_hook.get(org_id):
+                            continue
                         await self._activate_and_run(org, node, prompt)
                         break
 

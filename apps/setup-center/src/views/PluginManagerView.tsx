@@ -658,7 +658,7 @@ export default function PluginManagerView({ visible, httpApiBase }: Props) {
                   "gap-0 overflow-hidden border-border/80 py-0 shadow-sm transition-shadow hover:shadow-md",
                   hasPending && "border-amber-500/50"
                 )}>
-                  <CardHeader className="gap-2 px-5 py-3">
+                  <CardHeader className="gap-1.5 px-5 py-2">
                     <div className="flex items-start justify-between gap-4">
                       <div className="flex min-w-0 gap-4">
                         <div className={cn(
@@ -667,7 +667,7 @@ export default function PluginManagerView({ visible, httpApiBase }: Props) {
                         )}>
                           <PluginIcon plugin={p} apiBase={apiBaseRef.current()} />
                         </div>
-                        <div className="min-w-0 flex-1 space-y-1.5">
+                        <div className="min-w-0 flex-1 space-y-1">
                           <div className="flex min-w-0 items-center gap-2">
                             <CardTitle className="min-w-0 truncate text-base leading-none" title={p.name}>{p.name}</CardTitle>
                             {p.permission_level && (
@@ -1032,7 +1032,7 @@ export default function PluginManagerView({ visible, httpApiBase }: Props) {
                     </CardContent>
                   )}
 
-                  <CardFooter className="flex items-center justify-between gap-3 border-t px-6 py-3">
+                  <CardFooter className="flex items-center justify-between gap-3 border-t px-5 !pt-2 pb-2">
                     <div className="min-w-0 truncate text-xs text-muted-foreground" title={p.id}>
                       {p.id}
                     </div>

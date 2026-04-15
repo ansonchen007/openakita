@@ -196,6 +196,7 @@ class OrgToolHandler:
                         updates["delivered_at"] = _now_iso()
                     elif status == "accepted":
                         updates["completed_at"] = _now_iso()
+                        updates["progress_pct"] = 100
                 if deliverable_content:
                     updates["deliverable_content"] = deliverable_content
                 if delivery_summary:

@@ -515,34 +515,6 @@ async def pause_org(request: Request, org_id: str):
         raise HTTPException(400, str(e))
 
 
-@router.post("/{org_id}/soft-pause")
-async def soft_pause_org(request: Request, org_id: str):
-    """Soft pause: suppress post-task hooks, cancel busy children, clear queues."""
-    rt = _get_runtime(request)
-    try:
-        await to_engine(rt._soft_stop_org(org_id))
-        return {"ok": True, "message": "柔性暂停已执行"}
-    except Exception as e:
-        raise HTTPException(500, str(e))
-
-
-@router.post("/{org_id}/clear-plan")
-async def clear_org_plan(request: Request, org_id: str):
-    """Clear plan: cancel all running tasks, reset all nodes to idle."""
-    from openakita.orgs.models import NodeStatus
-    rt = _get_runtime(request)
-    try:
-        await to_engine(rt._soft_stop_org(org_id))
-        org = rt.get_org(org_id)
-        if org:
-            for node in org.nodes:
-                if node.status in (NodeStatus.BUSY, NodeStatus.WAITING, NodeStatus.ERROR):
-                    rt._set_node_status(org, node, NodeStatus.IDLE, "clear_plan")
-        return {"ok": True, "message": "计划已清除"}
-    except Exception as e:
-        raise HTTPException(500, str(e))
-
-
 @router.post("/{org_id}/resume")
 async def resume_org(request: Request, org_id: str):
     rt = _get_runtime(request)
