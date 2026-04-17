@@ -118,6 +118,13 @@ class OrgRuntime:
 
         self._chain_delegation_depth: dict[str, int] = {}  # chain_id -> delegation depth
         self._node_current_chain: dict[str, str] = {}  # org_id:node_id -> chain_id
+        # 已验收/打回/取消的任务链集合（按组织维度）。用于：
+        #   1) 抑制已关闭 chain 的消息重新唤醒 agent ReAct；
+        #   2) 阻断对已关闭 chain 的 delegate/submit；
+        #   3) 其它与 chain 生命周期相关的幂等判断。
+        # 长度受限：每个 org 最多保留最近 N 个，防止长时间运行的组织集合膨胀。
+        self._closed_chains: dict[str, "OrderedDict[str, float]"] = {}
+        self._closed_chain_max_per_org: int = 512
         self.max_concurrent_per_node: int = 2
         self._idle_tasks: dict[str, asyncio.Task] = {}
 
@@ -761,6 +768,156 @@ class OrgRuntime:
             self._node_current_chain[key] = chain_id
         else:
             self._node_current_chain.pop(key, None)
+
+    def is_chain_closed(self, org_id: str, chain_id: str | None) -> bool:
+        """Return True if the given chain_id has been accepted/rejected/cancelled."""
+        if not chain_id:
+            return False
+        bucket = self._closed_chains.get(org_id)
+        return bool(bucket and chain_id in bucket)
+
+    def _mark_chain_closed(self, org_id: str, chain_id: str) -> None:
+        """Record that a chain has been closed (accept/reject/cancel)."""
+        if not org_id or not chain_id:
+            return
+        bucket = self._closed_chains.get(org_id)
+        if bucket is None:
+            bucket = OrderedDict()
+            self._closed_chains[org_id] = bucket
+        if chain_id in bucket:
+            bucket.move_to_end(chain_id)
+        else:
+            bucket[chain_id] = time.time()
+            while len(bucket) > self._closed_chain_max_per_org:
+                bucket.popitem(last=False)
+
+    def _cleanup_accepted_chain(
+        self,
+        org_id: str,
+        chain_id: str,
+        *,
+        reason: str = "accepted",
+        cascade_cancel_children: bool = True,
+    ) -> None:
+        """统一清理一条已关闭任务链的运行时状态。
+
+        触发时机：task accept / reject / cancel。做的事：
+          1. 将 chain 加入 ``_closed_chains`` 黑名单（供 `_on_node_message` 与
+             `org_*` 工具做软拦截）。
+          2. 清空 ``_node_current_chain`` 中所有指向该 chain 的节点绑定。
+          3. 释放 messenger 的 task_affinity / delegation_depth（若未释放）。
+          4. 级联把该 chain 在 ProjectStore 中的未完成子任务置为 CANCELLED，
+             并广播 ``org:task_cancelled`` 事件供 UI 同步。
+
+        纯本地状态清理，**不会**去动 mailbox 队列里已存在的消息——那部分
+        由 `_on_node_message` 的软门禁负责放行/抑制。
+        """
+        try:
+            self._mark_chain_closed(org_id, chain_id)
+        except Exception as exc:
+            logger.debug("mark_chain_closed failed: %s", exc)
+
+        try:
+            prefix = f"{org_id}:"
+            to_remove = [
+                k for k, v in list(self._node_current_chain.items())
+                if k.startswith(prefix) and v == chain_id
+            ]
+            for k in to_remove:
+                self._node_current_chain.pop(k, None)
+        except Exception as exc:
+            logger.debug("clear node_current_chain failed: %s", exc)
+
+        try:
+            self._chain_delegation_depth.pop(chain_id, None)
+        except Exception:
+            pass
+        try:
+            messenger = self.get_messenger(org_id)
+            if messenger:
+                messenger.release_task_affinity(chain_id)
+        except Exception:
+            pass
+
+        if cascade_cancel_children:
+            try:
+                self._cancel_chain_children_in_store(org_id, chain_id, reason)
+            except Exception as exc:
+                logger.debug("cancel_chain_children_in_store failed: %s", exc)
+
+        logger.info(
+            "[OrgRuntime] chain %s closed (%s) cleaned up", chain_id, reason,
+        )
+
+    def _cancel_chain_children_in_store(
+        self, org_id: str, chain_id: str, reason: str,
+    ) -> None:
+        """把 ProjectStore 中以该 chain 为根的未完成子任务标记为 CANCELLED。
+
+        只影响状态为 TODO / IN_PROGRESS / DELIVERED 的子任务；ACCEPTED 的保持不动。
+        """
+        from openakita.orgs.models import TaskStatus
+        from openakita.orgs.project_store import ProjectStore
+
+        store = ProjectStore(self._manager._org_dir(org_id))
+        root = store.find_task_by_chain(chain_id)
+        if not root:
+            return
+        all_tasks: list = []
+        try:
+            for proj in store.list_projects():
+                if proj.id != root.project_id:
+                    continue
+                all_tasks.extend(list(proj.tasks or []))
+        except Exception:
+            return
+
+        to_cancel_ids: set[str] = set()
+        pending = [root.id]
+        while pending:
+            parent_id = pending.pop()
+            for t in all_tasks:
+                if t.parent_task_id == parent_id and t.id != root.id:
+                    if t.status in (
+                        TaskStatus.TODO,
+                        TaskStatus.IN_PROGRESS,
+                        TaskStatus.DELIVERED,
+                    ):
+                        to_cancel_ids.add(t.id)
+                    pending.append(t.id)
+
+        if not to_cancel_ids:
+            return
+
+        cancelled_chain_ids: list[str] = []
+        for t in all_tasks:
+            if t.id in to_cancel_ids:
+                try:
+                    store.update_task(
+                        t.project_id, t.id,
+                        {"status": TaskStatus.CANCELLED},
+                    )
+                    if t.chain_id:
+                        cancelled_chain_ids.append(t.chain_id)
+                        self._mark_chain_closed(org_id, t.chain_id)
+                except Exception as exc:
+                    logger.debug("cancel child task %s failed: %s", t.id, exc)
+
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(self._broadcast_ws(
+                "org:task_cancelled_cascade",
+                {
+                    "org_id": org_id,
+                    "root_chain_id": chain_id,
+                    "cancelled_chain_ids": cancelled_chain_ids,
+                    "reason": reason,
+                },
+            ))
+        except RuntimeError:
+            pass
+        except Exception:
+            pass
 
     async def _activate_and_run(
         self, org: Organization, node: OrgNode, prompt: str,
@@ -1494,6 +1651,64 @@ class OrgRuntime:
         if not node or node.status in (NodeStatus.FROZEN, NodeStatus.OFFLINE):
             return
 
+        # ---------- 已关闭任务链软屏障 ----------
+        # 目的：任务被验收/打回/取消后，该 chain 的后续"非派工类"消息不应再
+        # 唤醒 agent 的 ReAct 循环（这是用户反馈的"任务结束后仍自主派活"的
+        # 根本入口之一）。放行规则：
+        #   - 新的 TASK_ASSIGN（即使声明旧 chain_id，也视为一次新派工）
+        #   - TASK_REJECTED（允许被打回重做）
+        # 其余类型（REPORT/ANSWER/QUESTION/TASK_DELIVERED/TASK_ACCEPTED/
+        # FEEDBACK/NOTIFICATION…）只广播 WebSocket 让 UI 可见，不重启 ReAct。
+        try:
+            from openakita.config import settings as _settings
+            suppress_on = getattr(
+                _settings, "org_suppress_closed_chain_reactivation", True
+            )
+        except Exception:
+            suppress_on = True
+
+        if suppress_on:
+            chain_id_peek = msg.metadata.get("task_chain_id") if msg.metadata else None
+            closed = (
+                bool(msg.metadata and msg.metadata.get("chain_closed"))
+                or self.is_chain_closed(org_id, chain_id_peek)
+            )
+            if closed and msg.msg_type not in (
+                MsgType.TASK_ASSIGN,
+                MsgType.TASK_REJECTED,
+            ):
+                logger.info(
+                    "[OrgRuntime] gate: skip ReAct activation for closed chain=%s "
+                    "msg_type=%s from=%s to=%s",
+                    chain_id_peek, msg.msg_type.value if hasattr(msg.msg_type, "value") else msg.msg_type,
+                    msg.from_node, msg.to_node,
+                )
+                try:
+                    await self._broadcast_ws("org:chain_closed_msg", {
+                        "org_id": org_id,
+                        "chain_id": chain_id_peek,
+                        "from_node": msg.from_node,
+                        "to_node": msg.to_node,
+                        "msg_type": (
+                            msg.msg_type.value if hasattr(msg.msg_type, "value")
+                            else str(msg.msg_type)
+                        ),
+                        "content_preview": (msg.content or "")[:_LIM_WS],
+                    })
+                except Exception:
+                    pass
+                messenger = self.get_messenger(org_id)
+                if messenger:
+                    mb = messenger.get_mailbox(node_id)
+                    if mb and not mb.is_paused:
+                        mb.mark_handler_processed(msg.id)
+                    try:
+                        messenger.mark_processed(msg.id)
+                    except Exception:
+                        pass
+                return
+        # ---------- 软屏障结束 ----------
+
         active_count = self._node_active_count(org_id, node_id)
 
         messenger = self.get_messenger(org_id)
@@ -1970,6 +2185,14 @@ class OrgRuntime:
         if max_msgs > 0:
             slots = min(slots, max_msgs)
 
+        try:
+            from openakita.config import settings as _settings
+            suppress_on = getattr(
+                _settings, "org_suppress_closed_chain_reactivation", True
+            )
+        except Exception:
+            suppress_on = True
+
         dispatched = 0
         max_iterations = slots + mailbox._queue.qsize()
         for _ in range(max_iterations):
@@ -1981,6 +2204,25 @@ class OrgRuntime:
             if mailbox.is_handler_processed(msg.id):
                 mailbox.consume_phantom(msg.id)
                 continue
+
+            # 同 `_on_node_message` 的软屏障：已关闭 chain 的非派工消息不再激活 ReAct，
+            # 只标记为已处理让其从队列中"自然消失"。否则 drain 路径会绕过 handler 门禁。
+            if suppress_on:
+                chain_peek = msg.metadata.get("task_chain_id") if msg.metadata else None
+                closed = (
+                    bool(msg.metadata and msg.metadata.get("chain_closed"))
+                    or self.is_chain_closed(org.id, chain_peek)
+                )
+                if closed and msg.msg_type not in (
+                    MsgType.TASK_ASSIGN,
+                    MsgType.TASK_REJECTED,
+                ):
+                    logger.info(
+                        "[OrgRuntime] drain-gate skip closed chain=%s msg=%s",
+                        chain_peek, msg.id,
+                    )
+                    continue
+
             logger.info(
                 f"[OrgRuntime] Draining pending message {msg.id} for {node.id} "
                 f"(remaining: {mailbox.pending_count})"
@@ -2032,6 +2274,24 @@ class OrgRuntime:
                 return
 
             if parent.status == NodeStatus.BUSY:
+                return
+
+            # 默认关闭"任务完成自动通知父级"——这是用户反馈的"组织莫名其妙自主运行"
+            # 的核心源头之一：子节点完成后 runtime 主动唤醒父节点做 ReAct，父节点
+            # 的 LLM 经常忽略"禁止派新活"的 prompt 指令，继续派更多任务。
+            #
+            # 保留 drain 路径（上面 `_drain_node_pending(parent)`）——若父节点真有
+            # 待处理的 deliverable/question，依然会被正常推进。
+            # 如需要保持历史行为，可把 org_post_task_notify_parent 设为 True。
+            try:
+                from openakita.config import settings as _settings
+                notify_parent = bool(getattr(
+                    _settings, "org_post_task_notify_parent", False,
+                ))
+            except Exception:
+                notify_parent = False
+
+            if not notify_parent:
                 return
 
             cooldown_key = f"{org.id}:{parent.id}"

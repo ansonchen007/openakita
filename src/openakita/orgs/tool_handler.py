@@ -170,6 +170,54 @@ class OrgToolHandler:
                 args["filename"] = v
         return args
 
+    @staticmethod
+    def _attachment_key(att: dict) -> tuple[str, str]:
+        """Stable dedup key for a file attachment dict.
+
+        Key = (filename, file_path). Size/timestamp are intentionally excluded
+        so a re-write of the same file (which may change size by a byte) is
+        treated as the same attachment and replaces the previous entry.
+        """
+        if not isinstance(att, dict):
+            return ("", "")
+        filename = str(att.get("filename") or "").strip()
+        file_path = str(att.get("file_path") or att.get("path") or "").strip()
+        return (filename, file_path)
+
+    @classmethod
+    def _merge_file_attachments(
+        cls, existing: list[dict], incoming: list[dict]
+    ) -> list[dict]:
+        """Merge incoming attachments into existing list, deduping by (filename, file_path).
+
+        If a newer attachment shares a key with an older one, the newer
+        replaces the older (keeping insertion order at the old position).
+        Entries with an empty key are appended as-is (defensive fallback).
+        """
+        result: list[dict] = []
+        index_by_key: dict[tuple[str, str], int] = {}
+        for att in existing or []:
+            key = cls._attachment_key(att)
+            if not key[0] and not key[1]:
+                result.append(att)
+                continue
+            if key in index_by_key:
+                result[index_by_key[key]] = att
+            else:
+                index_by_key[key] = len(result)
+                result.append(att)
+        for att in incoming or []:
+            key = cls._attachment_key(att)
+            if not key[0] and not key[1]:
+                result.append(att)
+                continue
+            if key in index_by_key:
+                result[index_by_key[key]] = att
+            else:
+                index_by_key[key] = len(result)
+                result.append(att)
+        return result
+
     def _link_project_task(
         self, org_id: str, chain_id: str, *,
         title: str = "",
@@ -220,17 +268,28 @@ class OrgToolHandler:
                         updates["progress_pct"] = 100
                 if deliverable_content:
                     old = existing.deliverable_content or ""
-                    if old and deliverable_content not in old:
-                        updates["deliverable_content"] = old + "\n\n---\n\n" + deliverable_content
+                    new_stripped = deliverable_content.strip()
+                    old_stripped = old.strip()
+                    if not old_stripped:
+                        updates["deliverable_content"] = deliverable_content
+                    elif new_stripped == old_stripped:
+                        # exact same payload — do not store again
+                        pass
+                    elif new_stripped in old_stripped:
+                        # new content fully contained in old — skip append
+                        pass
+                    elif old_stripped in new_stripped:
+                        # new content is a superset — replace
+                        updates["deliverable_content"] = deliverable_content
                     else:
-                        updates["deliverable_content"] = deliverable_content or old
+                        updates["deliverable_content"] = old + "\n\n---\n\n" + deliverable_content
                 if delivery_summary:
                     updates["delivery_summary"] = delivery_summary
                 if file_attachment:
-                    old_attachments = list(existing.file_attachments or [])
-                    if file_attachment not in old_attachments:
-                        old_attachments.append(file_attachment)
-                    updates["file_attachments"] = old_attachments
+                    updates["file_attachments"] = self._merge_file_attachments(
+                        list(existing.file_attachments or []),
+                        [file_attachment],
+                    )
                 if updates:
                     store.update_task(existing.project_id, existing.id, updates)
                 return
@@ -431,6 +490,16 @@ class OrgToolHandler:
 
         metadata: dict = {}
 
+        # 若调用方当前绑定的 chain 已关闭，把 chain_closed 标记放进 metadata，
+        # 供接收端 `_on_node_message` 做软门禁。不拦截发送本身，因为回复/总结
+        # 这类对话性消息仍然有价值，只是不应再重新激活 ReAct。
+        # 注意：仅在 chain 已关闭时才打 metadata，不对"开放中"的 chain 外泄 chain_id，
+        # 以免把 sender 的 chain 语义传染给 receiver 的下一次 ReAct 调用。
+        current_chain = self._runtime.get_current_chain_id(org_id, node_id)
+        if current_chain and self._runtime.is_chain_closed(org_id, current_chain):
+            metadata["task_chain_id"] = current_chain
+            metadata["chain_closed"] = True
+
         raw_type = args.get("msg_type", "question")
         try:
             msg_type = MsgType(raw_type)
@@ -501,6 +570,26 @@ class OrgToolHandler:
             or self._runtime.get_current_chain_id(org_id, node_id)
             or _now_iso() + ":" + node_id[:8]
         )
+
+        # 软屏障：如果当前 chain 已被验收/打回/取消，禁止继续 delegate。
+        # 这是防止"任务完成后组织继续自主派活"的核心拦截点之一。
+        try:
+            from openakita.config import settings as _settings
+            if (getattr(_settings, "org_suppress_closed_chain_reactivation", True)
+                    and self._runtime.is_chain_closed(org_id, chain_id)):
+                logger.info(
+                    "[ToolHandler] block delegate on closed chain=%s by=%s to=%s",
+                    chain_id, node_id, args.get("to_node", ""),
+                )
+                return (
+                    f"[已关闭] 任务链 {chain_id} 已结束（验收/打回/取消），"
+                    "禁止基于该 chain 继续 org_delegate_task。"
+                    "如确有新工作需要，请由上级重新发起独立任务；"
+                    "当前请直接用文字总结回复，不要再调用任何 org_* 工具。"
+                )
+        except Exception as exc:
+            logger.debug("delegate closed-chain check skipped: %s", exc)
+
         chain_depth = self._runtime._chain_delegation_depth.get(chain_id, 0)
         max_depth = self._effective_max_delegation_depth(org)
         if chain_depth + 1 > max_depth:
@@ -1117,6 +1206,34 @@ class OrgToolHandler:
                 "请直接在回复中总结成果即可。"
             )
 
+        # 幂等性拦截：同一 chain 已被验收(accepted) / 已被打回(rejected)时，
+        # 拒绝再次提交，避免出现"两份一模一样的交付物/附件"以及父级被再次唤醒。
+        # 注意：已 delivered 但未验收不拦截（允许 agent 补交修订版，由下游去重兜底）。
+        try:
+            from openakita.config import settings as _settings
+            if getattr(_settings, "org_reject_resubmit_after_accept", True) and chain_id:
+                events = self._runtime.get_event_store(org_id)
+                if events:
+                    recent_acc = events.query(event_type="task_accepted", limit=50)
+                    for ev in recent_acc:
+                        if ev.get("data", {}).get("chain_id") == chain_id:
+                            logger.info(
+                                "[ToolHandler] reject resubmit on closed chain=%s by=%s",
+                                chain_id, node_id,
+                            )
+                            return (
+                                f"[已关闭] 任务链 {chain_id} 已被验收通过，不能再次提交交付物。"
+                                "如有新的增量成果，请作为独立任务重新发起或直接在回复中总结，"
+                                "不要再调用 org_submit_deliverable/org_delegate_task。"
+                            )
+                    recent_rej = events.query(event_type="task_rejected", limit=50)
+                    for ev in recent_rej:
+                        if ev.get("data", {}).get("chain_id") == chain_id:
+                            # rejected 仍允许重新 submit 修正版本（这正是 rejected 的语义）
+                            break
+        except Exception as exc:
+            logger.debug("submit-idempotency check skipped: %s", exc)
+
         metadata = {
             "deliverable": deliverable[:2000],
             "summary": summary[:500],
@@ -1197,8 +1314,17 @@ class OrgToolHandler:
         await messenger.send(msg)
 
         if chain_id:
+            # 旧行为保留（messenger.release_task_affinity + chain_delegation_depth 清理）
+            # 由 _cleanup_accepted_chain 统一承担；此处仍显式调用以保证即便 cleanup 被禁用
+            # (未来扩展) 也不会退化为泄漏。
             messenger.release_task_affinity(chain_id)
             self._runtime._chain_delegation_depth.pop(chain_id, None)
+            try:
+                self._runtime._cleanup_accepted_chain(
+                    org_id, chain_id, reason="accepted",
+                )
+            except Exception as exc:
+                logger.debug("cleanup_accepted_chain on accept failed: %s", exc)
 
         self._runtime.get_event_store(org_id).emit(
             "task_accepted", node_id,
@@ -1224,10 +1350,10 @@ class OrgToolHandler:
                     if _child_files:
                         _parent, _ = _store.get_task(_child.parent_task_id)
                         if _parent:
-                            _merged = list(getattr(_parent, "file_attachments", None) or [])
-                            for _fa in _child_files:
-                                if _fa not in _merged:
-                                    _merged.append(_fa)
+                            _merged = self._merge_file_attachments(
+                                list(getattr(_parent, "file_attachments", None) or []),
+                                list(_child_files),
+                            )
                             _store.update_task(
                                 _parent.project_id, _parent.id,
                                 {"file_attachments": _merged},
@@ -1301,6 +1427,15 @@ class OrgToolHandler:
                 node_id,
             )
             self._recalc_parent_progress(org_id, chain_id)
+            # rejected 也需要清理：让下游 agent 不会再用旧 chain 继续送交付物；
+            # 但不级联 cancel 子任务（rejected 意味着重做，可能仍依赖子任务结果）。
+            try:
+                self._runtime._cleanup_accepted_chain(
+                    org_id, chain_id, reason="rejected",
+                    cascade_cancel_children=False,
+                )
+            except Exception as exc:
+                logger.debug("cleanup_accepted_chain on reject failed: %s", exc)
 
         return f"已打回 {from_node} 的交付物，原因：{reason[:50]}"
 

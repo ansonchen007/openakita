@@ -563,6 +563,25 @@ class Settings(BaseSettings):
     evaluation_enabled: bool = Field(default=False, description="是否启用每日自动评估")
     evaluation_output_dir: str = Field(default="data/evaluation", description="评估报告输出目录")
 
+    # === 组织编排 · 任务链终止防护 ===
+    # 这组开关用于防止：
+    # 1) 同一 chain 被重复交付/验收导致附件与交付物重复；
+    # 2) 任务验收完成后节点仍被后续消息唤醒、自主启动新的 ReAct 循环；
+    # 3) 任务完成后自动向上级发送"已完成"通知从而引发新的父级推理。
+    # 默认全部开启；如需回退旧行为只需将对应项设为 false。
+    org_reject_resubmit_after_accept: bool = Field(
+        default=True,
+        description="禁止在 chain 已 accepted/delivered 之后再次 submit_deliverable",
+    )
+    org_suppress_closed_chain_reactivation: bool = Field(
+        default=True,
+        description="chain 已关闭(accepted/rejected/cancelled)时抑制其消息触发 ReAct 重新激活",
+    )
+    org_post_task_notify_parent: bool = Field(
+        default=False,
+        description="任务完成时是否自动向父节点发送[通知]：False 表示不主动唤醒父级",
+    )
+
     @model_validator(mode="after")
     def _enforce_min_max_iterations(self) -> "Settings":
         MIN_ITERATIONS = 15
