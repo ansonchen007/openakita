@@ -1958,7 +1958,13 @@
   "dingtalk": {
     "footerTitle": "Card footer",
     "footerElapsed": "Show elapsed time",
-    "footerStatus": "Show processing status"
+    "footerStatus": "Show processing status",
+    "guideTitle": "How to get Client ID / Secret",
+    "guideStep1": "1. Go to DingTalk Open Platform > App Development, create an internal enterprise app",
+    "guideStep2": "2. Add the Bot capability and choose Stream mode (no public IP required)",
+    "guideStep3": "3. Copy Client ID and Client Secret from Credentials & Basic Info",
+    "guideStep4": "4. Paste them into the credential fields below, then save and apply restart",
+    "guideOpenConsole": "Open DingTalk Open Platform"
   },
   "security": {
     "title": "Security Policy",
