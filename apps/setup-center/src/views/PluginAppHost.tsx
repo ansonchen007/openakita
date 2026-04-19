@@ -195,8 +195,80 @@ export default function PluginAppHost({ pluginId, apiBase, onViewChange }: Plugi
     bridgeRef.current?.sendLocaleChange(i18n.language);
   }, [i18n.language]);
 
-  const cacheBust = useMemo(() => Date.now(), [pluginId]);
+  // cacheBust controls the iframe's `?_v=` query string. We deliberately
+  // memoize it (instead of recomputing on every render) so that incidental
+  // re-renders (loading/slow/error state, theme changes) do NOT trigger a
+  // full iframe reload mid-session.
+  //
+  // It changes when:
+  //   - pluginId changes (user switches plugin) -- always
+  //   - `reloadTick` is bumped -- via the dev-only "force reload" hotkey or
+  //     any future explicit "reload plugin" action
+  //
+  // Dev-only ergonomics (do NOT enable in production):
+  //   - Alt+Shift+R while focus is in setup-center: force-reload the active
+  //     plugin iframe with a fresh cacheBust. Shipping plugin authors a
+  //     reliable refresh shortcut means they never have to switch plugins or
+  //     hard-reload the whole shell to see updates to their HTML / CSS / JS.
+  //
+  // Note: an earlier version also reloaded on window `focus` to catch the
+  // "save in editor → alt-tab back to browser" workflow. That turned out to
+  // be far too aggressive — clicking inside the plugin iframe moves focus
+  // INTO the iframe, and the very next click outside it (e.g. the host
+  // shell's blank area or scrollbar) fires `focus` on the parent window and
+  // would tear the iframe down mid-interaction. Manual Alt+Shift+R is more
+  // predictable; we can revisit with a smarter heuristic later.
+  const [reloadTick, setReloadTick] = useState(0);
+  const cacheBust = useMemo(() => Date.now(), [pluginId, reloadTick]);
   const pluginUiUrl = `${apiBase}/api/plugins/${pluginId}/ui/?_v=${cacheBust}`;
+
+  useEffect(() => {
+    if (!import.meta.env.DEV) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.altKey && e.shiftKey && (e.key === "R" || e.key === "r")) {
+        e.preventDefault();
+        setReloadTick((t) => t + 1);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+    };
+  }, []);
+
+  // Listen for explicit plugin-reload events fired by PluginManagerView's
+  // "Reload" button (and any future programmatic trigger). When a reload
+  // targets the currently-shown plugin, force the iframe to refetch its
+  // bundle (back-end Python is hot-reloaded by reload_plugin, but the
+  // browser still has the OLD HTML/JS/CSS cached against the previous
+  // ?_v= query string — without bumping cacheBust here, the user must
+  // hard-refresh or remove+install to see UI changes).
+  //
+  // Active in BOTH dev and production: this is an explicit user action,
+  // not a dev-only ergonomic shortcut.
+  useEffect(() => {
+    const onPluginReloaded = (e: Event) => {
+      const detail = (e as CustomEvent).detail as { pluginId?: string } | undefined;
+      // Targeted reload: only react if it's for the currently-shown plugin.
+      // Broadcast reload (no detail / no pluginId): always react.
+      if (detail && detail.pluginId && detail.pluginId !== pluginId) return;
+      // Reset all loading-overlay state so the user sees a fresh spinner
+      // (and not stale "ready" state) while the new iframe boots.
+      connectedRef.current = false;
+      iframeLoadedRef.current = false;
+      overlayDismissedRef.current = false;
+      if (onloadFallbackTimerRef.current) {
+        clearTimeout(onloadFallbackTimerRef.current);
+        onloadFallbackTimerRef.current = null;
+      }
+      setError(null);
+      setLoading(true);
+      setSlow(false);
+      setReloadTick((t) => t + 1);
+    };
+    window.addEventListener("openakita:plugin-reloaded", onPluginReloaded);
+    return () => window.removeEventListener("openakita:plugin-reloaded", onPluginReloaded);
+  }, [pluginId]);
 
   const handleIframeLoad = useCallback(() => {
     // Network-layer load complete (all standard <script src> have downloaded).

@@ -4,7 +4,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { safeFetch } from "../providers";
 import { showInFolder, downloadFile } from "../platform";
-import { IconCode, IconPlug, IconFileText2, IconPackage, IconBook, IconGear, IconShield, IconFolderOpen, IconDownload, IconTerminal, IconHeartPulse } from "../icons";
+import { IconCode, IconPlug, IconFileText2, IconPackage, IconBook, IconGear, IconShield, IconFolderOpen, IconDownload, IconTerminal, IconHeartPulse, IconRefresh } from "../icons";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "../components/ui/card";
@@ -33,6 +33,12 @@ interface PluginInfo {
   has_icon?: boolean;
   pending_permissions?: string[];
   granted_permissions?: string[];
+  // i18n: optional per-language overrides surfaced by the backend.
+  // Falls back to `name` / `description` when missing or empty.
+  display_name_i18n?: Record<string, string>;
+  description_i18n?: Record<string, string>;
+  ui_title?: string;
+  ui_title_i18n?: Record<string, string>;
 }
 
 interface PluginListResponse {
@@ -118,6 +124,35 @@ function categoryLabel(cat: string, lang: string): string {
   return lang.startsWith("zh") ? entry.zh : entry.en;
 }
 
+/**
+ * Pick a localized string from a plugin's i18n dict, with a string fallback.
+ *
+ * Resolution order (so the UI never shows an empty cell):
+ *   1) exact lang match (e.g. "zh-CN" → dict["zh-CN"])
+ *   2) language base match (e.g. "zh-CN" → dict["zh"])
+ *   3) "en" if present (most-likely-understood default)
+ *   4) any first value in the dict
+ *   5) the fallback string (manifest's plain `name` / `description`)
+ *
+ * Used for plugin display name and description in the manager list and the
+ * sidebar; both fields are optional in the manifest.
+ */
+function pickI18n(
+  dict: Record<string, string> | undefined | null,
+  lang: string,
+  fallback: string,
+): string {
+  if (dict && typeof dict === "object") {
+    if (dict[lang]) return dict[lang];
+    const base = lang.split("-")[0];
+    if (base && dict[base]) return dict[base];
+    if (dict.en) return dict.en;
+    const first = Object.values(dict).find((v) => typeof v === "string" && v);
+    if (first) return first;
+  }
+  return fallback;
+}
+
 const LEVEL_BADGE_STYLES: Record<string, { color: string; backgroundColor: string }> = {
   basic: { color: "var(--ok, #22c55e)", backgroundColor: "rgba(34, 197, 94, 0.12)" },
   advanced: { color: "var(--warning, #f59e0b)", backgroundColor: "rgba(245, 158, 11, 0.14)" },
@@ -126,6 +161,20 @@ const LEVEL_BADGE_STYLES: Record<string, { color: string; backgroundColor: strin
 
 const PANEL_CARD_CLASS = "rounded-xl border bg-muted/30 p-4";
 const FIELD_CLASS_NAME = "flex h-9 w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-xs outline-none transition-[color,box-shadow] focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50";
+
+// Plugin install / uninstall / enable / disable can take noticeably longer than
+// a regular API call: on Windows uninstall may retry rmtree with exponential
+// backoff (clearing read-only bits and waiting for SQLite/HTTP handles to be
+// released by GC), and async on_unload + MCP graceful disconnect easily push
+// the round-trip past the default 10s safeFetch timeout. Use a longer signal
+// here so the UI does not show a misleading "signal timed out" while the
+// backend is still cleaning up successfully.
+const PLUGIN_OP_TIMEOUT_MS = 60_000;
+const longOpSignal = () => AbortSignal.timeout(PLUGIN_OP_TIMEOUT_MS);
+const isTimeoutError = (e: unknown): boolean => {
+  const msg = e instanceof Error ? e.message : String(e ?? "");
+  return /AbortError|signal timed out|timeout|timed out/i.test(msg);
+};
 
 function TypeIcon({ type }: { type: string }) {
   const style = { flexShrink: 0, color: "var(--muted)" } as const;
@@ -178,6 +227,16 @@ export default function PluginManagerView({ visible, httpApiBase }: Props) {
 
   const [permDialog, setPermDialog] = useState<string | null>(null);
   const [granting, setGranting] = useState(false);
+
+  // Per-plugin in-flight action guard. Enable/Disable/Remove all hit the
+  // backend with non-trivial latency (uninstall on Windows can take >10s
+  // because of file-lock retries + on_unload teardown), so without a guard
+  // a single fast double-click queues two parallel requests and we end up
+  // showing two toasts (the second one usually a "plugin not found" error
+  // because the first request already removed it). Track which action is
+  // currently running for each plugin and disable the row's buttons until
+  // the request settles.
+  const [pendingAction, setPendingAction] = useState<Record<string, "enable" | "disable" | "delete" | "reload">>({});
 
   const [logsPanel, setLogsPanel] = useState<string | null>(null);
   const [logsContent, setLogsContent] = useState("");
@@ -336,6 +395,7 @@ export default function PluginManagerView({ visible, httpApiBase }: Props) {
     enable:  { ok: t("plugins.toastEnabled"),     err: t("plugins.toastEnableFail") },
     disable: { ok: t("plugins.toastDisabled"),    err: t("plugins.toastDisableFail") },
     delete:  { ok: t("plugins.toastUninstalled"), err: t("plugins.toastUninstallFail") },
+    reload:  { ok: t("plugins.toastReloaded"),    err: t("plugins.toastReloadFail") },
   };
 
   // Notify the Sidebar (and any other listener) that the set of plugin UI apps
@@ -346,14 +406,39 @@ export default function PluginManagerView({ visible, httpApiBase }: Props) {
     } catch { /* ignore */ }
   };
 
-  const handleAction = async (id: string, action: "enable" | "disable" | "delete") => {
+  const handleAction = async (id: string, action: "enable" | "disable" | "delete" | "reload") => {
+    // Block re-entry while the previous request for this plugin is still
+    // in flight. The button is also visually disabled below, but this
+    // belt-and-suspenders check guards against keyboard / programmatic
+    // re-entry too.
+    if (pendingAction[id]) return;
+    setPendingAction((prev) => ({ ...prev, [id]: action }));
     try {
       const method = action === "delete" ? "DELETE" : "POST";
       const url =
         action === "delete"
           ? `${apiBaseRef.current()}/api/plugins/${id}`
           : `${apiBaseRef.current()}/api/plugins/${id}/${action}`;
-      const resp = await safeFetch(url, { method });
+      const resp = await safeFetch(url, { method, signal: longOpSignal() });
+
+      if (action === "reload") {
+        // Reload may change loaded/failed/error fields and (with dev mode)
+        // pick up source-code edits. Easiest correct UI is to refetch the
+        // whole list — small payload, avoids subtle local-state drift.
+        await fetchPlugins(false);
+        // Tell PluginAppHost to bust its iframe cache for THIS plugin.
+        // Backend reload_plugin() re-imports Python, but the browser still
+        // holds the old HTML/JS/CSS against the previous ?_v= query string,
+        // so without this event the UI tab keeps showing the stale build.
+        try {
+          window.dispatchEvent(
+            new CustomEvent("openakita:plugin-reloaded", { detail: { pluginId: id } }),
+          );
+        } catch { /* ignore */ }
+        showToast(ACTION_LABELS[action]?.ok ?? "OK");
+        notifyAppsChanged();
+        return;
+      }
 
       if (action === "delete") {
         // Backend may answer 207 Multi-Status (partial uninstall — code dir
@@ -366,7 +451,14 @@ export default function PluginManagerView({ visible, httpApiBase }: Props) {
           removePluginLocal(id);
           const guidance = body?.error?.guidance ?? "";
           const message = body?.error?.message ?? t("plugins.toastUninstalledPartial");
-          showToast(`${message}${guidance ? `\n${guidance}` : ""}`, "err");
+          // Surface the concrete locked-file list so the user can see WHY
+          // the directory could not be removed (usually a SQLite WAL or
+          // a log file the plugin forgot to close in on_unload).
+          const detail = body?.error?.detail ?? "";
+          const lines = [message];
+          if (guidance) lines.push(guidance);
+          if (detail) lines.push(detail);
+          showToast(lines.join("\n"), "err");
           notifyAppsChanged();
           return;
         }
@@ -377,8 +469,24 @@ export default function PluginManagerView({ visible, httpApiBase }: Props) {
       showToast(ACTION_LABELS[action]?.ok ?? "OK");
       notifyAppsChanged();
     } catch (e: any) {
+      // A client-side timeout does NOT mean the backend operation failed —
+      // long uninstalls (Windows file locks + retries) can outlive our
+      // AbortSignal. Show a hint and refresh the list so the user sees the
+      // real state instead of a confusing "signal timed out" error.
+      if (isTimeoutError(e)) {
+        showToast(t("plugins.toastOpStillRunning"), "err");
+        await fetchPlugins(false);
+        notifyAppsChanged();
+        return;
+      }
       const msg = ACTION_LABELS[action]?.err ?? e.message;
       showToast(`${msg}: ${e.message}`, "err");
+    } finally {
+      setPendingAction((prev) => {
+        if (!prev[id]) return prev;
+        const { [id]: _, ...rest } = prev;
+        return rest;
+      });
     }
   };
 
@@ -392,14 +500,21 @@ export default function PluginManagerView({ visible, httpApiBase }: Props) {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ source: installUrl.trim() }),
+        signal: longOpSignal(),
       });
       setInstallUrl("");
       showToast(t("plugins.toastInstalled"));
       await fetchPlugins(false);
       notifyAppsChanged();
     } catch (e: any) {
-      showToast(e.message, "err");
-      setError(e.message);
+      if (isTimeoutError(e)) {
+        showToast(t("plugins.toastOpStillRunning"), "err");
+        await fetchPlugins(false);
+        notifyAppsChanged();
+      } else {
+        showToast(e.message, "err");
+        setError(e.message);
+      }
     } finally {
       setInstalling(false);
     }
@@ -738,7 +853,7 @@ export default function PluginManagerView({ visible, httpApiBase }: Props) {
                 className="flex items-center justify-between gap-3 rounded-xl border border-amber-500/20 bg-background/80 p-4"
               >
                 <div className="min-w-0">
-                  <div className="truncate font-medium text-foreground" title={p.name}>{p.name}</div>
+                  <div className="truncate font-medium text-foreground" title={pickI18n(p.display_name_i18n, lang, p.name)}>{pickI18n(p.display_name_i18n, lang, p.name)}</div>
                   <div
                     className="mt-1 truncate text-sm leading-6 text-muted-foreground"
                     title={(p.pending_permissions || []).map((pp) => permLabel(pp, lang)).join(", ")}
@@ -782,6 +897,11 @@ export default function PluginManagerView({ visible, httpApiBase }: Props) {
               configPanel === p.id ||
               logsPanel === p.id;
             const badgeStyle = p.permission_level ? LEVEL_BADGE_STYLES[p.permission_level] : null;
+            // Localize the plugin's display name and description per the active
+            // UI language, falling back to the plain manifest fields when the
+            // plugin doesn't ship i18n overrides.
+            const displayName = pickI18n(p.display_name_i18n, lang, p.name);
+            const displayDesc = pickI18n(p.description_i18n, lang, p.description || "");
 
             return (
               <div
@@ -803,7 +923,7 @@ export default function PluginManagerView({ visible, httpApiBase }: Props) {
                         </div>
                         <div className="min-w-0 flex-1 space-y-1">
                           <div className="flex min-w-0 items-center gap-2">
-                            <CardTitle className="min-w-0 truncate text-base leading-none" title={p.name}>{p.name}</CardTitle>
+                            <CardTitle className="min-w-0 truncate py-0.5 text-base leading-tight" title={displayName}>{displayName}</CardTitle>
                             {p.permission_level && (
                               <Badge
                                 variant="outline"
@@ -846,10 +966,10 @@ export default function PluginManagerView({ visible, httpApiBase }: Props) {
                             )}
                           </div>
 
-                          {p.description && (
+                          {displayDesc && (
                             <CardDescription className="max-w-3xl text-sm leading-5">
-                              <span className="block line-clamp-2" title={p.description}>
-                                {p.description}
+                              <span className="block line-clamp-2" title={displayDesc}>
+                                {displayDesc}
                               </span>
                             </CardDescription>
                           )}
@@ -942,6 +1062,18 @@ export default function PluginManagerView({ visible, httpApiBase }: Props) {
                         >
                           <IconHeartPulse size={14} />
                         </Button>
+                        {p.enabled && (
+                          <Button
+                            size="icon-sm"
+                            variant="outline"
+                            title={t("plugins.reloadHint")}
+                            aria-label={t("plugins.reload")}
+                            disabled={!!pendingAction[p.id]}
+                            onClick={() => handleAction(p.id, "reload")}
+                          >
+                            <IconRefresh size={14} />
+                          </Button>
+                        )}
                       </div>
                     </div>
                   </CardHeader>
@@ -1254,20 +1386,35 @@ export default function PluginManagerView({ visible, httpApiBase }: Props) {
                       {p.id}
                     </div>
                     <div className="flex shrink-0 gap-2">
-                      <Button
-                        size="sm"
-                        variant={p.enabled === false ? "default" : "outline"}
-                        onClick={() => handleAction(p.id, p.enabled === false ? "enable" : "disable")}
-                      >
-                        {p.enabled === false ? t("plugins.enable") : t("plugins.disable")}
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="destructive"
-                        onClick={() => handleAction(p.id, "delete")}
-                      >
-                        {t("plugins.remove")}
-                      </Button>
+                      {(() => {
+                        const inflight = pendingAction[p.id];
+                        const isToggleEnable = p.enabled === false;
+                        const toggleAction = isToggleEnable ? "enable" : "disable";
+                        const toggleLabel = inflight === toggleAction
+                          ? (isToggleEnable ? t("plugins.enabling") : t("plugins.disabling"))
+                          : (isToggleEnable ? t("plugins.enable") : t("plugins.disable"));
+                        const removeLabel = inflight === "delete" ? t("plugins.removing") : t("plugins.remove");
+                        return (
+                          <>
+                            <Button
+                              size="sm"
+                              variant={isToggleEnable ? "default" : "outline"}
+                              onClick={() => handleAction(p.id, toggleAction)}
+                              disabled={!!inflight}
+                            >
+                              {toggleLabel}
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="destructive"
+                              onClick={() => handleAction(p.id, "delete")}
+                              disabled={!!inflight}
+                            >
+                              {removeLabel}
+                            </Button>
+                          </>
+                        );
+                      })()}
                     </div>
                   </CardFooter>
                 </Card>
