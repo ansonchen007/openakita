@@ -24,6 +24,9 @@
 
 附：dev 部署有"源码 vs `data/plugins/` 副本不同步"的坑，见 §5。
 
+> **vanilla JS 插件**（没用 React 的小型工具页）跳过 4/7，直接看 **§3.8**：
+> 一个 `OpenAkitaI18n.bindDom(document.body)` + `data-i18n="key"` 属性即可完成步骤 3–5。
+
 ---
 
 ## 1. 三层架构 —— 谁在哪一层
@@ -36,7 +39,7 @@
 
 | 资源 | 作用 |
 |---|---|
-| `i18n.js` | `window.OpenAkitaI18n.{register,t,locale,setLocale,onChange}`，自动订阅 `openakita:locale-change` 事件。**i18n 的"内核"**。 |
+| `i18n.js` | `window.OpenAkitaI18n.{register,t,locale,setLocale,onChange,applyDom,bindDom}`，自动订阅 `openakita:locale-change` 事件。**i18n 的"内核"**。其中 `bindDom(root)` 让 vanilla JS 插件用 `data-i18n="key"` 属性声明式翻译 DOM，见 §3.8。 |
 | `icons.js` | `window.OpenAkitaIcons.{warning,palette,key,...}` 返回内联 SVG 字符串，替代 emoji。 |
 | `markdown-mini.js` | `window.OpenAkitaMD.render(md)` 极小型 MD 渲染器（提示词指南这种动态内容用）。 |
 | `styles.css` | 通用 `--oa-*` 主题变量 + 一组 `oa-*` 视觉类（见 §2 速查表）。 |
@@ -470,6 +473,132 @@ const total = typeof (r.body && r.body.total) === "number" ? r.body.total : 0;
 ```
 
 ErrorBoundary 是"不让用户看到白屏"的安全网；防御性访问是"尽量不触发 ErrorBoundary"的预防针。两者都做。
+
+---
+
+### 3.8 Vanilla JS 插件的简化路径（无 React）
+
+很多小型工具类插件（如 `avatar-speaker` / `highlight-cutter` / `tts-studio` 等）只是一段
+原生 DOM + ui-kit 组件的页面，**没有引入 React**。给这种插件做 i18n 时
+**不要为它额外塞一个 React**——`OpenAkitaI18n` 提供了一组**声明式 DOM 绑定**专门解决这个场景。
+
+#### 3.8.1 核心 API
+
+```html
+<script src="/api/plugins/_sdk/ui-kit/i18n.js"></script>
+```
+
+- `OpenAkitaI18n.applyDom(root)`：扫描 `root` 内（含 `root` 自身）所有带
+  `data-i18n*` 属性的元素，按当前 locale 写入文本/属性。一次性。
+- `OpenAkitaI18n.bindDom(root)`：`applyDom(root)` + 自动订阅 locale 变化重新应用，
+  返回 `unbind` 函数。**通常每个插件调一次即可**。
+
+支持的属性：
+
+| 属性 | 作用 |
+|---|---|
+| `data-i18n="key"` | 元素 `textContent` |
+| `data-i18n-placeholder="key"` | `placeholder` 属性（input/textarea） |
+| `data-i18n-title="key"` | 原生 tooltip `title` |
+| `data-i18n-aria-label="key"` | `aria-label`（无障碍） |
+| `data-i18n-value="key"` | 输入框 `.value`（普通元素退化为 textContent） |
+| `data-i18n-vars='{"name":"Akita"}'` | 可选；插值 `{name}` 占位符 |
+
+> 故意**不**支持 `data-i18n-html`：避免在翻译文本里引入 XSS 面。需要富文本时用多元素组合。
+
+#### 3.8.2 推荐结构（最小可行模板）
+
+```html
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <link rel="stylesheet" href="/api/plugins/_sdk/ui-kit/styles.css">
+  <script src="/api/plugins/_sdk/bootstrap.js"></script>
+  <script src="/api/plugins/_sdk/ui-kit/icons.js"></script>
+  <script src="/api/plugins/_sdk/ui-kit/i18n.js"></script>
+  <!-- 其他 ui-kit 组件按需引 -->
+</head>
+<body>
+  <h1>
+    <span class="oa-icon" data-icon="mic"></span>
+    <span data-i18n="header.title"></span>
+  </h1>
+  <div class="header-tip" data-i18n="header.tip"></div>
+
+  <div class="oa-card">
+    <h3 data-i18n="form.title"></h3>
+    <textarea class="oa-textarea" data-i18n-placeholder="form.placeholder"></textarea>
+    <button class="oa-btn oa-btn-primary" data-i18n="actions.go"></button>
+  </div>
+
+  <script>
+    // 1) 注册字典
+    OpenAkitaI18n.register({
+      zh: {
+        "header.title": "AI 配音员",
+        "header.tip":   "写一段文字 → 选个声音 → 一键生成配音。",
+        "form.title":   "想说什么",
+        "form.placeholder": "例：大家好，欢迎来到我的频道...",
+        "actions.go":   "生成配音",
+      },
+      en: {
+        "header.title": "Avatar Speaker",
+        "header.tip":   "Write text → pick a voice → generate audio.",
+        "form.title":   "What do you want to say?",
+        "form.placeholder": "e.g. Hello everyone, welcome to my channel...",
+        "actions.go":   "Generate",
+      },
+    });
+
+    // 2) 一次性把所有 data-i18n* 应用到 DOM，并订阅 locale 变化
+    OpenAkitaI18n.bindDom(document.body);
+
+    // 3) 把 emoji 替换成内联 SVG（一次扫描 [data-icon])
+    document.querySelectorAll("[data-icon]").forEach(function (el) {
+      var name = el.dataset.icon;
+      var fn = window.OpenAkitaIcons && window.OpenAkitaIcons[name];
+      if (fn) el.innerHTML = fn();
+    });
+
+    // 4) 业务逻辑照旧（addEventListener / fetch / TaskPanel ...）
+  </script>
+</body>
+</html>
+```
+
+#### 3.8.3 动态文本（`textContent` 在 JS 里写的部分）
+
+`bindDom` 只管理静态 DOM；JS 里运行时塞进去的字符串需要用 `OpenAkitaI18n.t(key)`：
+
+```js
+infoEl.textContent = OpenAkitaI18n.t("upload.uploading", { mb: size.toFixed(1) });
+```
+
+如果 fetch 完后想让那个动态节点也跟着切语言，**给它也加 `data-i18n` 并 reapply**：
+
+```js
+infoEl.setAttribute("data-i18n", "upload.done");
+infoEl.setAttribute("data-i18n-vars", JSON.stringify({ name: file.name }));
+OpenAkitaI18n.applyDom(infoEl);   // 立即应用一次；后续 locale 变化已自动覆盖
+```
+
+#### 3.8.4 vanilla 插件 vs React 插件 — 选哪个？
+
+| 现状 | 推荐路径 |
+|---|---|
+| 纯原生 DOM + ui-kit 组件，<300 行 | **§3.8 vanilla 路径**（本节） |
+| 已经在用 Babel `<script type="text/babel">` + React | **§3.4 / §3.5 React hook 路径** |
+| 流程很短、没多 tab、没复杂状态 | vanilla 即可 |
+| 多 tab、多面板、动态列表 | React |
+
+> 不要为了一致性把 vanilla 插件改成 React——**保持小、保持可读** 比统一栈更重要。
+
+#### 3.8.5 Vanilla 插件不需要 ErrorBoundary
+
+ErrorBoundary 解决的是 React 18 unmount root 的特定问题。Vanilla 插件没这个问题，
+单条 `addEventListener` 回调里 throw 不会让整个页面消失——但**仍然要做防御性访问**
+（`Array.isArray()` / `typeof === "number"` 兜底），别让一次后端格式异常导致界面挂掉。
 
 ---
 

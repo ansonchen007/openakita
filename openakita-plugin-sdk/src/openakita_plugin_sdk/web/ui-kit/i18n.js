@@ -31,6 +31,20 @@
  *   // 4) Read the current normalized locale ("zh" / "en" / etc.).
  *   OpenAkitaI18n.locale();
  *
+ *   // 5) Vanilla DOM helper — annotate static markup once and keep it
+ *   //    in sync with locale changes:
+ *   //
+ *   //      <h1 data-i18n="header.title"></h1>
+ *   //      <input data-i18n-placeholder="form.text" />
+ *   //      <button data-i18n-title="actions.save"></button>
+ *   //
+ *   //    Then, after the dictionary is registered, call ONCE:
+ *   //
+ *   //      OpenAkitaI18n.bindDom(document.body);
+ *   //
+ *   //    bindDom() = applyDom(root) + auto re-apply on every locale change.
+ *   //    Returns an unbind function. Safe to call multiple times.
+ *
  * Resolution order for t(key):
  *   1) dict[currentLocale][key]            (e.g. "zh-CN")
  *   2) dict[baseLocale][key]               (e.g. "zh")
@@ -143,6 +157,68 @@
     } catch (_e) { /* ignore */ }
   }, 0);
 
+  // ---------------------------------------------------------------------------
+  // Declarative DOM bindings for vanilla-JS plugins.
+  //
+  // The supported attributes are intentionally narrow so we never run a parser
+  // on user content (no innerHTML for translated text). If a plugin really
+  // needs rich markup it should compose multiple elements instead.
+  //
+  //   data-i18n="key"               → element.textContent
+  //   data-i18n-placeholder="key"   → element.placeholder
+  //   data-i18n-title="key"         → element.title
+  //   data-i18n-aria-label="key"    → element.setAttribute("aria-label", ...)
+  //   data-i18n-value="key"         → element.value (for <input>/<button> labels)
+  //
+  // Variables:
+  //   data-i18n-vars='{"name":"Akita"}'  // optional, JSON-encoded
+  // ---------------------------------------------------------------------------
+  const ATTR_BINDINGS = [
+    { sel: "[data-i18n]",              key: "i18n",          apply: function (el, v) { el.textContent = v; } },
+    { sel: "[data-i18n-placeholder]",  key: "i18nPlaceholder", apply: function (el, v) { el.setAttribute("placeholder", v); } },
+    { sel: "[data-i18n-title]",        key: "i18nTitle",     apply: function (el, v) { el.setAttribute("title", v); } },
+    { sel: "[data-i18n-aria-label]",   key: "i18nAriaLabel", apply: function (el, v) { el.setAttribute("aria-label", v); } },
+    { sel: "[data-i18n-value]",        key: "i18nValue",     apply: function (el, v) {
+      // For inputs, .value is a property; for option/button textContent is more useful.
+      if (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT") el.value = v;
+      else el.textContent = v;
+    } },
+  ];
+
+  function readVars(el) {
+    const raw = el.getAttribute && el.getAttribute("data-i18n-vars");
+    if (!raw) return undefined;
+    try { return JSON.parse(raw); } catch (_e) { return undefined; }
+  }
+
+  function applyDom(root) {
+    if (!root || typeof root.querySelectorAll !== "function") {
+      // Allow calling applyDom() with no args before <body> exists — silent no-op.
+      return;
+    }
+    ATTR_BINDINGS.forEach(function (binding) {
+      // Include `root` itself if it matches (querySelectorAll only finds descendants).
+      const nodes = root.querySelectorAll(binding.sel);
+      const list = [];
+      if (root.matches && root.matches(binding.sel)) list.push(root);
+      for (let i = 0; i < nodes.length; i++) list.push(nodes[i]);
+      list.forEach(function (el) {
+        const key = el.dataset && el.dataset[binding.key];
+        if (!key) return;
+        const value = t(key, readVars(el));
+        try { binding.apply(el, value); } catch (_e) { /* per-element errors are isolated */ }
+      });
+    });
+  }
+
+  function bindDom(root) {
+    const target = root || (typeof document !== "undefined" ? document.body : null);
+    if (!target) return function () {};
+    applyDom(target);
+    const off = onChange(function () { applyDom(target); });
+    return off;
+  }
+
   window.OpenAkitaI18n = {
     __loaded: true,
     register: register,
@@ -150,5 +226,7 @@
     locale: function () { return currentLocale; },
     setLocale: setLocale,
     onChange: onChange,
+    applyDom: applyDom,
+    bindDom: bindDom,
   };
 })();
