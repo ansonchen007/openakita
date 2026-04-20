@@ -145,6 +145,57 @@ def _ensure_desktop():
 
 logger = logging.getLogger(__name__)
 
+
+# ---- 本地图片附件 → data URL（BUG-1 修复） ----
+# 上传到 /api/uploads/<name> 的图片只能在本机通过 HTTP 访问，
+# 远端云模型（通义/OpenAI vision）无法回调 127.0.0.1，会报 InvalidParameter。
+# 本函数把这类本地 URL 解析回磁盘文件并转为 data URL；超过阈值或失败时返回 None。
+_LOCAL_UPLOAD_RE = re.compile(
+    r"^(?:https?://(?:127\.0\.0\.1|localhost|0\.0\.0\.0)(?::\d+)?)?/api/uploads/([\w\-.]+)$",
+    re.IGNORECASE,
+)
+_INLINE_IMAGE_MAX_BYTES = 5 * 1024 * 1024  # 5 MB，超出走文本降级
+
+
+def _maybe_inline_local_image(att_url: str, att_mime: str) -> str | None:
+    """If *att_url* points to a locally served upload, return a base64 data URL.
+
+    Returns None when the URL is not local, file is missing/too large, or
+    any IO error occurs — caller falls back to its existing degraded path.
+    """
+    if not att_url or att_url.startswith("data:"):
+        return None
+    m = _LOCAL_UPLOAD_RE.match(att_url.strip())
+    if not m:
+        return None
+    filename = m.group(1)
+    try:
+        from ..api.routes.upload import get_upload_dir
+
+        upload_dir = get_upload_dir().resolve()
+        filepath = (upload_dir / filename).resolve()
+        filepath.relative_to(upload_dir)  # 防穿越
+        if not filepath.is_file():
+            return None
+        size = filepath.stat().st_size
+        if size > _INLINE_IMAGE_MAX_BYTES:
+            logger.info(
+                "[InlineImage] skip %s: %.1f MB exceeds limit",
+                filename, size / 1024 / 1024,
+            )
+            return None
+        mime = att_mime or ""
+        if not mime.startswith("image/"):
+            import mimetypes
+            mime = mimetypes.guess_type(str(filepath))[0] or "image/png"
+        data = filepath.read_bytes()
+        b64 = base64.b64encode(data).decode("ascii")
+        return f"data:{mime};base64,{b64}"
+    except Exception as exc:
+        logger.warning("[InlineImage] failed to inline %s: %s", att_url, exc)
+        return None
+
+
 # 上下文管理常量（部分迁移至 context_manager.py，压缩相关仍需就地定义）
 from .context_manager import CHARS_PER_TOKEN, CHUNK_MAX_TOKENS
 
@@ -2149,8 +2200,12 @@ class Agent:
             from .intent_analyzer import IntentType
 
             if intent.intent == IntentType.CHAT:
-                _effective_mode = "ask"
-                _skip_catalogs = True
+                # 带图片附件时禁止降级为 ask，否则 vision 工具会被砍 + Ask 模式
+                # 提示词会让 LLM 拒绝执行视觉理解，用户体验断裂。
+                _has_image_atts = getattr(self, "_has_pending_image_attachments", False)
+                if not _has_image_atts:
+                    _effective_mode = "ask"
+                    _skip_catalogs = True
             elif intent.intent == IntentType.QUERY:
                 _skip_catalogs = True
 
@@ -2177,6 +2232,9 @@ class Agent:
             prompt_profile=_prompt_profile,
             prompt_tier=_prompt_tier,
         )
+        # 记录本轮最终使用的 mode，供 chat.py done 事件透传给前端，让用户
+        # 看到"我传 agent 但实际跑的是 ask"这类静默降级。
+        self._last_effective_mode = _effective_mode
         if self._custom_prompt_suffix:
             prompt += f"\n\n{self._custom_prompt_suffix}"
         prompt += self._build_multi_agent_prompt_section()
@@ -3357,6 +3415,22 @@ class Agent:
                 intent_result = _make_default(message)
 
         self._current_intent = intent_result
+        # BUG-EFF-4 守卫：本轮是否带图片附件。CHAT 意图通常被强制降级为 ask
+        # （省 token 设计），但带附件时降级会砍掉 vision 工具，导致用户看到
+        # "图片在哪？"之类的回复。这里记录一个轻量标志供 _build_system_prompt_compiled
+        # 判断是否抑制降级。其他非 chat 入口路径不会进入 _prepare_session_context，
+        # 标志默认 False，对它们零影响。
+        try:
+            self._has_pending_image_attachments = bool(attachments) and any(
+                (
+                    (getattr(a, "type", "") or "") == "image"
+                    or (getattr(a, "mime_type", "") or "").startswith("image/")
+                    or (getattr(a, "url", "") or "").startswith("data:image/")
+                )
+                for a in attachments
+            )
+        except Exception:
+            self._has_pending_image_attachments = False
         compiler_summary = intent_result.task_definition
         compiled_message = message
         logger.info(
@@ -3733,7 +3807,17 @@ class Agent:
 
                 if is_image and att_url:
                     if _desk_has_vision:
-                        content_blocks.append({"type": "image_url", "image_url": {"url": att_url}})
+                        # 本地 /api/uploads/* URL 远端模型访问不到，先转 data URL
+                        _inlined = _maybe_inline_local_image(att_url, att_mime)
+                        _final_url = _inlined or att_url
+                        if _inlined is None and _LOCAL_UPLOAD_RE.match(att_url.strip()):
+                            _degraded_notices.append(
+                                f"[图片 {att_name} 体积过大或读取失败，已降级为文本，请缩小后重试]"
+                            )
+                        else:
+                            content_blocks.append(
+                                {"type": "image_url", "image_url": {"url": _final_url}}
+                            )
                     else:
                         _degraded_notices.append(
                             f"[用户发送了图片 {att_name}，当前模型不支持图片输入]"

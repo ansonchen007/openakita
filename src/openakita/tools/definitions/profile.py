@@ -19,8 +19,8 @@ PROFILE_TOOLS = [
 
 **支持的档案项**：
 - name: 称呼
-- agent_role: Agent 角色
-- work_field: 工作领域
+- agent_role: **Agent 扮演的角色**（如"工作助手"、"技术顾问"），**不是用户职业**。用户说"我是后端工程师/产品经理/老师"应改用 `key="profession"`，handler 会自动落入长期记忆，**不要**塞到 agent_role
+- work_field: **工作领域行业**（如 互联网/金融/教育），**不是地理位置**。用户说"我住上海/广州"应改用 `key="city"` 或 `key="location"`，**不要**塞到 work_field
 - preferred_language: 编程语言偏好
 - os: 操作系统
 - ide: 开发工具
@@ -39,7 +39,12 @@ PROFILE_TOOLS = [
 - emoji_preference: 表情偏好
 - care_topics: 关心话题
 
-**注意**：表情包偏好(sticker_preference)、表情使用(emoji_usage)、幽默感(humor)、正式程度(formality)等沟通风格相关偏好属于人格系统，应使用 `update_persona_trait` 工具更新，而非此工具。""",
+**注意**：表情包偏好(sticker_preference)、表情使用(emoji_usage)、幽默感(humor)、正式程度(formality)等沟通风格相关偏好属于人格系统，应使用 `update_persona_trait` 工具更新，而非此工具。
+
+**重要禁忌（避免字段错配）**：
+- 用户的"职业/职位/工种"（后端工程师、产品经理、设计师、老师等）→ 用 `key="profession"`，**不要**填进 agent_role
+- 用户的"地理位置/居住地"（上海、北京、广州、香港等）→ 用 `key="city"` 或 `key="location"`，**不要**填进 work_field
+- 不在白名单的 key 不会丢失：handler 已实现 fallback，会自动保存到长期记忆。请按语义选最贴近的字段名（哪怕不在白名单），由 handler 决定落点。""",
         "input_schema": {
             "type": "object",
             "properties": {
