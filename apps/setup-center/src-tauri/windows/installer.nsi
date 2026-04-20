@@ -668,6 +668,10 @@ LangString cliPathHint ${LANG_ENGLISH} "Tip: After adding to PATH, you can type 
 LangString cliExamples ${LANG_SIMPCHINESE} "命令示例：$\n  oa serve    — 启动后端服务$\n  oa status   — 查看运行状态$\n  openakita run — 单次执行"
 LangString cliExamples ${LANG_ENGLISH} "Examples:$\n  oa serve    — Start backend service$\n  oa status   — Check running status$\n  openakita run — Run a single task"
 
+; Persistent file-lock abort (consumed by NSIS_HOOK_PREINSTALL / PREUNINSTALL in hooks.nsh)
+LangString installAbortLocked ${LANG_SIMPCHINESE} "无法继续安装：检测到 OpenAkita 的部分文件被系统占用且无法释放。$\n$\n请尝试以下步骤：$\n1. 关闭所有 OpenAkita 窗口和命令行进程$\n2. 在任务管理器中结束所有 openakita-* 进程$\n3. 若仍失败，请重启电脑后再次运行安装程序"
+LangString installAbortLocked ${LANG_ENGLISH} "Cannot continue installation: some OpenAkita files are locked by the system and cannot be released.$\n$\nPlease try:$\n1. Close all OpenAkita windows and CLI processes$\n2. End all openakita-* processes in Task Manager$\n3. If the issue persists, restart your computer and re-run the installer"
+
 Function .onInit
  ${GetOptions} $CMDLINE "/P" $PassiveMode
  ${IfNot} ${Errors}
