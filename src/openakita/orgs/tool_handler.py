@@ -33,6 +33,27 @@ _LIM_EXEC_LOG = 2000
 _LIM_TOOL_RETURN = 200
 _LIM_TITLE = 200
 
+# BUG-3：识别用户原始指令是否带"硬边界关键词"。命中时 _handle_org_delegate_task
+# 会把这段原始指令做成"父任务硬边界"前置到子任务 task_content 里，避免子节点
+# 撕破"50 字以内/不要写代码/只列纲要"等显式约束。
+# 关键词集合保守选取（高召回 + 低误伤）；未命中时不附加边界，对普通任务零影响。
+_BOUNDARY_KEYWORDS = (
+    "字以内", "字以下", "字之内", "字内", "字的",
+    "字简述", "字概述", "字摘要", "字方案",
+    "不要写代码", "不要代码", "禁止写代码", "不要实现", "不要写实现",
+    "只列", "只要", "仅列", "仅要", "只给", "仅给",
+    "纲要", "提纲", "要点", "概要", "摘要",
+    "简短", "简洁", "简述", "概述",
+    "一句话", "几句话", "三两句", "两三句",
+)
+
+
+def _has_explicit_boundary(text: str) -> bool:
+    """Return True when the text contains an explicit scope/format constraint."""
+    if not text:
+        return False
+    return any(kw in text for kw in _BOUNDARY_KEYWORDS)
+
 # Tools whose ``to_node`` / ``node_id`` / ``target_node_id`` parameters must
 # resolve to a **specific** node before the handler runs. Used by
 # ``OrgToolHandler._resolve_node_refs`` to switch from lenient fuzzy matching
@@ -1141,11 +1162,36 @@ class OrgToolHandler:
                 f"请改用 org_wait_for_deliverable 等待交付，或 org_list_delegated_tasks 查看进度。"
             )
 
+        # BUG-3：把"用户原始指令"做成父任务硬边界，前置到子任务 task_content 里。
+        # 仅当用户原话带显式约束（字数限制、不要写代码、只列纲要等）才注入，
+        # 普通任务不附加边界，零行为破坏。
+        _task_content = args["task"]
+        try:
+            _root_intent = self._runtime.get_active_root_intent(org_id)
+            if _root_intent and _has_explicit_boundary(_root_intent):
+                _intent_brief = _root_intent.strip()
+                if len(_intent_brief) > 300:
+                    _intent_brief = _intent_brief[:300] + "..."
+                _task_content = (
+                    "[父任务硬边界 — 禁止超出]\n"
+                    f"用户原始指令：{_intent_brief}\n"
+                    "你的产出必须严格遵守该指令的范围、字数、格式约束。"
+                    "若上级转述时与原始指令冲突，以原始指令为准。\n\n"
+                    "—— 上级派发的子任务如下 ——\n"
+                    + str(args["task"])
+                )
+        except Exception:
+            logger.debug(
+                "[ToolHandler] root_intent boundary inject failed",
+                exc_info=True,
+            )
+            _task_content = args["task"]
+
         try:
             await messenger.send_task(
                 from_node=node_id,
                 to_node=to_node,
-                task_content=args["task"],
+                task_content=_task_content,
                 priority=args.get("priority", 0),
                 metadata=metadata,
             )

@@ -765,9 +765,28 @@ async def get_command_status(request: Request, org_id: str, command_id: str):
     cmd = _command_store.get(command_id)
     if not cmd or cmd["org_id"] != org_id:
         raise HTTPException(404, "Command not found")
+
+    # phase 透传：从最近的 command_phase 事件取细分阶段
+    # （running / awaiting_summary / done），让前端能区分"全员 idle 但 running"
+    # 是真的卡住还是在等 root 汇总。命令已结束（done/error）时 phase 直接对齐
+    # status，避免 stale phase 干扰展示。
+    phase = cmd["status"]
+    if cmd["status"] == "running":
+        try:
+            rt = _get_runtime(request)
+            es = rt.get_event_store(org_id)
+            for ev in es.query(event_type="command_phase", limit=20) or []:
+                data = ev.get("data") or {}
+                if data.get("command_id") == command_id:
+                    phase = data.get("phase") or phase
+                    break
+        except Exception:
+            pass
+
     return {
         "command_id": cmd["command_id"],
         "status": cmd["status"],
+        "phase": phase,
         "result": cmd["result"],
         "error": cmd["error"],
         "elapsed_s": round(time.time() - cmd["created_at"], 1),
@@ -917,6 +936,7 @@ async def preview_node_prompt(request: Request, org_id: str, node_id: str):
         blackboard_summary=blackboard_summary,
         dept_summary=dept_summary,
         node_summary=node_summary,
+        root_intent=rt.get_active_root_intent(org_id),
     )
 
     from openakita.orgs.tool_categories import expand_tool_categories

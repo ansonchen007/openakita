@@ -72,6 +72,7 @@ class OrgIdentity:
         pending_messages: str = "",
         policy_index: str = "",
         project_tasks_summary: str = "",
+        root_intent: str = "",
     ) -> str:
         """Build the full organization context prompt for a node agent.
 
@@ -100,6 +101,21 @@ class OrgIdentity:
         org_chart = self._build_brief_org_chart(org)
 
         parts: list[str] = []
+
+        # BUG-3：用户当前指令贴在最前（最高可见性），让所有子节点都能看到
+        # 用户原话的范围/字数/格式约束，避免上级转述时漂移。
+        # 仅当 root_intent 非空且当前命令仍在进行时由调用方传入。
+        if root_intent:
+            _intent_brief = root_intent.strip()
+            if len(_intent_brief) > 400:
+                _intent_brief = _intent_brief[:400] + "..."
+            parts.append(
+                "## 用户当前指令（最高优先级，禁止超出）\n"
+                f"\"{_intent_brief}\"\n"
+                "下达任何子任务、写任何代码、产出任何交付物之前，"
+                "先检查你的输出严格在该指令的范围、字数、格式约束之内。"
+                "若与上级转述冲突，以上述用户原话为准。"
+            )
 
         # Compact identity declaration (replaces full SOUL.md + AGENT.md)
         parts.append(
@@ -250,10 +266,16 @@ class OrgIdentity:
                 "4. 被打回时根据反馈修改后重新提交\n"
                 "5. 验收通过后任务完结\n\n"
                 "缺少工具时，用 org_request_tools 向上级申请。\n\n"
-                "⚠️ 工作范围约束：\n"
-                "- 只完成上级分配给你的任务，不要自行发起新的项目或扩展工作范围\n"
+                "⚠️ **工作范围硬约束（优先级高于效率意识）**：\n"
+                "- **严格对齐用户原始指令**：若文档顶部出现「用户当前指令」段落，"
+                "你的产出必须严格在该指令的范围、字数、格式之内；"
+                "上级转述与原始指令冲突时，**以用户原话为准**\n"
+                "- **宁可少做，不可超出**：用户要 50 字纲要就只写 50 字纲要，"
+                "不要顺手补全代码、不要扩展未要求的细节、不要追加交付物\n"
+                "- 只完成上级明确分配的任务，不要自行发起新项目或扩展工作范围\n"
                 "- 任务完成并被验收后停止，等待上级下达新指令\n"
-                "- 如果认为有后续工作需要做，在交付物中建议即可，由上级决定是否执行"
+                "- 如果认为有后续工作需要做，在交付物中**建议**即可，由上级决定是否执行\n"
+                "- 上面的「AI 效率意识」鼓励你快速行动，但不等于鼓励你越过用户的边界做额外工作"
             )
 
         has_external = bool(node.external_tools)

@@ -123,6 +123,12 @@ class UserCommandTracker:
         "auto_stopped",
         "state",
         "summary_pushed_at",
+        # BUG-3：保存当前命令的用户原始指令内容，供子节点 system prompt
+        # 渲染（identity.build_org_context_prompt）和 _handle_org_delegate_task
+        # 注入"父任务硬边界"时取用。命令结束时 tracker 一并被 pop，自动失效。
+        "user_command_content",
+        # BUG-5：finalize phase 事件去重，避免同 phase 重复 emit。
+        "_last_phase_emitted",
     )
 
     def __init__(
@@ -130,6 +136,7 @@ class UserCommandTracker:
         org_id: str,
         root_node_id: str,
         command_id: str | None = None,
+        user_command_content: str = "",
     ) -> None:
         self.org_id = org_id
         self.root_node_id = root_node_id
@@ -150,6 +157,8 @@ class UserCommandTracker:
         self.state: str = "running"
         # monotonic time when summary inbox push happened (debounce).
         self.summary_pushed_at: float = 0.0
+        self.user_command_content: str = user_command_content or ""
+        self._last_phase_emitted: str | None = None
 
     def _touch(self) -> None:
         self.last_progress_at = time.monotonic()
@@ -929,7 +938,10 @@ class OrgRuntime:
             # 看门狗/等待者退出，避免悬挂。
             prior.completed.set()
 
-        tracker = UserCommandTracker(org_id, target.id)
+        tracker = UserCommandTracker(
+            org_id, target.id,
+            user_command_content=content,
+        )
         self._active_user_cmd[tracker_key] = tracker
 
         watchdog_task = asyncio.create_task(self._command_watchdog(tracker))
@@ -1771,6 +1783,7 @@ class OrgRuntime:
             blackboard_summary=blackboard_summary,
             dept_summary=dept_summary,
             node_summary=node_summary,
+            root_intent=self.get_active_root_intent(org.id),
         )
 
         profile = self._build_profile_for_node(node, org_context_prompt)
@@ -2967,6 +2980,48 @@ class OrgRuntime:
     ) -> UserCommandTracker | None:
         return self._active_user_cmd.get((org_id, root_node_id))
 
+    def get_active_root_intent(self, org_id: str) -> str:
+        """Return the currently in-flight user command content for *org_id*.
+
+        Used by:
+        - ``identity.build_org_context_prompt`` to render "user current order"
+          into every node's system prompt while a command is running.
+        - ``_handle_org_delegate_task`` to inject "parent task hard boundary"
+          into delegated task content when the original user command has
+          explicit format/length constraints.
+
+        Returns "" when no command is in flight (zero-effect for callers).
+        Picks the first active tracker — in practice an org has at most one
+        in-flight user command at a time.
+        """
+        for (oid, _root_id), tracker in self._active_user_cmd.items():
+            if oid == org_id and not tracker.completed.is_set():
+                return tracker.user_command_content or ""
+        return ""
+
+    def _find_root_node_id(self, org_id: str, node_id: str) -> str | None:
+        """Walk up the hierarchy edges to find the root node id for *node_id*.
+
+        Returns *node_id* itself when it's already a root (no parent); None
+        when org/node is missing. Used by delegate tool to look up the
+        active root intent for the current command tree.
+        """
+        org = self.get_org(org_id)
+        if not org:
+            return None
+        node = org.get_node(node_id)
+        if not node:
+            return None
+        seen: set[str] = set()
+        cur = node
+        while cur and cur.id not in seen:
+            seen.add(cur.id)
+            parent = org.get_parent(cur.id)
+            if parent is None or parent.id == cur.id:
+                break
+            cur = parent
+        return cur.id if cur else node_id
+
     def _trackers_for_org(self, org_id: str) -> list[UserCommandTracker]:
         """Return all active trackers for an organization (usually 0 or 1)."""
         return [
@@ -3106,6 +3161,21 @@ class OrgRuntime:
         tracker.completed.set()
         self._log_finalize_decision(tracker, "completed_unknown_state")
 
+    # 把 finalize 决策映射到一个面向用户的"阶段"短语，前端用它替代
+    # 单调的 "running"，让用户知道是"等汇总"还是真的卡住。这只是展示
+    # 层别名，不影响 tracker 状态机。
+    _FINALIZE_PHASE_MAP = {
+        "subtree_not_closed": "running",
+        "active_delegations": "running",
+        "root_not_idle": "running",
+        "summary_pushed": "awaiting_summary",
+        "completed_no_summary": "done",
+        "completed_after_summary": "done",
+        "completed_legacy": "done",
+        "completed_unknown_state": "done",
+        "no_org": "done",
+    }
+
     def _log_finalize_decision(
         self,
         tracker: UserCommandTracker,
@@ -3116,6 +3186,11 @@ class OrgRuntime:
 
         Helps diagnose "why didn't / did this command finish" without trawling
         events.jsonl. DEBUG level: opt-in by lowering openakita.orgs logger.
+
+        Also emits a single ``command_phase`` event to the org event store so
+        the HTTP layer can surface a user-friendly phase ("awaiting_summary"
+        instead of "running") to the frontend. Same-phase repeats are
+        debounced to avoid log spam.
         """
         try:
             subtree = self._collect_chain_subtree(tracker.root_chain_id)
@@ -3136,6 +3211,24 @@ class OrgRuntime:
             logger.debug("[Finalize] %s", payload)
         except Exception:
             logger.debug("[Finalize] log emit failed", exc_info=True)
+
+        try:
+            phase = self._FINALIZE_PHASE_MAP.get(decision, "running")
+            if phase == tracker._last_phase_emitted:
+                return  # 同 phase 不重复发，避免事件流灌爆
+            tracker._last_phase_emitted = phase
+            self.get_event_store(tracker.org_id).emit(
+                "command_phase",
+                tracker.root_node_id,
+                {
+                    "phase": phase,
+                    "decision": decision,
+                    "command_id": tracker.command_id or "",
+                    "root_chain_id": tracker.root_chain_id or "",
+                },
+            )
+        except Exception:
+            logger.debug("[Finalize] phase emit failed", exc_info=True)
 
     def _push_root_summary_prompt(
         self, tracker: UserCommandTracker,
