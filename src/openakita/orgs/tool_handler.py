@@ -802,7 +802,38 @@ class OrgToolHandler:
             priority=args.get("priority", 0),
             metadata=metadata,
         )
-        ok = await messenger.send(msg)
+
+        # 工具级在途锁：仅对 propagate_chain=true 的接力路径生效。
+        # 普通 question/notify 等对话性消息不抢锁（避免影响正常多轮对话）。
+        # 接力路径有效 chain_id 必须存在；否则 metadata 不会带 chain，messenger
+        # 自身的 chain 级 dedupe 也不会启用，这条专门的工具锁就是必要兜底。
+        relay_chain_for_lock = ""
+        if propagate_chain and metadata.get("propagate_chain"):
+            relay_chain_for_lock = (metadata.get("task_chain_id") or "").strip()
+        _inflight_key = ""
+        if relay_chain_for_lock:
+            _inflight_key = (
+                f"send_relay:{org_id}:{node_id}:{to_node}:{relay_chain_for_lock}"
+            )
+            if not self._runtime._try_acquire_tool_inflight(_inflight_key):
+                logger.warning(
+                    "[ToolInflight] dedupe drop org_send_message(propagate): %s",
+                    _inflight_key,
+                )
+                return (
+                    f"[去重] 检测到 {self._runtime._tool_inflight_window_secs:.0f}s 内"
+                    f"已用 propagate_chain 接力同一任务链（{relay_chain_for_lock[:12]}）"
+                    f"给 {to_node}，已忽略。请改用 org_wait_for_deliverable 等待结果。"
+                )
+
+        try:
+            ok = await messenger.send(msg)
+        except Exception:
+            if _inflight_key:
+                self._runtime._release_tool_inflight(_inflight_key)
+            raise
+        if not ok and _inflight_key:
+            self._runtime._release_tool_inflight(_inflight_key)
         if ok:
             await self._runtime._broadcast_ws("org:message", {
                 "org_id": org_id, "from_node": node_id, "to_node": to_node,
@@ -1095,13 +1126,32 @@ class OrgToolHandler:
         except Exception:
             pass
 
-        await messenger.send_task(
-            from_node=node_id,
-            to_node=to_node,
-            task_content=args["task"],
-            priority=args.get("priority", 0),
-            metadata=metadata,
-        )
+        # 工具级在途锁：堵住 ProjectStore 还没落盘前 LLM 在同一 ReAct iter
+        # 内 emit 多个 delegate_task 给同 chain 同目标的并发穿透。
+        # 失败路径下立即释放锁让后续重试可继续；成功路径让锁自然过期，
+        # 窗口内紧接的重发会得到友好提示而不是真的二次入队。
+        _inflight_key = f"delegate:{org_id}:{node_id}:{to_node}:{chain_id}"
+        if not self._runtime._try_acquire_tool_inflight(_inflight_key):
+            logger.warning(
+                "[ToolInflight] dedupe drop org_delegate_task: %s", _inflight_key
+            )
+            return (
+                f"[去重] 检测到 {self._runtime._tool_inflight_window_secs:.0f}s 内"
+                f"重复对 {to_node} 派发同一任务链（{chain_id[:12]}），已忽略。"
+                f"请改用 org_wait_for_deliverable 等待交付，或 org_list_delegated_tasks 查看进度。"
+            )
+
+        try:
+            await messenger.send_task(
+                from_node=node_id,
+                to_node=to_node,
+                task_content=args["task"],
+                priority=args.get("priority", 0),
+                metadata=metadata,
+            )
+        except Exception:
+            self._runtime._release_tool_inflight(_inflight_key)
+            raise
 
         self._runtime._mark_effective_action(org_id, node_id)
         self._runtime._on_inbound_for_node(org_id, to_node)
@@ -1841,7 +1891,31 @@ class OrgToolHandler:
             content=f"任务交付: {deliverable[:_LIM_EVENT]}",
             metadata=metadata,
         )
-        ok = await messenger.send(msg)
+
+        # 工具级在途锁：拦掉 LLM 在同一 ReAct iter emit 多个 submit_deliverable
+        # 给同一 chain 同一上级造成的"附件出现 N 份、父级被多次唤醒"。
+        # messenger.send 内部已有内容 hash 级 dedupe 兜底；这里加一层是为了
+        # 给 LLM 返回明确的友好文案，让它不会因为得到 False 又紧接重试。
+        _inflight_key = f"submit:{org_id}:{node_id}:{to_node}:{chain_id}"
+        if not self._runtime._try_acquire_tool_inflight(_inflight_key):
+            logger.warning(
+                "[ToolInflight] dedupe drop org_submit_deliverable: %s", _inflight_key
+            )
+            return (
+                f"[去重] 检测到 {self._runtime._tool_inflight_window_secs:.0f}s 内"
+                f"已向 {to_node} 提交过同一任务链（{chain_id[:12]}）的交付物，已忽略。"
+                f"请等待上级验收（org_wait_for_acceptance / 直接结束本轮回复）。"
+            )
+
+        try:
+            ok = await messenger.send(msg)
+        except Exception:
+            self._runtime._release_tool_inflight(_inflight_key)
+            raise
+        if not ok:
+            # send 被 messenger 内部 dedupe / bandwidth / target-not-found 拒绝时，
+            # 立即释放锁让后续合理的重试可以继续；让 LLM 拿到明确反馈。
+            self._runtime._release_tool_inflight(_inflight_key)
 
         self._runtime.get_event_store(org_id).emit(
             "task_delivered", node_id,

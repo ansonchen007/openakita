@@ -292,6 +292,20 @@ class OrgRuntime:
         # 返回"组织已停止，任务被取消"这样的语义化错误而不是"组织未运行"）
         self._recently_stopped_orgs: dict[str, float] = {}
 
+        # 失败/终止诊断卡片去重：在 _diagnosis_emit_window_secs 窗口内，
+        # 同一 (org_id, node_id, root_cause) 只 broadcast 一次，避免 verify_incomplete
+        # 反复重试或 watchdog 多次 emit 导致前端聊天气泡里出现多张相同的失败卡片。
+        # key = (org_id, node_id, root_cause), value = 上次 emit 的时间戳（秒）。
+        self._recent_diagnosis_emit: dict[tuple[str, str, str], float] = {}
+        self._diagnosis_emit_window_secs: float = 30.0
+
+        # 工具级在途锁：防止 LLM 在同一 ReAct iter 内 emit 多个相同 tool_use
+        # （如 3 次 org_delegate_task 给同一 to_node 同一 chain）造成下游
+        # mailbox 重复入队。key = "{tool}:{org_id}:{node_id}:{...}"，
+        # value = 抢到锁的时间戳（秒）。窗口外旧 key 可被覆盖。
+        self._tool_inflight_keys: dict[str, float] = {}
+        self._tool_inflight_window_secs: float = 5.0
+
         self._started = False
 
         global _runtime_instance
@@ -304,6 +318,52 @@ class OrgRuntime:
             sem = asyncio.Semaphore(self.max_concurrent_nodes_per_org)
             self._org_semaphores[org_id] = sem
         return sem
+
+    def _should_skip_diagnosis_emit(
+        self, org_id: str, node_id: str, root_cause: str
+    ) -> bool:
+        """判定 (org, node, root_cause) 在去重窗口内是否已 emit 过失败卡片。
+
+        命中（应跳过）时仅刷新时间戳并返回 True；未命中（应 emit）时记录
+        时间戳并返回 False。窗口外的旧条目顺手清理，避免长时间运行内存累积。
+        """
+        import time as _t
+        now = _t.time()
+        key = (org_id, node_id, root_cause or "unknown")
+        last = self._recent_diagnosis_emit.get(key)
+        if last is not None and now - last < self._diagnosis_emit_window_secs:
+            self._recent_diagnosis_emit[key] = now
+            return True
+        self._recent_diagnosis_emit[key] = now
+        if len(self._recent_diagnosis_emit) > 4096:
+            cutoff = now - self._diagnosis_emit_window_secs * 4
+            stale = [k for k, ts in self._recent_diagnosis_emit.items() if ts < cutoff]
+            for k in stale:
+                self._recent_diagnosis_emit.pop(k, None)
+        return False
+
+    def _try_acquire_tool_inflight(self, key: str) -> bool:
+        """尝试获取工具在途锁。窗口内同 key 已被抢占则返回 False。
+
+        返回 True 表示当前调用是窗口内首次，调用方在 messenger 真正成功后
+        必须调用 :py:meth:`_release_tool_inflight` 释放（或不释放等待自然过期）。
+        """
+        import time as _t
+        now = _t.time()
+        last = self._tool_inflight_keys.get(key)
+        if last is not None and now - last < self._tool_inflight_window_secs:
+            return False
+        self._tool_inflight_keys[key] = now
+        if len(self._tool_inflight_keys) > 4096:
+            cutoff = now - self._tool_inflight_window_secs * 4
+            stale = [k for k, ts in self._tool_inflight_keys.items() if ts < cutoff]
+            for k in stale:
+                self._tool_inflight_keys.pop(k, None)
+        return True
+
+    def _release_tool_inflight(self, key: str) -> None:
+        """释放工具在途锁；幂等。"""
+        self._tool_inflight_keys.pop(key, None)
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -1398,7 +1458,20 @@ class OrgRuntime:
             }
             if diagnosis:
                 ws_payload["diagnosis"] = diagnosis
-            await self._broadcast_ws(ws_event, ws_payload)
+            # 失败/终止类卡片做窗口去重，避免 verify_incomplete 重试或多路径
+            # 触发同一节点同一根因被反复 emit 多张相同诊断卡片到聊天气泡。
+            # 正常完成（org:task_complete）保持原行为，不做任何抑制。
+            should_emit_ws = True
+            if not is_normal:
+                rc = (diagnosis or {}).get("root_cause", "unknown")
+                if self._should_skip_diagnosis_emit(org.id, node.id, rc):
+                    should_emit_ws = False
+                    logger.warning(
+                        f"[OrgRuntime] diagnosis emit dedupe drop: "
+                        f"org={org.id} node={node.id} root_cause={rc} event={ws_event}"
+                    )
+            if should_emit_ws:
+                await self._broadcast_ws(ws_event, ws_payload)
             if not is_normal:
                 root_cause_tag = (diagnosis or {}).get("root_cause", "unknown")
                 logger.warning(
