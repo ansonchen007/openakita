@@ -6,7 +6,19 @@ Inspired by:
 - AnyGen FAQ tone: every error message has a *cause category* and *actionable suggestion*
 - CapCut Web help-center 3-part error layout (Why does it happen / What to do / Tip)
 
-Pattern library is intentionally a plain dict so plugins can extend at runtime.
+C0.8 — **template, not LLM**: ``ErrorCoach.render()`` is a pure dict-lookup +
+``str.format`` call.  It does NOT invoke any model and has zero network
+dependencies.  This matters because:
+
+* the host can render an error in <1ms even when the brain is wedged,
+* ``D:\\OpenAkita_AI_Video\\findings\\_summary_to_plan.md`` C0.8 explicitly
+  flagged the misconception that ``ErrorCoach`` "translates with an LLM",
+* a deterministic mapping is auditable — operators can grep the
+  ``ErrorPattern`` library and predict every output the user will see.
+
+Pattern library is intentionally a plain dict so plugins can extend at
+runtime.  D2.11/D2.14 three-segment shape (cause → problem → next_step,
+with optional ``tip``) is enforced by :class:`RenderedError`.
 """
 
 from __future__ import annotations
