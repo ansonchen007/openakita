@@ -124,6 +124,10 @@ plugins/*
 !plugins/avatar-speaker/ui/
 !plugins/avatar-speaker/ui/dist/
 !plugins/avatar-speaker/ui/dist/**
+!plugins/bgm-suggester/
+!plugins/bgm-suggester/ui/
+!plugins/bgm-suggester/ui/dist/
+!plugins/bgm-suggester/ui/dist/**
 !plugins/highlight-cutter/
 !plugins/highlight-cutter/ui/
 !plugins/highlight-cutter/ui/dist/
