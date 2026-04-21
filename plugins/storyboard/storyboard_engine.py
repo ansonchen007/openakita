@@ -21,6 +21,13 @@ import re
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
+from openakita_plugin_sdk.contrib import (
+    KIND_NUMBER,
+    KIND_OTHER,
+    LowConfidenceField,
+    Verification,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -121,37 +128,58 @@ def _clamp_seedance_duration(seconds: float) -> int:
     return rounded
 
 
+_SEEDANCE_DEFAULT_PLUGIN_MODEL = "2.0"
+
+
 def to_seedance_payload(
     sb: Storyboard,
     *,
     model: str = _SEEDANCE_DEFAULT_MODEL,
     ratio: str = _SEEDANCE_DEFAULT_RATIO,
     resolution: str = _SEEDANCE_DEFAULT_RESOLUTION,
+    plugin_model: str = _SEEDANCE_DEFAULT_PLUGIN_MODEL,
 ) -> dict[str, Any]:
-    """Render a storyboard as a JSON payload tailored for ``seedance.py``.
+    """Render a storyboard as a JSON payload that targets *both* delivery
+    surfaces of seedance: the standalone ``scripts/seedance.py`` CLI **and**
+    the in-process ``plugins/seedance-video`` REST API.
+
+    Sprint 7 dual-mode upgrade:
+
+    * ``cli_examples`` (existing) — ``python scripts/seedance.py create ...``
+      lines for users running the CLI directly.
+    * ``post_examples`` (new) — ready-to-POST request bodies aligned with
+      ``plugins/seedance-video`` ``CreateTaskBody`` schema.
+    * ``curl_examples`` (new) — POSIX-quoted ``curl`` invocations that hit
+      ``/api/plugins/seedance-video/tasks`` with the same payload.
+
+    ``model`` is the **Ark model id** (used by the CLI), ``plugin_model`` is
+    the **plugin short id** (used by the POST body — "2.0", "lite", ...).
 
     Output shape::
 
         {
           "title": "...",
           "model": "doubao-seedance-2-0-260128",
+          "plugin_model": "2.0",
           "ratio": "16:9",
           "resolution": "720p",
           "target_duration_sec": 30,
-          "shots": [
-            {"index": 1, "prompt": "...", "duration": 5,
-             "ratio": "16:9", "resolution": "720p", "model": "..."},
-            ...
-          ],
-          "cli_examples": ["python scripts/seedance.py create --prompt ..."],
+          "shot_count": N,
+          "shots": [{"index": 1, "prompt": "...", "duration": 5,
+                     "ratio": "16:9", "resolution": "720p",
+                     "model": "...", "source_shot": {...}}],
+          "cli_examples":  [...],
+          "post_examples": [{"endpoint": ".../tasks", "body": {...}}, ...],
+          "curl_examples": ["curl -X POST '...' -d '...'", ...],
+          "notes": "..."
         }
-
-    Each shot maps to a single seedance task; the helper does *not* call the
-    network — it produces a payload the user (or downstream automation) can
-    feed to ``scripts/seedance.py create`` one shot at a time.
     """
     shots_out: list[dict[str, Any]] = []
     cli_examples: list[str] = []
+    post_examples: list[dict[str, Any]] = []
+    curl_examples: list[str] = []
+    plugin_endpoint = "/api/plugins/seedance-video/tasks"
+
     for s in sb.shots:
         prompt_text = _shot_to_seedance_prompt(s, style_notes=sb.style_notes)
         duration = _clamp_seedance_duration(s.duration_sec)
@@ -164,31 +192,67 @@ def to_seedance_payload(
             "model": model,
             "source_shot": s.to_dict(),
         })
-        # Build a copy-pasteable CLI line; quote the prompt with double-quotes
-        # and escape any embedded quotes so the example survives a shell paste.
-        escaped = prompt_text.replace('"', r'\"')
+        # CLI line — double-quote the prompt and escape internal quotes.
+        escaped_dq = prompt_text.replace('"', r'\"')
         cli_examples.append(
-            f'python scripts/seedance.py create --prompt "{escaped}" '
+            f'python scripts/seedance.py create --prompt "{escaped_dq}" '
             f'--model {model} --duration {duration} --ratio {ratio} '
             f'--resolution {resolution} --wait'
+        )
+        # Plugin POST body — fields lifted directly from
+        # plugins/seedance-video/plugin.py::CreateTaskBody so callers can
+        # POST it verbatim with no extra mapping step.
+        body = {
+            "prompt": prompt_text,
+            "mode": "t2v",
+            "model": plugin_model,
+            "ratio": ratio,
+            "duration": duration,
+            "resolution": resolution,
+            "n": 1,
+            "generate_audio": True,
+        }
+        post_examples.append({
+            "index": s.index,
+            "endpoint": plugin_endpoint,
+            "method": "POST",
+            "body": body,
+        })
+        # POSIX-quoted curl (single-quote the JSON, escape internal '
+        # by closing/reopening the quote).
+        json_body = _to_compact_json(body).replace("'", "'\"'\"'")
+        curl_examples.append(
+            f"curl -X POST '{plugin_endpoint}' "
+            f"-H 'Content-Type: application/json' "
+            f"-d '{json_body}'"
         )
     return {
         "title": sb.title,
         "model": model,
+        "plugin_model": plugin_model,
         "ratio": ratio,
         "resolution": resolution,
         "target_duration_sec": sb.target_duration_sec,
         "shot_count": len(shots_out),
         "shots": shots_out,
         "cli_examples": cli_examples,
+        "post_examples": post_examples,
+        "curl_examples": curl_examples,
         "notes": (
             "Each shot is one independent seedance task; durations are "
             f"clamped into the [{_SEEDANCE_MIN_DURATION},"
             f"{_SEEDANCE_MAX_DURATION}] second window supported by all "
-            "current Seedance models. Run cli_examples one by one, or feed "
-            "shots[*] into your own batch script."
+            "current Seedance models. Choose ONE delivery channel per shot:"
+            " (a) cli_examples for scripts/seedance.py, (b) post_examples"
+            " for the plugin REST API, or (c) curl_examples for shell."
         ),
     }
+
+
+def _to_compact_json(obj: Any) -> str:
+    """Local stdlib JSON dumper, kept tiny so the engine stays import-light."""
+    import json as _json
+    return _json.dumps(obj, ensure_ascii=False, separators=(",", ":"))
 
 
 # ── tongyi-image bridge ────────────────────────────────────────────────
@@ -507,9 +571,64 @@ def self_check(sb: Storyboard) -> StoryboardSelfCheck:
     )
 
 
+def to_verification(sb: Storyboard, check: StoryboardSelfCheck) -> Verification:
+    """Sprint 9 / D2.10 — translate ``StoryboardSelfCheck`` into the
+    SDK's standard :class:`Verification` envelope so the host UI's
+    "trust badge" component lights up the same way it does for
+    bgm-suggester and (eventually) every other plugin.
+
+    Mapping rules — only flag fields the user can actually act on:
+
+    * ``duration_match`` warning (target vs actual sum) → flag
+      ``$.storyboard.target_duration_sec`` (KIND_NUMBER) so the UI can
+      highlight the duration field.  Reason carries the ``actual / target``
+      string the engine already produced.
+    * ``minimum_count`` warning → flag ``$.storyboard.shots`` (KIND_OTHER)
+      because the action is "add more shots", which lives on the list.
+    * ``distribution_balance`` warning → flag ``$.storyboard.shots``
+      (KIND_OTHER) — same actionable list, different reason.
+
+    The ``verifier_id`` is fixed to ``"self_check"``.  When the host
+    later wires in ``IntentVerifier.self_eval_loop`` (a real second
+    model), the two envelopes can be combined with
+    :func:`merge_verifications` so the badge reflects both signals
+    without losing either reason.
+    """
+    fields: list[LowConfidenceField] = []
+    if check.duration_match.startswith("⚠"):
+        fields.append(LowConfidenceField(
+            path="$.storyboard.target_duration_sec",
+            value=sb.target_duration_sec,
+            kind=KIND_NUMBER,
+            reason=check.duration_match.lstrip("⚠ ").strip(),
+        ))
+    if check.minimum_count.startswith("⚠"):
+        fields.append(LowConfidenceField(
+            path="$.storyboard.shots",
+            value=len(sb.shots),
+            kind=KIND_OTHER,
+            reason=check.minimum_count.lstrip("⚠ ").strip(),
+        ))
+    if check.distribution_balance.startswith("⚠"):
+        fields.append(LowConfidenceField(
+            path="$.storyboard.shots",
+            value=len(sb.shots),
+            kind=KIND_OTHER,
+            reason=check.distribution_balance.lstrip("⚠ ").strip(),
+        ))
+    notes = "" if check.ok else "; ".join(check.suggestions[:3])
+    return Verification(
+        verified=check.ok and not fields,
+        verifier_id="self_check",
+        low_confidence_fields=fields,
+        notes=notes,
+    )
+
+
 __all__ = [
     "Shot", "Storyboard", "StoryboardSelfCheck",
     "parse_storyboard_llm_output", "self_check",
     "to_seedance_payload", "to_tongyi_payload",
+    "to_verification",
     "_SYSTEM",
 ]

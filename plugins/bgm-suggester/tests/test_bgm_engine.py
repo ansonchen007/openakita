@@ -39,6 +39,7 @@ from bgm_engine import (  # noqa: E402
     to_export_payload,
     to_search_queries,
     to_suno_prompt,
+    to_verification,
 )
 
 # ── parser: level 1 (clean JSON) ─────────────────────────────────────
@@ -385,7 +386,7 @@ def test_to_export_payload_bundles_everything() -> None:
     chk = self_check(b)
     bundle = to_export_payload(b, chk)
     assert set(bundle.keys()) == {
-        "brief", "self_check", "search_queries", "suno", "csv",
+        "brief", "self_check", "verification", "search_queries", "suno", "csv",
     }
     assert bundle["brief"]["style"] == "lofi"
     assert bundle["self_check"]["passed"] is True
@@ -475,3 +476,100 @@ def test_selfcheck_dataclass_independent_of_brief() -> None:
                                           "code": "x", "message": "y"}])
     assert s.passed is False
     assert s.issues[0]["code"] == "x"
+
+
+# ── D2.10 verification bridge (Sprint 9) ────────────────────────────
+
+
+def _broken_brief() -> BgmBrief:
+    """A brief where bpm and label disagree AND keyword count is short
+    — exercises two issue codes at once."""
+    return BgmBrief(
+        title="t", target_duration_sec=30, style="lofi",
+        tempo_bpm=70, tempo_label="fast",  # 70 bpm but says fast
+        keywords=["only_one"],  # < 3 → few_keywords
+    )
+
+
+def test_to_verification_clean_brief_is_green() -> None:
+    """A self-check-passing brief must produce a verified=True envelope
+    with zero flagged fields — the host UI then renders a green badge."""
+    from openakita_plugin_sdk.contrib import BADGE_GREEN
+    brief = _ok_brief()
+    check = self_check(brief)
+    v = to_verification(brief, check)
+    assert v.verified is True
+    assert v.low_confidence_fields == []
+    assert v.badge == BADGE_GREEN
+    assert v.verifier_id == "self_check"
+
+
+def test_to_verification_flags_bpm_label_mismatch() -> None:
+    """The single most common LLM slip-up: tempo_bpm and tempo_label
+    disagree.  Sprint 9 turns this into a yellow-badge LowConfidenceField
+    on the bpm so the UI can highlight the cell."""
+    from openakita_plugin_sdk.contrib import (
+        BADGE_YELLOW,
+        KIND_NUMBER,
+    )
+    brief = _broken_brief()
+    check = self_check(brief)
+    v = to_verification(brief, check)
+    assert v.badge == BADGE_YELLOW
+    paths = [f.path for f in v.low_confidence_fields]
+    assert "$.brief.tempo_bpm" in paths
+    bpm_field = next(f for f in v.low_confidence_fields
+                     if f.path == "$.brief.tempo_bpm")
+    assert bpm_field.kind == KIND_NUMBER
+    assert "fast" in bpm_field.reason  # reason carries the issue message
+
+
+def test_to_verification_flags_few_keywords() -> None:
+    """Keywords < 3 → flag the keywords list so the user knows to add
+    more (better search hits on YouTube/Spotify)."""
+    brief = _broken_brief()
+    check = self_check(brief)
+    v = to_verification(brief, check)
+    paths = [f.path for f in v.low_confidence_fields]
+    assert "$.brief.keywords" in paths
+
+
+def test_to_verification_ignores_unmapped_issue_codes() -> None:
+    """``arc_curve_length`` is the only "info" code we surface; other
+    codes are deliberately dropped so the badge does not turn yellow on
+    advisory notes the user cannot act on."""
+    brief = _ok_brief()
+    fake_check = SelfCheck(
+        passed=False,
+        issues=[
+            {"severity": "info", "code": "future_unknown_code",
+             "message": "ignored"},
+        ],
+    )
+    v = to_verification(brief, fake_check)
+    assert v.low_confidence_fields == []  # unmapped → not flagged
+    assert v.verified is False  # but check.passed=False still drags it
+    assert "1 self-check issue" in v.notes
+
+
+def test_to_export_payload_includes_verification_field() -> None:
+    """Sprint 9 contract: every export payload must carry a
+    ``verification`` key so frontends can render the trust badge
+    without an extra round-trip."""
+    brief = _broken_brief()
+    check = self_check(brief)
+    payload = to_export_payload(brief, check)
+    assert "verification" in payload
+    v_dict = payload["verification"]
+    assert v_dict["verifier_id"] == "self_check"
+    assert v_dict["badge"] in {"verified", "needs_review", "unverified"}
+    assert "field_count_by_kind" in v_dict
+
+
+def test_to_verification_verifier_id_is_stable() -> None:
+    """Pin ``verifier_id="self_check"`` — host UI keys on this string to
+    decide which icon / tooltip to show.  A future rule-based enrichment
+    must keep this string OR run through ``merge_verifications`` so both
+    signals land on the badge."""
+    v = to_verification(_ok_brief(), self_check(_ok_brief()))
+    assert v.verifier_id == "self_check"

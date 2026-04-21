@@ -31,7 +31,13 @@ import re
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
-from openakita_plugin_sdk.contrib import parse_llm_json_object
+from openakita_plugin_sdk.contrib import (
+    KIND_NUMBER,
+    KIND_OTHER,
+    LowConfidenceField,
+    Verification,
+    parse_llm_json_object,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -451,15 +457,75 @@ def to_suno_prompt(brief: BgmBrief) -> dict[str, str]:
     return {"style": style_str, "description": description}
 
 
+def to_verification(brief: BgmBrief, check: SelfCheck) -> Verification:
+    """Sprint 9 / D2.10 — translate the BGM ``SelfCheck`` issues into the
+    SDK's standard :class:`Verification` envelope so the host UI can
+    render the same green/yellow/red trust badge it uses for slides,
+    storyboards and other structured output.
+
+    Mapping rules (intentionally narrow — only flag what a verifier
+    could actually disagree on):
+
+    * ``bpm_label_mismatch``  → flag ``$.brief.tempo_bpm`` with
+      :data:`KIND_NUMBER` (the LLM's most common slip-up: "fast" label
+      with a 70 bpm number).
+    * ``few_keywords``        → flag ``$.brief.keywords`` with
+      :data:`KIND_OTHER` (informational; UI shows yellow but no edit
+      affordance).
+    * ``missing_style``       → flag ``$.brief.style`` (KIND_OTHER).
+    * ``arc_curve_length``    → flag ``$.brief.energy_curve``
+      (KIND_NUMBER, since the curve is numeric).
+
+    Other issue codes are ignored — they are deliberate "info" notes
+    from ``self_check`` and would inflate the badge without giving the
+    user a real action to take.
+
+    The ``verifier_id`` is fixed to ``"self_check"`` because this is a
+    rule-based checker, not a second model.  Plugins that later add a
+    real second-model verifier should compose the result with
+    :func:`merge_verifications` so both signals end up on the badge.
+    """
+    fields: list[LowConfidenceField] = []
+    code_map = {
+        "bpm_label_mismatch": ("$.brief.tempo_bpm", brief.tempo_bpm, KIND_NUMBER),
+        "few_keywords": ("$.brief.keywords", list(brief.keywords), KIND_OTHER),
+        "missing_style": ("$.brief.style", brief.style, KIND_OTHER),
+        "arc_curve_length": (
+            "$.brief.energy_curve", list(brief.energy_curve), KIND_NUMBER,
+        ),
+    }
+    for issue in check.issues:
+        code = issue.get("code", "")
+        mapped = code_map.get(code)
+        if not mapped:
+            continue
+        path, value, kind = mapped
+        fields.append(LowConfidenceField(
+            path=path,
+            value=value,
+            kind=kind,
+            reason=issue.get("message", ""),
+        ))
+
+    notes = "" if check.passed else f"{len(check.issues)} self-check issue(s)"
+    return Verification(
+        verified=check.passed and not fields,
+        verifier_id="self_check",
+        low_confidence_fields=fields,
+        notes=notes,
+    )
+
+
 def to_export_payload(brief: BgmBrief, check: SelfCheck) -> dict[str, Any]:
     """One-stop bundle that the ``/tasks/{id}/export-all.json`` route
-    returns — folds the brief, self-check, and all bridges into a
-    single JSON envelope so consumers don't have to glue 4 endpoints
-    together.
+    returns — folds the brief, self-check, all bridges and the D2.10
+    verification badge into a single JSON envelope so consumers don't
+    have to glue 5 endpoints together.
     """
     return {
         "brief": brief.to_dict(),
         "self_check": check.to_dict(),
+        "verification": to_verification(brief, check).to_dict(),
         "search_queries": to_search_queries(brief),
         "suno": to_suno_prompt(brief),
         "csv": to_csv(brief),
@@ -512,5 +578,6 @@ __all__ = [
     "to_export_payload",
     "to_search_queries",
     "to_suno_prompt",
+    "to_verification",
     "_SYSTEM",
 ]
