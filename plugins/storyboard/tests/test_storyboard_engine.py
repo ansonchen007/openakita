@@ -13,7 +13,7 @@ sys.path.insert(0, str(_HERE))
 from storyboard_engine import (  # noqa: E402
     Shot, Storyboard,
     parse_storyboard_llm_output, self_check,
-    to_seedance_payload,
+    to_seedance_payload, to_tongyi_payload,
 )
 
 
@@ -217,3 +217,140 @@ def test_seedance_export_blank_visual_falls_back_to_placeholder() -> None:
     ])
     out = to_seedance_payload(sb)
     assert out["shots"][0]["prompt"] == "一段画面"
+
+
+# ── tongyi-image export ───────────────────────────────────────────────
+
+
+def test_tongyi_export_basic_shape() -> None:
+    payload = to_tongyi_payload(_sample_storyboard())
+    assert payload["title"] == "测试分镜"
+    assert payload["model"] == "wan27-pro"
+    assert payload["size"] == "1024*1024"
+    assert payload["n"] == 1
+    assert payload["shot_count"] == 3
+    assert len(payload["shots"]) == 3
+    assert len(payload["post_examples"]) == 3
+    assert len(payload["curl_examples"]) == 3
+
+
+def test_tongyi_export_shot_prompt_combines_visual_and_camera() -> None:
+    payload = to_tongyi_payload(_sample_storyboard())
+    first = payload["shots"][0]
+    assert first["index"] == 1
+    assert first["model"] == "wan27-pro"
+    assert first["size"] == "1024*1024"
+    assert first["n"] == 1
+    assert first["mode"] == "text2img"
+    p = first["prompt"]
+    assert "主角推门进入房间" in p
+    assert "构图: 跟拍" in p
+    assert "风格: 电影感" in p
+    # Sound is stills-irrelevant and must be dropped from the prompt.
+    assert "音效" not in p
+    assert "脚步声" not in p
+
+
+def test_tongyi_export_omits_sound_and_dialogue() -> None:
+    sb = Storyboard(title="T", target_duration_sec=5, style_notes="", shots=[
+        Shot(index=1, duration_sec=5,
+             visual="A man at a desk", camera="近景",
+             dialogue="Hello", sound="ambient noise"),
+    ])
+    out = to_tongyi_payload(sb)
+    p = out["shots"][0]["prompt"]
+    assert "A man at a desk" in p
+    assert "构图: 近景" in p
+    assert "Hello" not in p
+    assert "ambient noise" not in p
+
+
+def test_tongyi_export_post_examples_match_create_task_body() -> None:
+    payload = to_tongyi_payload(_sample_storyboard())
+    pe = payload["post_examples"][0]
+    assert pe["path"] == "/api/plugins/tongyi-image/tasks"
+    body = pe["body"]
+    # Body keys must match plugins/tongyi-image/plugin.py CreateTaskBody so
+    # the POST is accepted verbatim — guard against future renames.
+    assert set(body.keys()) == {"mode", "prompt", "model", "size", "n"}
+    assert body["mode"] == "text2img"
+    assert body["model"] == "wan27-pro"
+    assert body["size"] == "1024*1024"
+
+
+def test_tongyi_export_curl_examples_are_paste_ready() -> None:
+    payload = to_tongyi_payload(_sample_storyboard())
+    cmd = payload["curl_examples"][0]
+    assert cmd.startswith("curl -X POST http://localhost:8000/api/plugins/tongyi-image/tasks")
+    assert "-H 'content-type: application/json'" in cmd
+    # Single-quoted body wrapper survives the JSON content (which uses
+    # double-quotes), and the shell command stays on a single line.
+    assert "-d '" in cmd and cmd.endswith("'")
+
+
+def test_tongyi_export_escapes_single_quotes_in_prompt() -> None:
+    sb = Storyboard(title="T", target_duration_sec=5, shots=[
+        Shot(index=1, duration_sec=5, visual="it's a test"),
+    ])
+    out = to_tongyi_payload(sb)
+    cmd = out["curl_examples"][0]
+    # Embedded single-quote must be POSIX-escaped as ``'\''`` so the outer
+    # single-quoted body does not terminate early when pasted into bash.
+    assert r"'\''" in cmd
+
+
+def test_tongyi_export_clamps_n_to_valid_range() -> None:
+    sb = _sample_storyboard()
+    assert to_tongyi_payload(sb, n=0)["n"] == 1
+    assert to_tongyi_payload(sb, n=-5)["n"] == 1
+    assert to_tongyi_payload(sb, n=10)["n"] == 4
+    assert to_tongyi_payload(sb, n=2)["n"] == 2
+    # Per-shot n mirrors the top-level value.
+    assert to_tongyi_payload(sb, n=3)["shots"][0]["n"] == 3
+
+
+def test_tongyi_export_custom_model_and_size_propagate() -> None:
+    payload = to_tongyi_payload(
+        _sample_storyboard(),
+        model="qwen-pro",
+        size="2048*2048",
+        n=2,
+    )
+    assert payload["model"] == "qwen-pro"
+    assert payload["size"] == "2048*2048"
+    assert payload["n"] == 2
+    assert all(s["model"] == "qwen-pro" for s in payload["shots"])
+    assert all(s["size"] == "2048*2048" for s in payload["shots"])
+    assert all(s["n"] == 2 for s in payload["shots"])
+    assert all(
+        pe["body"]["model"] == "qwen-pro" for pe in payload["post_examples"]
+    )
+
+
+def test_tongyi_export_handles_empty_shotlist() -> None:
+    sb = Storyboard(title="Empty", target_duration_sec=10, shots=[])
+    out = to_tongyi_payload(sb)
+    assert out["shot_count"] == 0
+    assert out["shots"] == []
+    assert out["post_examples"] == []
+    assert out["curl_examples"] == []
+
+
+def test_tongyi_export_blank_visual_falls_back_to_placeholder() -> None:
+    sb = Storyboard(title="T", target_duration_sec=5, shots=[
+        Shot(index=1, duration_sec=5, visual="", camera="", sound=""),
+    ])
+    out = to_tongyi_payload(sb)
+    assert out["shots"][0]["prompt"] == "一张画面"
+
+
+def test_tongyi_export_size_uses_dashscope_star_separator() -> None:
+    # Guard against a regression where someone "fixes" the size to use
+    # ``x`` (PIL/CSS convention) — DashScope rejects 1024x1024 with 422.
+    payload = to_tongyi_payload(_sample_storyboard())
+    assert "*" in payload["size"]
+    assert "x" not in payload["size"].lower().replace("text", "")
+    for s in payload["shots"]:
+        assert "*" in s["size"]
+    for pe in payload["post_examples"]:
+        assert "*" in pe["body"]["size"]

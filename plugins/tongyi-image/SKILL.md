@@ -79,3 +79,23 @@ prompt + (可选 ref image) → DashScope POST → task_id →
 - 所有 fire-and-forget 后台任务改用 `api.spawn_task(...)`，host 在 unload 时统一 cancel + drain
 - `/storage/stats` 走 SDK `collect_storage_stats`（`asyncio.to_thread` + `max_files` 上限），UI 不再卡顿
 - `POST /upload` 响应新增 `url` 字段（`build_preview_url`），UI 端可渐进迁移到可访问 URL（见 issue #479）
+
+## storyboard 一键投喂 / Storyboard Bridge (Sprint 2)
+
+`storyboard` 插件新增 `GET /api/plugins/storyboard/tasks/{task_id}/export-tongyi.json`，
+把分镜直接转成本插件可消费的请求体数组：
+
+```bash
+# 拿到分镜 → 一键批量出图
+curl -s localhost:8000/api/plugins/storyboard/tasks/<sb_id>/export-tongyi.json \
+  | jq -c '.post_examples[]' \
+  | while read -r row; do
+      body=$(echo "$row" | jq -c '.body')
+      curl -s -X POST localhost:8000/api/plugins/tongyi-image/tasks \
+        -H 'content-type: application/json' -d "$body"
+    done
+```
+
+`prompt = visual + 构图 + 风格`（省去音效/台词），`size` 默认 `1024*1024`，
+`n` 自动 clamp 到 `1..4`，body 字段名与 `CreateTaskBody` 完全一致 — 测试断言保护，
+后续如重命名会立即报错。

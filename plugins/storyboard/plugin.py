@@ -18,7 +18,7 @@ from openakita_plugin_sdk.contrib import (
 
 from storyboard_engine import (
     _SYSTEM, Shot, Storyboard, parse_storyboard_llm_output, self_check,
-    to_seedance_payload,
+    to_seedance_payload, to_tongyi_payload,
 )
 from task_manager import StoryboardTaskManager
 
@@ -218,6 +218,60 @@ class Plugin(PluginBase):
                 headers={
                     "Content-Disposition": (
                         f'attachment; filename="{task_id}-seedance.json"'
+                    ),
+                },
+            )
+
+        @router.get("/tasks/{task_id}/export-tongyi.json")
+        async def export_tongyi(
+            task_id: str,
+            model: str = "wan27-pro",
+            size: str = "1024*1024",
+            n: int = 1,
+        ):
+            """Export storyboard as a Tongyi-image-compatible task list.
+
+            One JSON entry per shot, plus copy-pasteable curl examples
+            and a ``post_examples`` array whose ``body`` field can be
+            POSTed verbatim to ``/api/plugins/tongyi-image/tasks``.
+
+            Bridges the "plan → image" gap so users can feed a finished
+            storyboard straight into batch generation without re-typing
+            each shot.  Mirrors the export-seedance.json contract.
+            """
+            rec = await self._tm.get_task(task_id)
+            if rec is None or not rec.result.get("storyboard"):
+                raise HTTPException(
+                    status_code=404,
+                    detail={"problem": "no storyboard"},
+                )
+            sb_dict = rec.result["storyboard"]
+            sb = Storyboard(
+                title=sb_dict.get("title", "未命名分镜"),
+                target_duration_sec=float(
+                    sb_dict.get("target_duration_sec", 30.0)
+                ),
+                style_notes=sb_dict.get("style_notes", ""),
+                shots=[
+                    Shot(
+                        index=int(s.get("index", i + 1)),
+                        duration_sec=float(s.get("duration_sec", 0.0)),
+                        visual=str(s.get("visual", "")),
+                        camera=str(s.get("camera", "")),
+                        dialogue=str(s.get("dialogue", "")),
+                        sound=str(s.get("sound", "")),
+                        notes=str(s.get("notes", "")),
+                    )
+                    for i, s in enumerate(sb_dict.get("shots", []))
+                ],
+            )
+            payload = to_tongyi_payload(sb, model=model, size=size, n=n)
+            from fastapi.responses import JSONResponse
+            return JSONResponse(
+                payload,
+                headers={
+                    "Content-Disposition": (
+                        f'attachment; filename="{task_id}-tongyi.json"'
                     ),
                 },
             )

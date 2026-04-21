@@ -74,6 +74,18 @@ _SEEDANCE_DEFAULT_MODEL = "doubao-seedance-2-0-260128"
 _SEEDANCE_DEFAULT_RATIO = "16:9"
 _SEEDANCE_DEFAULT_RESOLUTION = "720p"
 
+# ── tongyi-image bridge defaults ──
+# DashScope Tongyi (Wanxiang) image API; the safest "always-works" default
+# model is wan27-pro and a square 1024*1024 raster (DashScope uses ``*``
+# instead of ``x`` in the size string — see the tongyi-image plugin's
+# CreateTaskBody).  Image generation has no sound/duration so we ignore
+# the shot's ``sound`` / ``duration_sec`` fields, but we keep ``camera``
+# in the prompt because composition cues (近景/远景/俯拍) help diffusion
+# models a lot.
+_TONGYI_DEFAULT_MODEL = "wan27-pro"
+_TONGYI_DEFAULT_SIZE = "1024*1024"
+_TONGYI_DEFAULT_N = 1
+
 
 def _shot_to_seedance_prompt(shot: Shot, *, style_notes: str = "") -> str:
     """Combine ``visual + camera + sound`` into a Seedance-friendly prompt.
@@ -175,6 +187,128 @@ def to_seedance_payload(
             f"{_SEEDANCE_MAX_DURATION}] second window supported by all "
             "current Seedance models. Run cli_examples one by one, or feed "
             "shots[*] into your own batch script."
+        ),
+    }
+
+
+# ── tongyi-image bridge ────────────────────────────────────────────────
+
+
+def _shot_to_tongyi_prompt(shot: Shot, *, style_notes: str = "") -> str:
+    """Combine ``visual + camera + style`` into a Tongyi-image prompt.
+
+    Image generation only consumes a single text prompt per request, so we
+    fold the storyboard fields into one comma-separated string.  Unlike
+    the seedance bridge we *omit* ``sound`` (irrelevant for stills) and
+    keep ``camera`` because composition hints (近景/俯拍/侧面) measurably
+    improve Wanxiang outputs.  Returned text never empty — falls back to
+    a generic placeholder so the downstream POST never 422s.
+    """
+    parts: list[str] = []
+    visual = (shot.visual or "").strip()
+    if visual:
+        parts.append(visual)
+    camera = (shot.camera or "").strip()
+    if camera:
+        parts.append(f"构图: {camera}")
+    if style_notes:
+        parts.append(f"风格: {style_notes.strip()}")
+    return ", ".join(parts) or "一张画面"
+
+
+def to_tongyi_payload(
+    sb: Storyboard,
+    *,
+    model: str = _TONGYI_DEFAULT_MODEL,
+    size: str = _TONGYI_DEFAULT_SIZE,
+    n: int = _TONGYI_DEFAULT_N,
+) -> dict[str, Any]:
+    """Render a storyboard as a JSON payload tailored for tongyi-image.
+
+    Output shape::
+
+        {
+          "title": "...",
+          "model": "wan27-pro",
+          "size": "1024*1024",
+          "n": 1,
+          "shot_count": 5,
+          "shots": [
+            {"index": 1, "prompt": "...", "model": "...", "size": "...",
+             "n": 1, "mode": "text2img", "source_shot": {...}},
+            ...
+          ],
+          "post_examples": [
+            {"path": "/api/plugins/tongyi-image/tasks",
+             "body": {"mode": "text2img", "prompt": "...", "model": "...",
+                      "size": "...", "n": 1}},
+            ...
+          ],
+          "curl_examples": ["curl -X POST .../tasks -d ..."],
+        }
+
+    Each shot maps to one ``POST /api/plugins/tongyi-image/tasks`` call.
+    The helper does *not* call the network — it produces a payload the
+    user (or downstream automation) can feed to the tongyi-image plugin's
+    REST API one shot at a time.
+
+    The ``post_examples`` array is what scripts/UI should consume; the
+    ``curl_examples`` array gives a copy-pasteable shell snippet.  Body
+    keys mirror ``CreateTaskBody`` in ``plugins/tongyi-image/plugin.py``
+    so the POST can be issued verbatim (no field renaming needed).
+    """
+    n_clamped = max(1, min(int(n or 1), 4))
+    shots_out: list[dict[str, Any]] = []
+    post_examples: list[dict[str, Any]] = []
+    curl_examples: list[str] = []
+    for s in sb.shots:
+        prompt_text = _shot_to_tongyi_prompt(s, style_notes=sb.style_notes)
+        body = {
+            "mode": "text2img",
+            "prompt": prompt_text,
+            "model": model,
+            "size": size,
+            "n": n_clamped,
+        }
+        shots_out.append({
+            "index": s.index,
+            "prompt": prompt_text,
+            "model": model,
+            "size": size,
+            "n": n_clamped,
+            "mode": "text2img",
+            "source_shot": s.to_dict(),
+        })
+        post_examples.append({
+            "path": "/api/plugins/tongyi-image/tasks",
+            "body": body,
+        })
+        # Build a copy-pasteable curl line; quote the JSON body with
+        # single-quotes outside (so internal double-quotes survive) and
+        # escape single-quotes inside the prompt to avoid breaking the
+        # outer shell quoting.
+        body_json = json.dumps(body, ensure_ascii=False).replace("'", r"'\''")
+        curl_examples.append(
+            "curl -X POST http://localhost:8000/api/plugins/tongyi-image/tasks "
+            "-H 'content-type: application/json' "
+            f"-d '{body_json}'"
+        )
+    return {
+        "title": sb.title,
+        "model": model,
+        "size": size,
+        "n": n_clamped,
+        "target_duration_sec": sb.target_duration_sec,
+        "shot_count": len(shots_out),
+        "shots": shots_out,
+        "post_examples": post_examples,
+        "curl_examples": curl_examples,
+        "notes": (
+            "Each shot is one independent tongyi-image task. "
+            "POST shots[*].prompt to /api/plugins/tongyi-image/tasks one "
+            "at a time, or use post_examples[*] / curl_examples[*] "
+            "verbatim. The ``size`` string uses DashScope's ``*`` "
+            "separator (1024*1024), not ``x``. ``n`` is clamped to 1..4."
         ),
     }
 
@@ -376,5 +510,6 @@ def self_check(sb: Storyboard) -> StoryboardSelfCheck:
 __all__ = [
     "Shot", "Storyboard", "StoryboardSelfCheck",
     "parse_storyboard_llm_output", "self_check",
+    "to_seedance_payload", "to_tongyi_payload",
     "_SYSTEM",
 ]
