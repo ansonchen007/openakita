@@ -18,7 +18,7 @@ from openakita_plugin_sdk.contrib import (
 
 from storyboard_engine import (
     _SYSTEM, Shot, Storyboard, parse_storyboard_llm_output, self_check,
-    to_seedance_payload, to_tongyi_payload,
+    to_seedance_payload, to_tongyi_payload, to_verification,
 )
 from task_manager import StoryboardTaskManager
 
@@ -176,12 +176,20 @@ class Plugin(PluginBase):
             model: str = "doubao-seedance-2-0-260128",
             ratio: str = "16:9",
             resolution: str = "720p",
+            plugin_model: str = "2.0",
         ):
-            """Export storyboard as a Seedance-compatible task list.
+            """Export storyboard as a Seedance task list (dual delivery).
 
-            One JSON entry per shot, plus copy-pasteable
-            ``scripts/seedance.py create`` examples.  Used to bridge the
-            "plan → generate" gap until a real seedance plugin lands.
+            One JSON entry per shot plus three copy-pasteable channels:
+
+            * ``cli_examples`` — ``python scripts/seedance.py create ...``
+            * ``post_examples`` — bodies for ``POST /api/plugins/seedance-video/tasks``
+            * ``curl_examples`` — POSIX-quoted ``curl`` invocations
+
+            Sprint 7 dual-mode upgrade: now bridges to the in-process
+            ``plugins/seedance-video`` REST API in addition to the CLI,
+            so storyboard → video can stay 100% inside the running host
+            without shelling out.
             """
             rec = await self._tm.get_task(task_id)
             if rec is None or not rec.result.get("storyboard"):
@@ -210,7 +218,11 @@ class Plugin(PluginBase):
                 ],
             )
             payload = to_seedance_payload(
-                sb, model=model, ratio=ratio, resolution=resolution,
+                sb,
+                model=model,
+                ratio=ratio,
+                resolution=resolution,
+                plugin_model=plugin_model,
             )
             from fastapi.responses import JSONResponse
             return JSONResponse(
@@ -319,17 +331,21 @@ class Plugin(PluginBase):
             check = self_check(sb)
             sb_dict = sb.to_dict()
             check_dict = check.to_dict()
+            verification_dict = to_verification(sb, check).to_dict()
 
             await self._tm.update_task(
                 task_id,
                 status=TaskStatus.SUCCEEDED.value,
-                result={"storyboard": sb_dict, "self_check": check_dict, "raw_llm": text[:1000]},
+                result={"storyboard": sb_dict, "self_check": check_dict,
+                        "verification": verification_dict, "raw_llm": text[:1000]},
                 extra={"storyboard_json": json.dumps(sb_dict, ensure_ascii=False),
-                       "self_check_json": json.dumps(check_dict, ensure_ascii=False)},
+                       "self_check_json": json.dumps(check_dict, ensure_ascii=False),
+                       "verification_json": json.dumps(verification_dict, ensure_ascii=False)},
             )
             self._events.emit("task_updated", {"id": task_id, "status": "succeeded",
                                                "shot_count": len(sb_dict.get("shots", [])),
-                                               "self_check": check_dict})
+                                               "self_check": check_dict,
+                                               "verification": verification_dict})
         except asyncio.CancelledError:
             await self._tm.update_task(task_id, status=TaskStatus.CANCELLED.value)
             raise

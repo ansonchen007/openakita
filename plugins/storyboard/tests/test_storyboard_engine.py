@@ -13,7 +13,7 @@ sys.path.insert(0, str(_HERE))
 from storyboard_engine import (  # noqa: E402
     Shot, Storyboard,
     parse_storyboard_llm_output, self_check,
-    to_seedance_payload, to_tongyi_payload,
+    to_seedance_payload, to_tongyi_payload, to_verification,
 )
 
 
@@ -219,6 +219,87 @@ def test_seedance_export_blank_visual_falls_back_to_placeholder() -> None:
     assert out["shots"][0]["prompt"] == "一段画面"
 
 
+# ── seedance dual-mode (Sprint 7) ─────────────────────────────────────
+
+
+def test_seedance_export_includes_post_and_curl_examples() -> None:
+    """Sprint 7 dual-mode: every shot must produce one CLI line, one POST
+    body and one curl example so the storyboard → seedance handoff covers
+    both the standalone CLI and the in-process plugin REST API."""
+    payload = to_seedance_payload(_sample_storyboard())
+    assert len(payload["cli_examples"]) == 3
+    assert len(payload["post_examples"]) == 3
+    assert len(payload["curl_examples"]) == 3
+    assert payload["plugin_model"] == "2.0"
+
+
+def test_seedance_export_post_body_matches_plugin_create_task_schema() -> None:
+    """post_examples[*].body must be POSTable verbatim to the
+    plugins/seedance-video CreateTaskBody schema (model is the plugin
+    short id, not the Ark id)."""
+    payload = to_seedance_payload(_sample_storyboard())
+    post = payload["post_examples"][0]
+    assert post["endpoint"] == "/api/plugins/seedance-video/tasks"
+    assert post["method"] == "POST"
+    body = post["body"]
+    assert body["mode"] == "t2v"
+    assert body["model"] == "2.0"
+    assert body["ratio"] == "16:9"
+    assert body["resolution"] == "720p"
+    assert body["duration"] == 5
+    assert body["n"] == 1
+    assert body["generate_audio"] is True
+    assert "主角推门进入房间" in body["prompt"]
+
+
+def test_seedance_export_curl_examples_are_paste_ready() -> None:
+    payload = to_seedance_payload(_sample_storyboard())
+    curl = payload["curl_examples"][0]
+    assert curl.startswith("curl -X POST '/api/plugins/seedance-video/tasks'")
+    assert "Content-Type: application/json" in curl
+    # Body is single-quoted JSON; the plugin endpoint appears in the URL,
+    # not the body.
+    assert "'{" in curl and "}'" in curl
+
+
+def test_seedance_export_curl_escapes_single_quote_in_prompt() -> None:
+    """Posix-quoted curl: a single quote in the prompt must close the
+    outer ' and reopen with '"'"' so the shell never sees an unbalanced
+    quote.  Without this, ``it's`` would chop the body in half."""
+    sb = Storyboard(title="T", target_duration_sec=5, shots=[
+        Shot(index=1, duration_sec=5, visual="it's a test"),
+    ])
+    out = to_seedance_payload(sb)
+    curl = out["curl_examples"][0]
+    # The escape sequence proves we did the close-reopen dance.
+    assert "'\"'\"'" in curl
+
+
+def test_seedance_export_plugin_model_is_overridable() -> None:
+    """plugin_model is independent from the Ark model id (so users can
+    target the lite tier via the plugin while keeping the CLI on pro)."""
+    payload = to_seedance_payload(
+        _sample_storyboard(),
+        model="doubao-seedance-1-5-pro-251215",
+        plugin_model="lite",
+    )
+    assert payload["model"] == "doubao-seedance-1-5-pro-251215"
+    assert payload["plugin_model"] == "lite"
+    assert all(p["body"]["model"] == "lite" for p in payload["post_examples"])
+    # CLI lines still carry the Ark id, not "lite".
+    assert all(
+        "doubao-seedance-1-5-pro-251215" in c
+        for c in payload["cli_examples"]
+    )
+
+
+def test_seedance_export_empty_shotlist_yields_empty_dual_arrays() -> None:
+    sb = Storyboard(title="Empty", target_duration_sec=10, shots=[])
+    out = to_seedance_payload(sb)
+    assert out["post_examples"] == []
+    assert out["curl_examples"] == []
+
+
 # ── tongyi-image export ───────────────────────────────────────────────
 
 
@@ -354,3 +435,89 @@ def test_tongyi_export_size_uses_dashscope_star_separator() -> None:
         assert "*" in s["size"]
     for pe in payload["post_examples"]:
         assert "*" in pe["body"]["size"]
+
+
+# ── D2.10 verification bridge (Sprint 9) ─────────────────────────────
+
+
+def _balanced_storyboard() -> Storyboard:
+    """A storyboard built specifically to satisfy ``self_check.ok`` —
+    one shot per third of the timeline, exact duration match, ≥
+    ``ceil(target/6)`` shots."""
+    return Storyboard(
+        title="balanced", target_duration_sec=18,
+        shots=[
+            Shot(index=1, duration_sec=6, visual="A"),
+            Shot(index=2, duration_sec=6, visual="B"),
+            Shot(index=3, duration_sec=6, visual="C"),
+        ],
+    )
+
+
+def test_to_verification_clean_storyboard_is_green() -> None:
+    """A balanced storyboard whose self-check returns ``ok=True`` must
+    yield a verified=True envelope with no flagged fields."""
+    from openakita_plugin_sdk.contrib import BADGE_GREEN
+    sb = _balanced_storyboard()
+    check = self_check(sb)
+    assert check.ok is True  # sanity: balanced sample passes
+    v = to_verification(sb, check)
+    assert v.verified is True
+    assert v.low_confidence_fields == []
+    assert v.badge == BADGE_GREEN
+    assert v.verifier_id == "self_check"
+
+
+def test_to_verification_flags_minimum_count_warning() -> None:
+    """Two huge shots over a 30-second target trip the ``minimum_count``
+    rule — verifier must flag the shots list so the UI highlights it."""
+    from openakita_plugin_sdk.contrib import BADGE_YELLOW, KIND_OTHER
+    sb = Storyboard(title="T", target_duration_sec=30, shots=[
+        Shot(index=1, duration_sec=15, visual="A"),
+        Shot(index=2, duration_sec=15, visual="B"),
+    ])
+    check = self_check(sb)
+    v = to_verification(sb, check)
+    assert v.badge == BADGE_YELLOW
+    paths = [f.path for f in v.low_confidence_fields]
+    assert "$.storyboard.shots" in paths
+    shots_field = next(f for f in v.low_confidence_fields
+                       if f.path == "$.storyboard.shots")
+    assert shots_field.kind == KIND_OTHER
+    assert "镜头" in shots_field.reason
+
+
+def test_to_verification_flags_duration_mismatch() -> None:
+    """Self-check warns when actual duration drifts > 10% from target —
+    verifier exposes this as a flag on ``target_duration_sec`` so the
+    duration cell turns yellow."""
+    from openakita_plugin_sdk.contrib import KIND_NUMBER
+    sb = Storyboard(title="T", target_duration_sec=30, shots=[
+        Shot(index=1, duration_sec=4, visual="A"),
+        Shot(index=2, duration_sec=4, visual="B"),
+        Shot(index=3, duration_sec=4, visual="C"),
+        Shot(index=4, duration_sec=4, visual="D"),
+        Shot(index=5, duration_sec=4, visual="E"),
+    ])  # actual=20 vs target=30 → 33% drift
+    check = self_check(sb)
+    v = to_verification(sb, check)
+    paths = [f.path for f in v.low_confidence_fields]
+    assert "$.storyboard.target_duration_sec" in paths
+    dur_field = next(f for f in v.low_confidence_fields
+                     if f.path == "$.storyboard.target_duration_sec")
+    assert dur_field.kind == KIND_NUMBER
+    assert dur_field.value == 30
+    # Reason should embed the actual / target the engine produced.
+    assert "20" in dur_field.reason and "30" in dur_field.reason
+
+
+def test_to_verification_dict_is_json_serializable() -> None:
+    """The verification dict goes into the task's persisted JSON blob —
+    must round-trip through json.dumps without TypeError."""
+    import json
+    sb = _sample_storyboard()
+    v = to_verification(sb, self_check(sb))
+    text = json.dumps(v.to_dict(), ensure_ascii=False)
+    re_loaded = json.loads(text)
+    assert re_loaded["verifier_id"] == "self_check"
+    assert "field_count_by_kind" in re_loaded
