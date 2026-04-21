@@ -21,7 +21,19 @@ See ``docs/contrib.md`` for the full reference.
 
 from __future__ import annotations
 
+from .checkpoint import Checkpoint, restore_from_snapshot, take_checkpoint
 from .cost_estimator import CostBreakdown, CostEstimator, CostPreview, to_human_units
+from .cost_tracker import (
+    Adjustment,
+    ApprovalRequired,
+    CostEntry,
+    CostSnapshot,
+    CostSummary,
+    CostTracker,
+    DuplicateReservation,
+    InsufficientBudget,
+    ReservationNotFound,
+)
 from .cost_translation import (
     COST_TRANSLATION_MAP,
     CostTemplate,
@@ -59,6 +71,14 @@ from .llm_json_parser import (
     parse_llm_json,
     parse_llm_json_array,
     parse_llm_json_object,
+)
+from .parallel_executor import (
+    ParallelResult,
+    ParallelSummary,
+    run_parallel,
+)
+from .parallel_executor import (
+    summarize as summarize_parallel,
 )
 from .prompt_optimizer import PromptOptimizer
 from .provider_score import ProviderScore, score_providers
@@ -99,13 +119,20 @@ from .vendor_client import (
 )
 
 __all__ = [
+    "Adjustment",
+    "ApprovalRequired",
     "BaseTaskManager",
     "BaseVendorClient",
     "COST_TRANSLATION_MAP",
+    "Checkpoint",
     "CostBreakdown",
+    "CostEntry",
     "CostEstimator",
     "CostPreview",
+    "CostSnapshot",
+    "CostSummary",
     "CostTemplate",
+    "CostTracker",
     "DEFAULT_AV_EXTENSIONS",
     "DEFAULT_IMAGE_EXTENSIONS",
     "DEFAULT_PREVIEW_EXTENSIONS",
@@ -114,6 +141,7 @@ __all__ = [
     "DeliveryPromise",
     "DepStatus",
     "DependencyGate",
+    "DuplicateReservation",
     "ERROR_KIND_AUTH",
     "ERROR_KIND_CLIENT",
     "ERROR_KIND_MODERATION",
@@ -133,13 +161,17 @@ __all__ = [
     "GateStatus",
     "InstallEvent",
     "InstallMethod",
+    "InsufficientBudget",
     "IntentSummary",
     "IntentVerifier",
+    "ParallelResult",
+    "ParallelSummary",
     "PromptOptimizer",
     "ProviderScore",
     "QualityGates",
     "RenderedError",
     "RenderPipeline",
+    "ReservationNotFound",
     "ReviewIssue",
     "ReviewReport",
     "ReviewThresholds",
@@ -167,14 +199,18 @@ __all__ = [
     "parse_llm_json_object",
     "register_cost_template",
     "resolve_binary",
+    "restore_from_snapshot",
     "review_audio",
     "review_image",
     "review_source",
     "review_video",
     "run_ffmpeg",
     "run_ffmpeg_sync",
+    "run_parallel",
     "score_providers",
     "strip_plugin_event_prefix",
+    "summarize_parallel",
+    "take_checkpoint",
     "to_human_units",
     "translate_cost",
     "validate_cuts",
