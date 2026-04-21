@@ -99,7 +99,7 @@ Plugin Python 代码
 | `plugins/seedance-video/ark_client.py` | 火山引擎 Seedance API 客户端 (httpx) |
 | `plugins/seedance-video/task_manager.py` | SQLite 任务/配置/素材管理 (WAL 模式) |
 | `plugins/seedance-video/models.py` | Seedance 模型定义 (2.0/2.0-pro/1.5 等) |
-| `plugins/seedance-video/prompt_optimizer.py` | 提示词优化: 模板 + 镜头关键词 + LLM 优化 |
+| ~~`plugins/seedance-video/prompt_optimizer.py`~~ | 已于 Sprint 18 删除 — 见 [docs/sprint18-cleanup-assessment.md](sprint18-cleanup-assessment.md#b8-prompt_optimizer-迁移评估) |
 | `plugins/seedance-video/long_video.py` | 长视频: 分镜拆解(Brain.think) + 链式生成 + ffmpeg 拼接 |
 | `plugins/seedance-video/ui/dist/index.html` | 单文件 React 前端: 创建/任务列表/设置/提示词指南/分镜工作台 |
 | `plugins/seedance-video/config.json` | 持久化配置 (api_key 等) |
