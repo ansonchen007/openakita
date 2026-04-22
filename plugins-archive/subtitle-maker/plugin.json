@@ -27,7 +27,7 @@
     "openakita": ">=1.27.0",
     "plugin_api": "~2",
     "plugin_ui_api": "~1",
-    "sdk": ">=0.6.0,<1.0.0"
+    "sdk": ">=0.6.0,<0.7.0"
   },
   "provides": {
     "tools": ["subtitle_maker_create", "subtitle_maker_status", "subtitle_maker_list", "subtitle_maker_cancel"],

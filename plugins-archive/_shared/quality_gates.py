@@ -67,7 +67,7 @@ class QualityGates:
     All methods are ``@staticmethod`` so they can be used either as instance
     methods (for cleaner imports) or directly:
 
-        from openakita_plugin_sdk.contrib import QualityGates
+        from _shared.quality_gates import QualityGates
         result = QualityGates.check_input_integrity({"prompt": "..."}, required=["prompt"])
     """
 

@@ -19,9 +19,10 @@ plugin's job (could be another LLM call, regex check, calculator, or
 manual review).  The schema gives every plugin a uniform place to
 report verification state.
 
-Example::
+Example (called from an archived plugin's entry; ``_shared`` is bootstrapped
+onto ``sys.path`` by ``plugins-archive/_shared/__init__.py``)::
 
-    from openakita_plugin_sdk.contrib import (
+    from _shared.verification import (
         Verification, LowConfidenceField, render_verification_badge,
     )
 

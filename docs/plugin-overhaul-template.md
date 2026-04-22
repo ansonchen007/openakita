@@ -1,5 +1,21 @@
 # 单插件整改标准模板（Plugin Overhaul Template）
 
+> ⚠️ **Deprecated since 2026-04-22 (SDK 0.7.0)**
+>
+> 本模板源自 0.6.x 时代的 21 插件整改运动。0.7.0 起仓库结构发生硬切换:
+> - 仅 `plugins/tongyi-image` + `plugins/seedance-video` 保留为一等公民,
+>   它们直接维护、不需要走"整改流程"。
+> - 19 个 archive 插件搬到 `plugins-archive/`,**不接受 issue、不主动跟 SDK
+>   升级**,因此也不再走本模板。
+> - 模板里写的 `from openakita_plugin_sdk.contrib.tts import ...` 等口径
+>   已失效:contrib 整体下沉到 `openakita-plugin-sdk/staging/`,archive
+>   插件改用 `from _shared.tts import ...`(`plugins-archive/_shared/`
+>   通过 `__init__.py` 自动 bootstrap)。
+>
+> 文件保留作为历史快照与 0.6.x archive 插件复活时的参考素材。新插件请直接
+> 参考 `plugins/tongyi-image` 与 `plugins/seedance-video` 的真实代码,不要
+> 再用本模板。
+
 > Source of truth for Phase 2 of the *Plugin Overhaul Standard Playbook*.
 > Every targeted plugin rectification PR — whether driven by master or a
 > sub-agent — must use this template **without skipping sections**.
