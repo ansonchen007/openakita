@@ -17,4 +17,8 @@ Modules:
   ``long_video.decompose_storyboard``'s 5-level JSON extraction.
 - :mod:`seedance_inline.parallel_executor` — ``run_parallel`` for the
   parallel-mode ``ChainGenerator.generate_chain`` fan-out.
+- :mod:`seedance_inline.system_deps`       — ``SystemDepsManager`` for
+  in-plugin FFmpeg detection + fire-and-poll one-click install (replaces
+  the SDK 0.6.x ``DependencyGate`` / host ``plugin_deps.py`` route that
+  were retired in 0.7.0).
 """

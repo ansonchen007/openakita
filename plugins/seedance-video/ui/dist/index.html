@@ -8,10 +8,9 @@
     Self-contained plugin UI: bootstrap + UI Kit are inlined under _assets/.
     Plugins MUST NOT depend on host-mounted /api/plugins/_sdk/* (removed in
     SDK 0.7.0). See plugins-archive/_shared/web-uikit/README.md for the
-    canonical reference copy. dep-gate.js is intentionally NOT inlined: the
-    backend route plugin_deps.py was retired in 0.7.0 — the existing
-    defensive `if (window.OpenAkitaDepGate && ...)` checks below no-op
-    safely without it.
+    canonical reference copy. The FFmpeg one-click installer that used to
+    come from dep-gate.js is now owned by the plugin itself — see the
+    FfmpegInstaller React component below and seedance_inline/system_deps.py.
   -->
   <script src="_assets/bootstrap.js"></script>
   <link rel="stylesheet" href="_assets/styles.css">
@@ -210,8 +209,6 @@
     .filter-group__buttons { display: flex; gap: 6px; flex-wrap: wrap; }
     .filter-group__buttons .mode-btn { padding: 5px 12px; font-size: 12px; }
     /* ── system component callout body (settings) ── */
-    .deps-host { margin-top: 6px; }
-    .deps-host:empty { display: none; }
     .deps-help {
       font-size: 12px; color: var(--text-muted); line-height: 1.7;
       background: var(--bg); border: 1px solid var(--border);
@@ -221,6 +218,82 @@
     .deps-help strong { color: var(--text); font-weight: 600; }
     .deps-help ul { margin: 6px 0 0 18px; padding: 0; }
     .deps-help li { margin: 2px 0; }
+    /* ── in-plugin FFmpeg installer (replaces retired dep-gate.js) ── */
+    .sysdep-card {
+      border: 1px solid var(--border); border-radius: 8px;
+      padding: 12px; margin-top: 8px; background: var(--bg-card);
+    }
+    .sysdep-card__head {
+      display: flex; align-items: center; gap: 10px;
+      flex-wrap: wrap;
+    }
+    .sysdep-card__title {
+      font-size: 13px; font-weight: 600; color: var(--text); flex: 1;
+      display: flex; align-items: center; gap: 6px;
+    }
+    .sysdep-card__badge {
+      font-size: 11px; padding: 2px 8px; border-radius: 999px;
+      display: inline-flex; align-items: center; gap: 4px;
+      background: var(--bg); border: 1px solid var(--border);
+    }
+    .sysdep-card__badge--ok {
+      color: var(--success);
+      background: rgba(34,197,94,.10); border-color: rgba(34,197,94,.35);
+    }
+    .sysdep-card__badge--missing {
+      color: var(--danger);
+      background: rgba(239,68,68,.10); border-color: rgba(239,68,68,.35);
+    }
+    .sysdep-card__badge--busy {
+      color: var(--warning);
+      background: rgba(245,158,11,.10); border-color: rgba(245,158,11,.35);
+    }
+    .sysdep-card__path {
+      font-size: 11px; color: var(--text-dim); margin-top: 4px;
+      font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+      word-break: break-all;
+    }
+    .sysdep-card__actions {
+      display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px;
+    }
+    .sysdep-card__sudo-hint {
+      margin-top: 10px; padding: 8px 10px; border-radius: 6px;
+      background: rgba(245,158,11,.10); border: 1px solid rgba(245,158,11,.35);
+      font-size: 12px; color: var(--text);
+    }
+    .sysdep-card__sudo-cmd {
+      display: flex; align-items: center; gap: 6px; margin-top: 6px;
+      padding: 6px 8px; background: var(--bg); border: 1px solid var(--border);
+      border-radius: 4px;
+      font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+      font-size: 12px;
+    }
+    .sysdep-card__sudo-cmd code { flex: 1; word-break: break-all; }
+    .sysdep-log {
+      margin-top: 10px; border: 1px solid var(--border); border-radius: 6px;
+      background: var(--bg); overflow: hidden;
+    }
+    .sysdep-log__head {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 6px 10px; border-bottom: 1px solid var(--border);
+      font-size: 11px; color: var(--text-muted); font-weight: 500;
+    }
+    .sysdep-log__body {
+      max-height: 180px; overflow-y: auto; padding: 8px 10px;
+      margin: 0; font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+      font-size: 11px; line-height: 1.5; color: var(--text);
+      white-space: pre-wrap; word-break: break-all;
+    }
+    .sysdep-log__body--empty {
+      color: var(--text-dim); font-style: italic;
+    }
+    .sysdep-spinner {
+      display: inline-block; width: 12px; height: 12px;
+      border: 2px solid var(--border); border-top-color: var(--primary);
+      border-radius: 50%; animation: sysdep-spin .8s linear infinite;
+      vertical-align: middle;
+    }
+    @keyframes sysdep-spin { to { transform: rotate(360deg); } }
     /* ── inline ffmpeg-missing notice (storyboard) ── */
     .inline-warn {
       display: flex; align-items: center; gap: 10px;
@@ -647,7 +720,27 @@ const I18N_DICT = {
     "settings.system.intro.body": "文生视频 / 图生视频 / 任务列表 / 提示词指南等核心功能不依赖 FFmpeg。如果你不需要长视频拼接，可以暂时跳过安装。",
     "settings.system.platform.win": "Windows: 「一键安装」会调用 winget 自动安装 Gyan.FFmpeg，无需管理员权限。",
     "settings.system.platform.mac": "macOS: 「一键安装」会调用 Homebrew 自动安装 ffmpeg。",
-    "settings.system.platform.linux": "Linux: apt / dnf 需要 root 权限。如果 OpenAkita 以普通用户身份运行，请点击「手动安装」按系统提示执行 sudo apt-get install ffmpeg。",
+    "settings.system.platform.linux": "Linux: apt / dnf 需要 root 权限。如果 OpenAkita 以普通用户身份运行，请按提示在终端执行 sudo apt-get install ffmpeg。",
+    "settings.system.detecting": "正在检测...",
+    "settings.system.status.found": "已安装 v{ver}",
+    "settings.system.status.foundNoVer": "已安装",
+    "settings.system.status.missing": "未安装",
+    "settings.system.location": "路径：{path}",
+    "settings.system.btn.install": "一键安装",
+    "settings.system.btn.installVia": "一键安装 ({strategy})",
+    "settings.system.btn.recheck": "重新检测",
+    "settings.system.btn.openHome": "查看官方文档",
+    "settings.system.btn.copyCmd": "复制命令",
+    "settings.system.btn.copied": "已复制",
+    "settings.system.btn.cancel": "中止安装",
+    "settings.system.installing": "安装中... ({elapsed})",
+    "settings.system.installEstimate": "预计耗时约 {sec} 秒",
+    "settings.system.installed": "FFmpeg 安装成功",
+    "settings.system.installFailed": "安装失败：{msg}",
+    "settings.system.requiresSudo": "Linux 需要 root 权限。请在终端手动执行：",
+    "settings.system.noMethod": "当前系统暂无自动安装方案，请前往官方文档手动下载。",
+    "settings.system.logTitle": "安装日志",
+    "settings.system.logEmpty": "暂无输出",
     "settings.label.apiKey": "ARK API Key",
     "settings.api.placeholder": "输入 Volcengine Ark API Key",
     "settings.api.show": "显示",
@@ -905,7 +998,27 @@ const I18N_DICT = {
     "settings.system.intro.body": "Text-to-video, image-to-video, the task list and prompt guide do not depend on FFmpeg. If you do not need long-video stitching you may skip this install.",
     "settings.system.platform.win": "Windows: \"One-click install\" calls winget to install Gyan.FFmpeg without admin rights.",
     "settings.system.platform.mac": "macOS: \"One-click install\" uses Homebrew to install ffmpeg.",
-    "settings.system.platform.linux": "Linux: apt / dnf require root. If OpenAkita is running as a normal user, click \"Manual install\" and run sudo apt-get install ffmpeg as your packaging policy permits.",
+    "settings.system.platform.linux": "Linux: apt / dnf require root. If OpenAkita is running as a normal user, run sudo apt-get install ffmpeg in a terminal as your packaging policy permits.",
+    "settings.system.detecting": "Detecting...",
+    "settings.system.status.found": "Installed v{ver}",
+    "settings.system.status.foundNoVer": "Installed",
+    "settings.system.status.missing": "Not installed",
+    "settings.system.location": "Path: {path}",
+    "settings.system.btn.install": "Install",
+    "settings.system.btn.installVia": "Install via {strategy}",
+    "settings.system.btn.recheck": "Re-check",
+    "settings.system.btn.openHome": "Open homepage",
+    "settings.system.btn.copyCmd": "Copy command",
+    "settings.system.btn.copied": "Copied",
+    "settings.system.btn.cancel": "Cancel install",
+    "settings.system.installing": "Installing... ({elapsed})",
+    "settings.system.installEstimate": "Estimated ~{sec}s",
+    "settings.system.installed": "FFmpeg installed successfully",
+    "settings.system.installFailed": "Install failed: {msg}",
+    "settings.system.requiresSudo": "Linux requires root. Run this in a terminal:",
+    "settings.system.noMethod": "No automated installer for this OS — open the homepage to download manually.",
+    "settings.system.logTitle": "Install log",
+    "settings.system.logEmpty": "No output yet",
     "settings.label.apiKey": "ARK API Key",
     "settings.api.placeholder": "Paste your Volcengine Ark API Key",
     "settings.api.show": "Show",
@@ -2291,7 +2404,233 @@ function StoryboardTab({ onGoToSettings }) {
   return null;
 }
 
-function SettingsTab({ onKeyChange }) {
+// ── FfmpegInstaller ─────────────────────────────────────────────────────
+// Self-contained replacement for the retired SDK 0.6.x dep-gate.js widget.
+// Talks to the in-plugin /system/* routes (see seedance_inline/system_deps.py)
+// using a fire-and-poll cycle: POST .../install kicks off a background
+// subprocess, then we GET .../status every 3s until busy:false.
+function FfmpegInstaller({ onInstalled }) {
+  const t = useT();
+  const [snap, setSnap] = useState(null);     // { found, version, location, methods, busy, last_install, ... }
+  const [loading, setLoading] = useState(true);
+  const [installing, setInstalling] = useState(false);
+  const [status, setStatus] = useState(null); // live install status (busy, log_tail, elapsed_sec, ...)
+  const [copied, setCopied] = useState(false);
+  const pollRef = useRef(null);
+  const logRef = useRef(null);
+  const installedNotifiedRef = useRef(false);
+
+  const refresh = useCallback(async () => {
+    try {
+      const r = await pluginApi("GET", "/system/components");
+      const item = (r.body?.items || []).find(x => x.id === "ffmpeg");
+      if (item) {
+        setSnap(item);
+        if (item.busy) {
+          // server says install is still running (e.g. user re-opened the
+          // tab mid-install) — pick the polling back up.
+          setInstalling(true);
+        }
+      }
+    } catch (e) {
+      // Detection should never throw — surface as "missing" for safety.
+      setSnap({ id: "ffmpeg", found: false, methods: [], is_root: false });
+    }
+    setLoading(false);
+  }, []);
+
+  useEffect(() => { refresh(); }, [refresh]);
+
+  // Keep the log panel scrolled to the bottom as new lines arrive.
+  useEffect(() => {
+    if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
+  }, [status?.log_tail?.length]);
+
+  const stopPolling = useCallback(() => {
+    if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
+  }, []);
+
+  useEffect(() => {
+    if (!installing) { stopPolling(); return; }
+    installedNotifiedRef.current = false;
+    const tick = async () => {
+      try {
+        const r = await pluginApi("GET", "/system/ffmpeg/status");
+        const st = r.body || {};
+        setStatus(st);
+        if (!st.busy) {
+          stopPolling();
+          setInstalling(false);
+          await refresh();
+          if (st.found) {
+            if (!installedNotifiedRef.current) {
+              installedNotifiedRef.current = true;
+              showToast(_tr("settings.system.installed"));
+              if (onInstalled) onInstalled(true);
+            }
+          } else {
+            const msg = st.error || _tr("settings.system.status.missing");
+            showToast(_tr("settings.system.installFailed", { msg }), "error");
+          }
+        }
+      } catch (e) {
+        // network blip — try again next tick instead of bailing
+      }
+    };
+    tick();
+    pollRef.current = setInterval(tick, 3000);
+    return stopPolling;
+  }, [installing, refresh, stopPolling, onInstalled]);
+
+  useEffect(() => () => stopPolling(), [stopPolling]);
+
+  const formatElapsed = (sec) => {
+    const s = Math.max(0, Math.round(sec || 0));
+    const mm = String(Math.floor(s / 60)).padStart(2, "0");
+    const ss = String(s % 60).padStart(2, "0");
+    return mm + ":" + ss;
+  };
+
+  const startInstall = async (methodIndex) => {
+    setStatus({ busy: true, log_tail: [], elapsed_sec: 0 });
+    setInstalling(true);
+    try {
+      const r = await pluginApi("POST", "/system/ffmpeg/install", { method_index: methodIndex });
+      const body = r.body || {};
+      if (body.ok === false) {
+        setInstalling(false);
+        const msg = body.error || "unknown";
+        showToast(_tr("settings.system.installFailed", { msg }), "error");
+      }
+    } catch (e) {
+      setInstalling(false);
+      showToast(_tr("settings.system.installFailed", { msg: e.message || "network error" }), "error");
+    }
+  };
+
+  const copyCmd = (cmd) => {
+    if (!cmd) return;
+    copyToClipboard(cmd);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  };
+
+  if (loading) {
+    return (
+      <div className="sysdep-card">
+        <div className="sysdep-card__head">
+          <span className="sysdep-spinner"/>
+          <span className="sysdep-card__title">{t("settings.system.detecting")}</span>
+        </div>
+      </div>
+    );
+  }
+
+  const found = !!snap?.found;
+  const methods = snap?.methods || [];
+  const isRoot = !!snap?.is_root;
+  const liveStatus = installing ? status : (snap?.last_install || null);
+  const logLines = liveStatus?.log_tail || [];
+
+  // Pick a "primary" install method: the first executable method whose
+  // requires_sudo is satisfied — falls back to the first one regardless.
+  const primaryIdx = (() => {
+    for (let i = 0; i < methods.length; i++) {
+      const m = methods[i];
+      if (m.strategy === "manual") continue;
+      if (m.requires_sudo && !isRoot) continue;
+      return i;
+    }
+    return methods.findIndex(m => m.strategy !== "manual");
+  })();
+  const primary = primaryIdx >= 0 ? methods[primaryIdx] : null;
+  const manualMethod = methods.find(m => m.strategy === "manual");
+  const blockingSudoMethod = (!found && primary == null)
+    ? methods.find(m => m.requires_sudo && !isRoot)
+    : null;
+
+  return (
+    <div className="sysdep-card">
+      <div className="sysdep-card__head">
+        <div className="sysdep-card__title">
+          <Ico name="package"/> FFmpeg
+          {installing
+            ? <span className="sysdep-card__badge sysdep-card__badge--busy">
+                <span className="sysdep-spinner"/>
+                {t("settings.system.installing", { elapsed: formatElapsed(liveStatus?.elapsed_sec) })}
+              </span>
+            : found
+              ? <span className="sysdep-card__badge sysdep-card__badge--ok">
+                  <Ico name="check"/>
+                  {snap.version
+                    ? t("settings.system.status.found", { ver: snap.version })
+                    : t("settings.system.status.foundNoVer")}
+                </span>
+              : <span className="sysdep-card__badge sysdep-card__badge--missing">
+                  <Ico name="warn"/> {t("settings.system.status.missing")}
+                </span>}
+        </div>
+      </div>
+      {found && snap.location && (
+        <div className="sysdep-card__path">{t("settings.system.location", { path: snap.location })}</div>
+      )}
+
+      <div className="sysdep-card__actions">
+        {!installing && !found && primary && (
+          <button className="btn btn-sm btn-primary" onClick={() => startInstall(primaryIdx)}>
+            <Ico name="package"/>{" "}
+            {t("settings.system.btn.installVia", { strategy: primary.strategy })}
+          </button>
+        )}
+        {!installing && (
+          <button className="btn btn-sm" onClick={refresh}>
+            <Ico name="refresh"/> {t("settings.system.btn.recheck")}
+          </button>
+        )}
+        {snap?.homepage && (
+          <a className="btn btn-sm" href={snap.homepage} target="_blank" rel="noopener noreferrer">
+            <Ico name="link"/> {t("settings.system.btn.openHome")}
+          </a>
+        )}
+      </div>
+
+      {!found && !installing && !primary && manualMethod && !blockingSudoMethod && (
+        <div className="sysdep-card__sudo-hint" style={{borderLeft: "3px solid var(--primary)"}}>
+          {t("settings.system.noMethod")}
+        </div>
+      )}
+
+      {!found && !installing && blockingSudoMethod && blockingSudoMethod.command_hint && (
+        <div className="sysdep-card__sudo-hint">
+          <div>{t("settings.system.requiresSudo")}</div>
+          <div className="sysdep-card__sudo-cmd">
+            <code>sudo {blockingSudoMethod.command_hint}</code>
+            <button className="btn btn-sm" onClick={() => copyCmd("sudo " + blockingSudoMethod.command_hint)}>
+              {copied ? t("settings.system.btn.copied") : t("settings.system.btn.copyCmd")}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {(installing || logLines.length > 0) && (
+        <div className="sysdep-log">
+          <div className="sysdep-log__head">
+            <span>{t("settings.system.logTitle")}</span>
+            {installing && liveStatus?.elapsed_sec != null && (
+              <span>{formatElapsed(liveStatus.elapsed_sec)}</span>
+            )}
+          </div>
+          {logLines.length === 0
+            ? <pre className="sysdep-log__body sysdep-log__body--empty">{t("settings.system.logEmpty")}</pre>
+            : <pre className="sysdep-log__body" ref={logRef}>{logLines.join("\n")}</pre>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+function SettingsTab({ onKeyChange, onFfmpegChanged }) {
   const t = useT();
   const [config, setConfig] = useState({});
   const [saving, setSaving] = useState(false);
@@ -2336,14 +2675,6 @@ function SettingsTab({ onKeyChange }) {
 
   const statKeyMap = {output_dir:"settings.stats.outputDir", assets_dir:"settings.stats.assetsDir", cache_dir:"settings.stats.cacheDir"};
 
-  // dep-gate.js auto-scans on DOMContentLoaded but our [data-oa-dep] mounts
-  // lazily inside React, so kick it manually whenever the Settings tab opens.
-  useEffect(() => {
-    if (window.OpenAkitaDepGate && typeof window.OpenAkitaDepGate.init === "function") {
-      window.OpenAkitaDepGate.init();
-    }
-  }, []);
-
   return (
     <div style={{maxWidth:640}}>
       <div className="setting-section oa-settings-section">
@@ -2373,7 +2704,7 @@ function SettingsTab({ onKeyChange }) {
             <li>{t("settings.system.platform.linux")}</li>
           </ul>
         </div>
-        <div className="deps-host" data-oa-dep="ffmpeg"></div>
+        <FfmpegInstaller onInstalled={() => onFfmpegChanged && onFfmpegChanged(true)} />
       </div>
 
       <div className="setting-section oa-settings-section">

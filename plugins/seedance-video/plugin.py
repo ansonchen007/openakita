@@ -29,6 +29,7 @@ from models import (
     model_to_dict,
 )
 from seedance_inline.storage_stats import collect_storage_stats
+from seedance_inline.system_deps import SystemDepsManager
 from seedance_inline.upload_preview import (
     add_upload_preview_route,
     build_preview_url,
@@ -113,6 +114,10 @@ class ConcatBody(BaseModel):
     output_name: str = ""
 
 
+class SystemInstallBody(BaseModel):
+    method_index: int = 0
+
+
 class Plugin(PluginBase):
     def on_load(self, api: PluginAPI) -> None:
         self._api = api
@@ -121,6 +126,9 @@ class Plugin(PluginBase):
         self._ark: ArkClient | None = None
         self._poll_task: asyncio.Task | None = None
         self._brain = None
+        # In-plugin replacement for the retired SDK 0.6.x DependencyGate —
+        # see seedance_inline/system_deps.py module docstring for rationale.
+        self._sysdeps = SystemDepsManager()
 
         router = APIRouter()
         self._register_routes(router)
@@ -184,6 +192,10 @@ class Plugin(PluginBase):
                 await self._ark.close()
             except Exception as exc:
                 logger.warning("seedance-video Ark client close error: %s", exc)
+        try:
+            await self._sysdeps.aclose()
+        except Exception as exc:
+            logger.warning("seedance-video system deps close error: %s", exc)
         try:
             await self._tm.close()
         except Exception as exc:
@@ -780,7 +792,42 @@ class Plugin(PluginBase):
 
         @router.get("/long-video/ffmpeg-check")
         async def check_ffmpeg() -> dict:
-            return {"ok": True, "available": ffmpeg_available()}
+            # Route through SystemDepsManager so this endpoint and the
+            # Settings page agree on detection state. Falls back to the
+            # legacy shutil.which check if for any reason the manager is
+            # not yet initialised (defensive — should not happen in prod).
+            try:
+                snap = self._sysdeps.detect("ffmpeg")
+                return {"ok": True, "available": bool(snap.get("found"))}
+            except Exception:
+                return {"ok": True, "available": ffmpeg_available()}
+
+        # --- System components (in-plugin FFmpeg installer) ---
+
+        @router.get("/system/components")
+        async def system_components() -> dict:
+            # Snapshot of every system dep this plugin manages (currently
+            # only ffmpeg) — drives the Settings > 系统组件 panel in the UI.
+            return {"ok": True, "items": self._sysdeps.list_components()}
+
+        @router.post("/system/{dep_id}/install")
+        async def system_install(dep_id: str, body: SystemInstallBody) -> dict:
+            try:
+                result = await self._sysdeps.start_install(
+                    dep_id, method_index=body.method_index,
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+            if not result.get("ok") and result.get("error") == "requires_sudo":
+                raise HTTPException(status_code=422, detail=result)
+            return result
+
+        @router.get("/system/{dep_id}/status")
+        async def system_status(dep_id: str) -> dict:
+            try:
+                return self._sysdeps.status(dep_id)
+            except ValueError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
 
         @router.post("/long-video/storyboard")
         async def decompose_storyboard_ep(body: StoryboardDecomposeBody) -> dict:
