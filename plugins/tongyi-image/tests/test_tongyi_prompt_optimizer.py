@@ -28,6 +28,8 @@ from tongyi_prompt_optimizer import (  # noqa: E402
     _extract_text,
     _localize_composition,
     _normalize_locale,
+    _OUTPUT_LANGUAGE_INSTRUCTIONS,
+    _resolve_output_locale,
     generate_ecommerce_prompts,
     get_prompt_guide_data,
 )
@@ -313,6 +315,69 @@ def test_static_keyword_libraries_are_non_empty() -> None:
     assert STYLE_KEYWORDS and all(STYLE_KEYWORDS.values())
     assert LIGHTING_KEYWORDS and all(LIGHTING_KEYWORDS.values())
     assert COMPOSITION_KEYWORDS and all(COMPOSITION_KEYWORDS.values())
+
+
+# ── _resolve_output_locale + output language instructions ───────────
+#
+# These guard the regression that triggered this change: pressing "AI 优化"
+# in a Chinese UI was returning a fully-English prompt because the system
+# prompt told the LLM "English usually works better" and the user locale
+# was never forwarded. The rules now must be:
+#   * unknown / missing locale → "zh" (project default)
+#   * region-tagged variants (zh-CN / en_US / zh-Hans-CN) collapse to base
+#   * each supported base has a HARD instruction, not a hint
+#   * the zh instruction must be written in Chinese (otherwise the LLM is
+#     more likely to ignore it) and contain the substring "中文"
+#   * the en instruction must be written in English and contain "English"
+
+
+def test_resolve_output_locale_known_values() -> None:
+    assert _resolve_output_locale("zh") == "zh"
+    assert _resolve_output_locale("en") == "en"
+
+
+def test_resolve_output_locale_strips_region_suffix() -> None:
+    """UI may forward BCP-47 (``zh-Hans-CN``) or POSIX (``en_US``) tags
+    untouched — the optimizer must still pin the right language."""
+    assert _resolve_output_locale("zh-CN") == "zh"
+    assert _resolve_output_locale("zh-Hans-CN") == "zh"
+    assert _resolve_output_locale("en_US") == "en"
+    assert _resolve_output_locale("EN-GB") == "en"
+
+
+def test_resolve_output_locale_unknown_falls_back_to_zh() -> None:
+    """Project default is zh, so unknown locales must NOT default to en —
+    that's literally the bug we're fixing."""
+    assert _resolve_output_locale(None) == "zh"
+    assert _resolve_output_locale("") == "zh"
+    assert _resolve_output_locale("fr") == "zh"
+    assert _resolve_output_locale("ja-JP") == "zh"
+    assert _resolve_output_locale("   ") == "zh"
+
+
+def test_output_language_instructions_cover_supported_locales() -> None:
+    """Every locale ``_resolve_output_locale`` can return MUST have a
+    matching instruction or the user template would KeyError at format()."""
+    assert "zh" in _OUTPUT_LANGUAGE_INSTRUCTIONS
+    assert "en" in _OUTPUT_LANGUAGE_INSTRUCTIONS
+
+
+def test_zh_instruction_is_in_chinese_and_demands_chinese_output() -> None:
+    """The instruction itself has to be in Chinese; an English meta-instruction
+    'please output in Chinese' is empirically much weaker (LLM follows the
+    language of the *demand* about half the time)."""
+    txt = _OUTPUT_LANGUAGE_INSTRUCTIONS["zh"]
+    assert "中文" in txt
+    assert "简体中文" in txt or "中文" in txt
+    # Should NOT tell the LLM that English is preferable in any way.
+    assert "英文" not in txt or "不要" in txt or "翻译" in txt
+
+
+def test_en_instruction_is_in_english_and_demands_english_output() -> None:
+    txt = _OUTPUT_LANGUAGE_INSTRUCTIONS["en"]
+    lower = txt.lower()
+    assert "english" in lower
+    assert "must" in lower or "only" in lower
 
 
 # ── PromptOptimizeError shape ────────────────────────────────────────

@@ -33,12 +33,29 @@ OPTIMIZE_SYSTEM_PROMPT = """\
 
 ## 注意事项
 - 提示词保持 50-200 字，简洁精炼
-- 英文提示词通常效果更好，但中文也支持
+- 通义万相对中文与英文提示词的支持完全等价，请始终遵循下方"## 输出语言"的硬性要求；不要因为你认为某种语言"效果更好"就擅自切换语言
 - 避免歧义、矛盾的描述
 - 使用具体的描述替代抽象概念
 - 人像类建议加入面部特征、服装、动作等
 - 产品类建议加入材质、光泽、摆放方式等
 """
+
+# Locale → fixed instruction phrasing the LLM must obey when emitting the
+# refined prompt. We explicitly forbid translating because the user's UI
+# language is the only reliable signal we have for what reads naturally to
+# them (and switching languages on them after they pressed "AI optimize"
+# was the original bug).
+_OUTPUT_LANGUAGE_INSTRUCTIONS: dict[str, str] = {
+    "zh": (
+        "**输出必须使用简体中文**。即使用户输入是英文或其它语言，也要先翻译再扩写，"
+        "最终只输出中文提示词；不要混杂英文短语（除了无对应中文译名的专有名词、风格名等）。"
+    ),
+    "en": (
+        "**The output MUST be in English.** If the user's input is in Chinese or another "
+        "language, translate first and then expand; emit English only. Do not mix Chinese "
+        "phrases (proper nouns / style names without an English equivalent are fine)."
+    ),
+}
 
 OPTIMIZE_USER_TEMPLATE = """\
 ## 用户输入
@@ -51,6 +68,9 @@ OPTIMIZE_USER_TEMPLATE = """\
 
 ## 优化级别: {level}
 {level_instruction}
+
+## 输出语言
+{language_instruction}
 
 请生成优化后的图像生成提示词。只输出最终提示词，不要解释。"""
 
@@ -65,6 +85,22 @@ class PromptOptimizeError(Exception):
     """Raised when prompt optimization fails."""
 
 
+def _resolve_output_locale(locale: str | None) -> str:
+    """Pick which output-language instruction to feed the LLM.
+
+    Falls back to ``zh`` (the project default) for unknown / empty input,
+    and accepts BCP-47 style tags like ``zh-CN`` / ``en_US`` by stripping
+    the regional suffix. Mirrors ``_normalize_locale`` below — kept inline
+    so the optimizer module has no cross-section import dependency.
+    """
+    if not locale:
+        return "zh"
+    base = str(locale).split("-")[0].split("_")[0].lower()
+    if base in _OUTPUT_LANGUAGE_INSTRUCTIONS:
+        return base
+    return "zh"
+
+
 async def optimize_prompt(
     brain: Any,
     user_prompt: str,
@@ -72,13 +108,22 @@ async def optimize_prompt(
     size: str = "2K",
     style: str = "",
     level: str = "professional",
+    locale: str | None = None,
 ) -> str:
     """Call the host LLM to refine a user prompt for image generation.
+
+    Args:
+        locale: UI locale of the caller (``zh``, ``en``, ``zh-CN`` …). The
+            optimizer hard-pins the LLM's output language to this value so
+            users in a Chinese UI never get a surprise English prompt back
+            (and vice versa). Defaults to ``zh`` when omitted.
 
     Raises PromptOptimizeError on failure.
     """
     level_instruction = LEVEL_INSTRUCTIONS.get(level, LEVEL_INSTRUCTIONS["professional"])
     style_hint = f"风格偏好: {style}" if style else ""
+    out_lang = _resolve_output_locale(locale)
+    language_instruction = _OUTPUT_LANGUAGE_INSTRUCTIONS[out_lang]
 
     user_msg = OPTIMIZE_USER_TEMPLATE.format(
         user_prompt=user_prompt,
@@ -87,6 +132,7 @@ async def optimize_prompt(
         style_hint=style_hint,
         level=level,
         level_instruction=level_instruction,
+        language_instruction=language_instruction,
     )
 
     if hasattr(brain, "think_lightweight"):
