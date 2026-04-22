@@ -832,6 +832,7 @@ function App() {
 // ─── Create Tab ───
 function CreateTab({ apiReady, goToTasks }) {
   const t = useT();
+  const locale = useLocale();
   const MODES = modeList(t);
   const [mode, setMode] = useState("text2img");
   const [prompt, setPrompt] = useState("");
@@ -907,7 +908,7 @@ function CreateTab({ apiReady, goToTasks }) {
     if (!prompt.trim()) return;
     setOptimizing(true);
     try {
-      const r = await pluginApi("POST", "/prompt-optimize", { prompt, model, size, level: "professional" });
+      const r = await pluginApi("POST", "/prompt-optimize", { prompt, model, size, level: "professional", locale });
       if (r.body && r.body.ok && r.body.result) {
         setPrompt(r.body.result);
         showToast(t("toast.optimizeOk"));

@@ -99,6 +99,10 @@ class PromptOptimizeBody(BaseModel):
     size: str = "2K"
     style: str = ""
     level: str = "professional"
+    # UI locale of the caller (``zh``, ``en``, ``zh-CN`` …). Forwarded to
+    # the optimizer to pin the LLM's output language — without it users in
+    # a Chinese UI were getting surprise English prompts back.
+    locale: str | None = None
 
 
 class EcommerceSuiteBody(BaseModel):
@@ -850,6 +854,7 @@ class Plugin(PluginBase):
                     size=body.size,
                     style=body.style,
                     level=body.level,
+                    locale=body.locale,
                 )
                 return {"ok": True, "result": result}
             except PromptOptimizeError as e:
