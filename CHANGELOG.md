@@ -7,6 +7,69 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] - 2026-04-21
 
+### Added — 插件全量整改 (Plugin Overhaul Phases 0–4)
+
+完整执行 [插件整改标准方案](docs/plugin-overhaul-template.md) 0–4 阶段。
+21 个插件全部从 "导入成功但 APPS 列表里看不到" 修到可用，并把跨插件依赖
+统一收敛进 SDK `contrib`。**累计 1100+ 单测全过。**
+
+#### Phase 0 · Host compat 修复（解锁 17/21 插件）
+- `src/openakita/plugins/compat.py` — `PLUGIN_API_VERSION = "1.0.0"` →
+  `"2.0.0"`，并保留 `~1` 兼容窗口（带 deprecation warning）。这是
+  17 个插件 manifest 写 `"plugin_api": "~2"` 后默默不可见的根因。
+- 18 例 `tests/unit/test_plugins/test_compat.py` 覆盖。
+
+#### Phase 1 · SDK `0.6.0` — `contrib.tts` / `contrib.asr`
+- 新增 `openakita_plugin_sdk.contrib.tts`（`qwen3-tts-flash` /
+  `cosyvoice` / `openai-tts` / `edge-tts` + `select_provider("auto", ...)`
+  自动凭证降级到 `edge` / `stub-silent`）。
+- 新增 `openakita_plugin_sdk.contrib.asr`（DashScope `paraformer-v2` /
+  本地 `whisper.cpp` / `stub` + 同款 `select_provider("auto", ...)`）。
+- 配套 39 例单测；SDK `pyproject.toml` / `version.py` `0.3.0 → 0.6.0`。
+- **彻底废除 `_load_sibling()` 反模式**（4 个插件原本通过路径黑魔法
+  跨插件 `import` `tts-studio` / `subtitle-maker`，host unload 顺序敏感）。
+
+#### Phase 2 · 21 个插件逐个整改
+
+按 [docs/plugin-overhaul-template.md](docs/plugin-overhaul-template.md)
+模板执行，统一交付：① `plugin.json` 升 SDK 依赖到 `>=0.6.0,<1.0.0`；
+② UI 用 `_detectApiBase()` 修 `apiBase` 时序导致的 404；
+③ API key 走 `/settings` 热更新（参考 `tongyi-image` 形态）；
+④ 跨插件依赖全走 `contrib.*`。
+
+| 阶段 | 插件 | 关键改动 |
+| ---- | ---- | -------- |
+| 2-01 | `avatar-speaker` | 全量重写：接 `contrib.tts` + UI 抄 tongyi 模板 + `/settings` 热更新（22 例） |
+| 2-02 | `tts-studio` | 去 `_load_sibling` → 接 `contrib.tts`（13 例 + 2 skip） |
+| 2-03 | `highlight-cutter` | 去 `_load_sibling` → 接 `contrib.asr` |
+| 2-04 | `subtitle-maker` | 去 `_load_sibling` → 接 `contrib.asr` |
+| 2-05 | `transcribe-archive` | 新增 `ContribAdapterProvider` 桥接 sync-chunked 与 async-full-file 接口，保留原 chunking/cache |
+| 2-06 | `video-translator` | 去 `_load_sibling` → 接 `contrib.asr` + `contrib.tts`，本地化 `TranscriptChunk` / SRT/VTT renderer |
+| 2-07 | `dub-it` | 改 `description` 为 "scaffolding example"，引导用户用 `video-translator` 做生产 |
+| 2-08~12 | `poster-maker` / `smart-poster-grid` / `image-edit` / `storyboard` / `local-sd-flux` | UI `_detectApiBase()` + SDK 升级 (201 例) |
+| 2-13~14 | `bgm-suggester` / `bgm-mixer` | SDK 升级 + version bump (113 例) |
+| 2-15~21 | `tongyi-image` / `seedance-video` / `ecommerce-image` / `video-bg-remove` / `video-color-grade` / `ppt-to-video` / `shorts-batch` | SDK 升级 + `ecommerce-image` 补齐缺失的 `sdk` 字段 (416 例) |
+
+#### Phase 3 · `shorts-batch` 升级为 `video-pipeline` 编排器
+- 新增 `plugins/shorts-batch/pipeline_orchestrator.py` —
+  `plan → image → video → audio → subtitle → mux` 6 步管线，每步
+  `Callable` 可注入；默认全部走确定性 stub（1 字节占位文件 + 静默 WAV）
+  保证 CI / 干跑零外部依赖。
+- 失败时 `PipelineStageError` 带 `stage` id；`to_verification()` 输出
+  `D2.10 Verification` envelope，UI 能直接渲染分阶段时间线。
+- `Plugin.set_pipeline_stage(stage, fn)` 让 host 在 `on_load` 期间把
+  `tongyi-image` / `seedance-video` / `subtitle-maker` 接到对应阶段。
+- 新增 `POST /api/plugins/shorts-batch/pipeline` 路由 + 19 例单测。
+- `shorts-batch` 版本 `1.1.0 → 1.2.0`，`description` 同步更新。
+
+#### Phase 4 · 文档
+- `docs/plugin-context-cheatsheet.md` — 21 插件矩阵 v2（标记每个插件
+  contrib 接入状态）+ 新增 `contrib.tts` / `contrib.asr` 速查行 +
+  `requires.sdk` 默认值升到 `>=0.6.0,<1.0.0`。
+- `docs/plugin-overhaul-template.md` — 单插件整改标准模板（其他 agent
+  按它执行单个插件改动时直接 `@` 引用）。
+- 本 CHANGELOG 条目。
+
 ### Fixed — 插件加载系统三件套
 
 - **多插件 `task_manager.py` / `providers.py` 同名子模块在 `sys.modules`
