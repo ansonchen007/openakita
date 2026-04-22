@@ -37,20 +37,24 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import FileResponse, PlainTextResponse
-from pydantic import BaseModel, Field
-
-from openakita.plugins.api import PluginAPI, PluginBase
 from openakita_plugin_sdk.contrib import (
     ErrorCoach,
     QualityGates,
     TaskStatus,
     UIEventEmitter,
 )
-
+from openakita_plugin_sdk.contrib.asr import (
+    ASRError,
+)
+from openakita_plugin_sdk.contrib.asr import (
+    select_provider as _sdk_select_asr,
+)
+from pydantic import BaseModel, Field
 from task_manager import DEFAULT_CONFIG, TranscribeTaskManager
 from transcribe_engine import (
     DEFAULT_CHUNK_DURATION_SEC,
     DEFAULT_CHUNK_OVERLAP_SEC,
+    ContribAdapterProvider,
     StubProvider,
     TranscribeProvider,
     ffmpeg_available,
@@ -61,6 +65,22 @@ from transcribe_engine import (
     to_verification,
     transcribe_file,
 )
+
+from openakita.plugins.api import PluginAPI, PluginBase
+
+_SENSITIVE_CONFIG_KEYS = {
+    "dashscope_api_key", "whisper_api_key", "scribe_api_key",
+}
+
+
+def _redacted_config(cfg: dict[str, str]) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for k, v in cfg.items():
+        if k in _SENSITIVE_CONFIG_KEYS and v:
+            out[k] = f"***{v[-4:]}" if len(v) > 4 else "***"
+        else:
+            out[k] = v
+    return out
 
 logger = logging.getLogger(__name__)
 
@@ -267,7 +287,7 @@ class Plugin(PluginBase):
         @router.get("/config")
         async def get_config() -> dict[str, str]:
             await self._ensure_db()
-            return await self._tm.get_all_config()
+            return _redacted_config(await self._tm.get_all_config())
 
         @router.post("/config")
         async def set_config(updates: dict[str, Any]) -> dict[str, str]:
@@ -289,7 +309,31 @@ class Plugin(PluginBase):
                     },
                 )
             await self._tm.set_configs(payload)
-            return await self._tm.get_all_config()
+            return _redacted_config(await self._tm.get_all_config())
+
+        @router.get("/settings")
+        async def get_settings() -> dict[str, str]:
+            await self._ensure_db()
+            return _redacted_config(await self._tm.get_all_config())
+
+        @router.post("/settings")
+        async def set_settings(updates: dict[str, Any]) -> dict[str, str]:
+            await self._ensure_db()
+            allowed = set(DEFAULT_CONFIG.keys())
+            payload = {k: str(v) for k, v in updates.items() if k in allowed}
+            if not payload:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "problem": "no recognised keys",
+                        "next_step": (
+                            "请使用以下 key 之一："
+                            + ", ".join(sorted(allowed))
+                        ),
+                    },
+                )
+            await self._tm.set_configs(payload)
+            return _redacted_config(await self._tm.get_all_config())
 
         @router.post("/preview")
         async def preview(body: PreviewBody) -> dict[str, Any]:
@@ -554,7 +598,8 @@ class Plugin(PluginBase):
                     language=str(params.get("language", "zh")),
                 )
             else:
-                provider = self._build_provider(provider_id, params)
+                cfg = await self._tm.get_all_config()
+                provider = self._build_provider(provider_id, params, cfg=cfg)
                 audio_path = params.get("audio_path", "")
                 if not Path(audio_path).is_file():
                     raise FileNotFoundError(
@@ -644,29 +689,56 @@ class Plugin(PluginBase):
     def _normalize_provider(self, name: str) -> str:
         name = (name or "").strip().lower()
         if name in ("", "auto"):
-            return "stub"  # safe default until a provider is configured
+            return "auto"
         return name
 
-    def _build_provider(self, provider_id: str, params: dict) -> TranscribeProvider:
+    def _build_provider(
+        self,
+        provider_id: str,
+        params: dict,
+        *,
+        cfg: dict[str, str] | None = None,
+    ) -> TranscribeProvider:
         """Hand back the right provider instance for ``provider_id``.
 
-        Currently only :class:`StubProvider` is bundled — real adapters
-        (whisper / scribe / paraformer) land in subsequent sprints
-        and plug in here.  Mapping lives in code (not config) so a
-        typo in config can never silently route to the wrong provider.
+        Phase 2-05 of the overhaul playbook: real ASR providers now live
+        in :mod:`openakita_plugin_sdk.contrib.asr`. We wrap the chosen
+        provider with :class:`ContribAdapterProvider` so the engine's
+        chunker / cache / merger continue to work unchanged. Operators
+        can still grep this dispatch to see exactly which provider ids
+        are routed where.
         """
         if provider_id == "stub":
             return StubProvider()
-        # Hooks for upcoming sprints: whisper / scribe / paraformer.
-        # When we add them, every adapter gets its own ``elif`` branch
-        # here.  Keeping the dispatch explicit (no plugin-defined
-        # registries) means an operator can grep for ``provider_id ==``
-        # to see exactly which providers exist.
-        raise ValueError(
-            f"provider {provider_id!r} not yet bundled with transcribe-archive; "
-            "set 'default_provider' to 'stub' in config or wait for the "
-            "real adapter sprint."
-        )
+        cfg = cfg or DEFAULT_CONFIG
+        configs = {
+            "dashscope_paraformer": (
+                {"api_key": cfg.get("dashscope_api_key", "")}
+                if cfg.get("dashscope_api_key") else {}
+            ),
+            "whisper_local": {
+                "binary": cfg.get("whisper_local_binary", "whisper-cli"),
+                "model": cfg.get("whisper_local_model", "base"),
+            },
+            "stub": {},
+        }
+        try:
+            inner = _sdk_select_asr(
+                provider_id,
+                configs=configs,
+                region=cfg.get("asr_region", "cn"),
+                allow_stub=False,
+            )
+        except ASRError as exc:
+            raise ValueError(
+                f"provider {provider_id!r} unavailable via contrib.asr: {exc} "
+                "— configure DashScope key, install whisper.cpp, or set "
+                "'default_provider' back to 'stub' in /settings."
+            ) from exc
+        return ContribAdapterProvider(inner, cache_args={
+            "language": params.get("language") or cfg.get("default_language", "zh"),
+            "model": cfg.get("whisper_local_model", ""),
+        })
 
 
 __all__ = ["Plugin"]

@@ -3,7 +3,7 @@
   "name": "Transcribe Archive",
   "display_name_zh": "音视频转写归档",
   "display_name_en": "Transcribe Archive",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "python",
   "entry": "plugin.py",
   "description": "Chunked, cache-friendly audio/video transcription with word-level timestamps, SRT/VTT export and a D2.10 trust badge. Long files are split into time windows so a single failure never wastes the whole job.",
@@ -27,7 +27,7 @@
     "openakita": ">=1.27.0",
     "plugin_api": "~2",
     "plugin_ui_api": "~1",
-    "sdk": ">=0.4.0"
+    "sdk": ">=0.6.0,<1.0.0"
   },
   "provides": {
     "tools": [

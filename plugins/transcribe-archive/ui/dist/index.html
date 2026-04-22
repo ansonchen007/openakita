@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>音视频转写归档</title>
+  <link rel="stylesheet" href="/api/plugins/_sdk/ui-kit/styles.css">
+  <script src="/api/plugins/_sdk/bootstrap.js"></script>
+  <script src="/api/plugins/_sdk/ui-kit/icons.js"></script>
+  <script src="/api/plugins/_sdk/ui-kit/i18n.js"></script>
+  <script src="/api/plugins/_sdk/ui-kit/event-helpers.js"></script>
+  <script src="/api/plugins/_sdk/ui-kit/error-coach.js"></script>
+  <script src="/api/plugins/_sdk/ui-kit/task-panel.js"></script>
+  <script src="/api/plugins/_sdk/ui-kit/dep-gate.js"></script>
+  <style>
+    body { padding: 16px; }
+    h1 { margin:0 0 6px; font-size: 22px; display: inline-flex; align-items: center; gap: 10px; }
+    h1 .oa-icon { width: 22px; height: 22px; color: var(--oa-primary); }
+    .header-tip { color: var(--oa-text-muted); font-size: 12px; margin-bottom: 16px; }
+    details summary { cursor: pointer; font-weight: 600; padding: 6px 0; }
+    .key-input { font-family: monospace; }
+  </style>
+</head>
+<body>
+  <h1>
+    <span class="oa-icon" data-icon="edit"></span>
+    <span data-i18n="header.title"></span>
+  </h1>
+  <div class="header-tip" data-i18n="header.tip"></div>
+
+  <div data-oa-dep="ffmpeg"></div>
+
+  <div class="oa-card">
+    <h3>1. <span data-i18n="step1.title"></span></h3>
+    <div class="oa-row">
+      <input type="file" id="file" accept="video/*,audio/*" class="oa-input" style="flex:1">
+      <button class="oa-btn" id="pick" data-i18n="step1.browse"></button>
+    </div>
+    <div id="info" style="font-size:12px;color:var(--oa-text-muted);margin-top:6px"></div>
+  </div>
+
+  <div class="oa-card">
+    <h3>2. <span data-i18n="step2.title"></span></h3>
+    <div class="oa-grid cols-3">
+      <div>
+        <label class="oa-label" data-i18n="form.lang"></label>
+        <select id="lang" class="oa-input">
+          <option value="auto" data-i18n="lang.auto"></option>
+          <option value="zh"   data-i18n="lang.zh" selected></option>
+          <option value="en"   data-i18n="lang.en"></option>
+          <option value="ja"   data-i18n="lang.ja"></option>
+        </select>
+      </div>
+      <div>
+        <label class="oa-label" data-i18n="form.provider"></label>
+        <select id="provider" class="oa-input">
+          <option value="auto" selected data-i18n="provider.auto"></option>
+          <option value="dashscope_paraformer" data-i18n="provider.dashscope"></option>
+          <option value="whisper_local" data-i18n="provider.whisperLocal"></option>
+          <option value="stub" data-i18n="provider.stub"></option>
+        </select>
+      </div>
+      <div>
+        <label class="oa-label" data-i18n="form.chunk"></label>
+        <input id="chunk" type="number" class="oa-input" value="60" min="10" max="600" step="10">
+      </div>
+    </div>
+  </div>
+
+  <div class="oa-card">
+    <details>
+      <summary data-i18n="settings.title"></summary>
+      <div class="oa-grid cols-2" style="margin-top:8px">
+        <div>
+          <label class="oa-label" data-i18n="settings.dashscope"></label>
+          <input id="cfg_dashscope" type="password" class="oa-input key-input" placeholder="sk-...">
+        </div>
+        <div>
+          <label class="oa-label" data-i18n="settings.region"></label>
+          <select id="cfg_region" class="oa-input">
+            <option value="cn">cn (杭州)</option>
+            <option value="intl">intl (Singapore)</option>
+          </select>
+        </div>
+      </div>
+      <div style="margin-top:8px">
+        <button class="oa-btn" id="saveCfg" data-i18n="settings.save"></button>
+        <span id="cfgHint" style="font-size:12px;color:var(--oa-text-muted);margin-left:8px"></span>
+      </div>
+    </details>
+  </div>
+
+  <div class="oa-card">
+    <button class="oa-btn oa-btn-primary" id="go" disabled data-i18n="actions.go"></button>
+    <span id="goHint" style="font-size:12px;color:var(--oa-text-muted);margin-left:8px" data-i18n="actions.hint"></span>
+    <div id="errorBox" style="margin-top:10px"></div>
+  </div>
+
+  <h3 style="margin: 18px 0 8px" data-i18n="tasks.title"></h3>
+  <div id="tasks"></div>
+
+<script>
+  OpenAkitaI18n.register({
+    zh: {
+      "header.title": "音视频转写归档",
+      "header.tip": "上传音/视频 → 自动分片转写 → 一键导出 SRT/VTT/TXT/JSON 归档",
+      "step1.title": "选文件",
+      "step1.browse": "浏览",
+      "step2.title": "选项",
+      "form.lang": "语言",
+      "lang.auto": "自动检测",
+      "lang.zh": "中文",
+      "lang.en": "英文",
+      "lang.ja": "日文",
+      "form.provider": "ASR 引擎",
+      "provider.auto": "auto (自动选)",
+      "provider.dashscope": "阿里 DashScope Paraformer",
+      "provider.whisperLocal": "本地 whisper.cpp",
+      "provider.stub": "stub (离线占位)",
+      "form.chunk": "分片秒数",
+      "settings.title": "配置 API Key / 区域 (热更新)",
+      "settings.dashscope": "DashScope API Key",
+      "settings.region": "区域",
+      "settings.save": "保存",
+      "actions.go": "开始转写",
+      "actions.hint": "先上传文件",
+      "actions.hintReady": "可以开始了",
+      "tasks.title": "最近的任务",
+      "upload.uploading": "上传中… ({mb} MB)",
+      "upload.done": "已上传：{name}",
+      "err.create.problem": "创建失败",
+      "err.create.next": "稍后重试",
+      "result.title": "转写完成",
+      "result.dlSrt": "下载 SRT",
+      "result.dlVtt": "下载 VTT",
+      "result.dlTxt": "下载 TXT",
+      "cfg.saved": "已保存 (已生效)",
+      "cfg.failed": "保存失败"
+    },
+    en: {
+      "header.title": "Transcribe Archive",
+      "header.tip": "Upload audio/video → chunked auto-transcription → export SRT/VTT/TXT/JSON archive.",
+      "step1.title": "Pick a file",
+      "step1.browse": "Browse",
+      "step2.title": "Options",
+      "form.lang": "Language",
+      "lang.auto": "Auto-detect",
+      "lang.zh": "Chinese",
+      "lang.en": "English",
+      "lang.ja": "Japanese",
+      "form.provider": "ASR Engine",
+      "provider.auto": "auto",
+      "provider.dashscope": "Alibaba DashScope Paraformer",
+      "provider.whisperLocal": "Local whisper.cpp",
+      "provider.stub": "stub (offline placeholder)",
+      "form.chunk": "Chunk seconds",
+      "settings.title": "Configure API key / region (hot-reload)",
+      "settings.dashscope": "DashScope API Key",
+      "settings.region": "Region",
+      "settings.save": "Save",
+      "actions.go": "Start transcribing",
+      "actions.hint": "Upload a file first",
+      "actions.hintReady": "Ready to go",
+      "tasks.title": "Recent tasks",
+      "upload.uploading": "Uploading… ({mb} MB)",
+      "upload.done": "Uploaded: {name}",
+      "err.create.problem": "Failed to create task",
+      "err.create.next": "Please try again later",
+      "result.title": "Transcription done",
+      "result.dlSrt": "Download SRT",
+      "result.dlVtt": "Download VTT",
+      "result.dlTxt": "Download TXT",
+      "cfg.saved": "Saved (active)",
+      "cfg.failed": "Save failed"
+    }
+  });
+  const T = (k, vars) => OpenAkitaI18n.t(k, vars);
+
+  document.querySelectorAll("[data-icon]").forEach(function (el) {
+    var name = el.dataset.icon;
+    var fn = window.OpenAkitaIcons && window.OpenAkitaIcons[name];
+    if (fn) el.innerHTML = fn();
+  });
+  OpenAkitaI18n.bindDom(document.body);
+
+  function _detectApiBase() {
+    try {
+      if (window.OpenAkita && OpenAkita.meta && OpenAkita.meta.apiBase) {
+        return OpenAkita.meta.apiBase;
+      }
+    } catch (_) {}
+    var loc = window.location;
+    if (loc.port === '5173' || loc.port === '1420') return 'http://127.0.0.1:18900';
+    return loc.origin;
+  }
+  function api(path, opts) {
+    var url = path.indexOf('http') === 0 ? path : _detectApiBase() + path;
+    return fetch(url, opts || {}).then(function(r) {
+      return r.json().then(function(j) { return { ok: r.ok, status: r.status, body: j }; });
+    });
+  }
+  Object.defineProperty(window, 'apiBase', { get: _detectApiBase, configurable: true });
+  const $ = (id) => document.getElementById(id);
+  let chosenPath = null;
+  let lastTaskId = null;
+
+  // load existing settings (redacted)
+  api('/settings').then(r => {
+    if (r.ok && r.body) {
+      if (r.body.asr_region) $('cfg_region').value = r.body.asr_region;
+      if (r.body.dashscope_api_key) $('cfg_dashscope').placeholder = r.body.dashscope_api_key;
+    }
+  }).catch(()=>{});
+
+  $('saveCfg').addEventListener('click', async () => {
+    const payload = { asr_region: $('cfg_region').value };
+    const k = $('cfg_dashscope').value.trim();
+    if (k) payload.dashscope_api_key = k;
+    const r = await api('/settings', { method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(payload) });
+    $('cfgHint').textContent = r.ok ? T('cfg.saved') : T('cfg.failed');
+    if (r.ok) $('cfg_dashscope').value = '';
+  });
+
+  $('pick').addEventListener('click', () => $('file').click());
+  $('file').addEventListener('change', async (e) => {
+    const f = e.target.files[0]; if (!f) return;
+    $('info').textContent = T('upload.uploading', { mb: (f.size/1024/1024).toFixed(1) });
+    const form = new FormData(); form.append('file', f);
+    const r = await fetch(_detectApiBase() + '/upload', { method:'POST', body: form });
+    const j = await r.json();
+    chosenPath = j.path;
+    $('info').textContent = T('upload.done', { name: f.name });
+    $('go').disabled = false;
+    $('goHint').removeAttribute('data-i18n');
+    $('goHint').textContent = T('actions.hintReady');
+  });
+
+  $('go').addEventListener('click', async () => {
+    if (!chosenPath) return;
+    $('errorBox').innerHTML = '';
+    const r = await api('/tasks', { method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({
+        audio_path: chosenPath,
+        language: $('lang').value,
+        provider: $('provider').value,
+        chunk_duration_sec: parseFloat($('chunk').value || '60'),
+      })});
+    if (!r.ok) {
+      ErrorCoach.mount('#errorBox', r.body.detail || { problem: T('err.create.problem'), next_step: T('err.create.next') }, { onRetry: () => $('go').click() });
+      return;
+    }
+    lastTaskId = r.body.task_id;
+    taskPanel.refresh();
+  });
+
+  const taskPanel = new TaskPanel({ root: '#tasks', apiBase: _detectApiBase(), tasksPath: '/tasks', cancelPath: '/tasks/{id}/cancel' });
+  taskPanel.start();
+
+  OpenAkita.onEvent('task_updated', (data) => {
+    taskPanel.refresh();
+    if (data && data.status === 'succeeded' && data.id === lastTaskId) {
+      const _ab = _detectApiBase();
+      const links = [
+        `<a class="oa-btn" href="${_ab}/tasks/${data.id}/archive.srt">${T('result.dlSrt')}</a>`,
+        `<a class="oa-btn" href="${_ab}/tasks/${data.id}/archive.vtt">${T('result.dlVtt')}</a>`,
+        `<a class="oa-btn" href="${_ab}/tasks/${data.id}/archive.txt">${T('result.dlTxt')}</a>`,
+      ];
+      const div = document.createElement('div');
+      div.className = 'oa-card';
+      div.innerHTML = `<h3>${T('result.title')}</h3><div class="oa-row">${links.join(' ')}</div>`;
+      $('errorBox').innerHTML = '';
+      $('errorBox').appendChild(div);
+    }
+  });
+</script>
+</body>
+</html>

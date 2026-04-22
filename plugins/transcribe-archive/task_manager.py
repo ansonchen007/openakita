@@ -89,6 +89,13 @@ DEFAULT_CONFIG: dict[str, str] = {
     "cache_dir": "",  # empty → engine uses ``data_dir / 'transcribe_cache'``
     "max_concurrent_chunks": "3",  # parallelism per task
     "max_concurrent_tasks": "2",   # parallelism across tasks
+    # contrib.asr providers — drop-in replacement for the old per-vendor
+    # whisper / scribe credentials. Phase 2-05 of the overhaul playbook.
+    "asr_region": "cn",
+    "dashscope_api_key": "",
+    "whisper_local_binary": "whisper-cli",
+    "whisper_local_model": "base",
+    # legacy cloud knobs (kept for backwards-compat with existing UIs):
     "whisper_api_key": "",
     "whisper_model": "whisper-1",
     "scribe_api_key": "",

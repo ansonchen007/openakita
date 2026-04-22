@@ -315,6 +315,79 @@ class TranscribeProvider(Protocol):
         ...
 
 
+class ContribAdapterProvider:
+    """Adapter that exposes a :mod:`contrib.asr` provider as the engine's
+    chunk-shaped :class:`TranscribeProvider` protocol.
+
+    Phase 2-05 of the overhaul playbook: instead of growing a separate
+    Whisper / Scribe / Paraformer adapter inside this plugin, we wrap
+    the canonical SDK provider so the engine's chunk planner / cache /
+    merger continue to work unchanged. The adapter:
+
+    * Calls ``provider.transcribe(chunk_audio_path)`` once per chunk.
+    * Converts each ``ASRChunk`` into a single :class:`Word` whose text
+      is the chunk text. (Word-level timing isn't exposed by every
+      provider; sentence-level is the conservative cross-vendor floor.)
+    * Includes the wrapped ``provider_id`` in :meth:`args_for_cache_key`
+      so swapping ``dashscope_paraformer`` ↔ ``whisper_local``
+      invalidates every cached chunk — different ASRs produce different
+      text and would silently corrupt the cache otherwise.
+    """
+
+    def __init__(
+        self,
+        contrib_provider: Any,  # contrib.asr.BaseASRProvider
+        *,
+        cache_args: dict[str, Any] | None = None,
+    ) -> None:
+        self._inner = contrib_provider
+        self._cache_args = dict(cache_args or {})
+
+    @property
+    def provider_id(self) -> str:
+        return f"contrib:{self._inner.provider_id}"
+
+    def args_for_cache_key(self) -> dict[str, Any]:
+        out = {"inner_provider": getattr(self._inner, "provider_id", "unknown")}
+        out.update(self._cache_args)
+        return out
+
+    def transcribe_chunk(self, audio_path: Path, *, language: str) -> list[Word]:
+        import asyncio as _asyncio
+
+        async def _go():
+            return await self._inner.transcribe(audio_path, language=language)
+
+        try:
+            try:
+                _asyncio.get_running_loop()
+                # We're inside an event loop — run in a fresh loop on a
+                # worker thread so we don't deadlock the engine's caller.
+                import concurrent.futures
+
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+                    future = ex.submit(_asyncio.run, _go())
+                    result = future.result()
+            except RuntimeError:
+                result = _asyncio.run(_go())
+        except Exception as e:  # noqa: BLE001
+            logger.warning("contrib.asr provider failed for chunk %s: %s", audio_path, e)
+            return []
+
+        words: list[Word] = []
+        for asr_chunk in result.chunks:
+            text = (asr_chunk.text or "").strip()
+            if not text:
+                continue
+            start = max(0.0, float(asr_chunk.start))
+            end = max(start + 0.001, float(asr_chunk.end))
+            conf = float(asr_chunk.confidence)
+            if not 0.0 <= conf <= 1.0:
+                conf = max(0.0, min(1.0, conf))
+            words.append(Word(text=text, start=start, end=end, confidence=conf))
+        return words
+
+
 @dataclass
 class StubProvider:
     """Deterministic fake that produces N synthetic words per chunk.
