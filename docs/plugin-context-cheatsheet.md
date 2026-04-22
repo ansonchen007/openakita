@@ -70,6 +70,7 @@ d:\OpenAkita_AI_Video
 ### AI 媒体类基础设施（**必须用** `from openakita_plugin_sdk.contrib import ...`）
 
 > 铁律：**所有插件统一从 contrib 导入这些"轮子"，不要拷贝到插件目录里**。一旦有重复造轮子的 PR，直接打回。
+> **2026-04 起，跨插件复用任何 TTS/ASR/Provider 必须走 contrib，不允许 `_load_sibling` 反模式（已被 ruff 检测）**。
 
 | 主题         | 关键导出                                                                                                  |
 | ------------ | --------------------------------------------------------------------------------------------------------- |
@@ -89,6 +90,8 @@ d:\OpenAkita_AI_Video
 | 解析         | `parse_llm_json` / `parse_llm_json_array` / `parse_llm_json_object`, `load_env_any`, `EnvAnyEntry`        |
 | 审稿/校验    | `review_source` / `review_video` / `review_image` / `review_audio`, `ReviewIssue`, `ReviewReport`, `ReviewThresholds`, `Verification`, `merge_verifications`, `render_verification_badge`, `LowConfidenceField`, `KIND_*`, `BADGE_*` |
 | 评估打分     | `ProviderScore`, `score_providers`, `SlideshowRisk`, `evaluate_slideshow_risk`, `DeliveryPromise`, `validate_cuts`, `ToolResult` |
+| **TTS（新）** | `from openakita_plugin_sdk.contrib.tts import select_provider, TTSError, TTSResult, PRESET_VOICES_ZH` — 后端：`qwen3-tts-flash` / `cosyvoice` / `openai-tts` / `edge`。`select_provider("auto", configs={...})` 自动按可用凭证降级到 `edge`/`stub-silent`。 |
+| **ASR（新）** | `from openakita_plugin_sdk.contrib.asr import select_provider, ASRError, ASRResult, ASRChunk` — 后端：`paraformer-v2`（DashScope）/ `whisper-cpp`（本地）/ `stub`。`select_provider("auto", configs={...})` 自动按可用凭证 + 二进制降级。 |
 
 ---
 
@@ -136,9 +139,9 @@ plugins/<plugin-id>/
   ],
   "requires": {
     "openakita": ">=1.27.0",
-    "plugin_api": "~1",
+    "plugin_api": "~2",
     "plugin_ui_api": "~1",
-    "sdk": ">=0.4.0"
+    "sdk": ">=0.6.0,<1.0.0"
   },
   "provides": {
     "tools": ["<plugin>_create", "<plugin>_status", "<plugin>_list"],
@@ -222,15 +225,63 @@ prompt + (可选 ref) → vendor.POST → task_id →
 
 ---
 
-## 四、`plugins/` 现状（21 个插件）
+## 四、`plugins/` 现状矩阵 v2（21 个插件，2026-04 整改后真实状态）
 
-| 类别       | 插件                                                                                                              |
-| ---------- | ----------------------------------------------------------------------------------------------------------------- |
-| 图像生成   | `tongyi-image`(模板) / `image-edit` / `local-sd-flux` / `ecommerce-image` / `smart-poster-grid` / `poster-maker`  |
-| 视频生成   | `seedance-video` / `ppt-to-video` / `shorts-batch` / `storyboard`                                                 |
-| 视频处理   | `highlight-cutter` / `video-bg-remove` / `video-color-grade` / `video-translator` / `subtitle-maker`              |
-| 音频/口播  | `tts-studio` / `dub-it` / `avatar-speaker` / `bgm-mixer` / `bgm-suggester`                                        |
-| 转录归档   | `transcribe-archive`                                                                                              |
+> **图例**：✅ = 已接 contrib + UI `_detectApiBase()` + `/settings` 热更新；🟡 = 仅 SDK 升级（脚手架 / 文档 stub / 后续单独整改）；🧪 = 故意保留为 "scaffolding 示例"。
+
+### 图像生成 (6)
+
+| 插件                | 版本   | 状态 | 关键能力                                                                |
+| ------------------- | ------ | ---- | ----------------------------------------------------------------------- |
+| `tongyi-image`      | 0.3.0  | ✅   | **模板**。DashScope wanx2 / qwen-image。所有插件抄它的 plugin.py / UI。 |
+| `image-edit`        | 1.1.0  | ✅   | DashScope image2image / inpaint。                                       |
+| `local-sd-flux`     | 1.1.0  | 🟡   | ComfyUI workflow 调度（SD/Flux 本地）。UI 是文档 stub，等用户拉 ComfyUI。|
+| `ecommerce-image`   | 0.2.0  | 🟡   | 电商背景批量生成。补齐了缺失的 `sdk` 字段；后续单独迭代 UI/tests。       |
+| `smart-poster-grid` | 1.1.0  | 🟡   | 海报九宫格组合。无独立 UI（嵌在主面板）。                               |
+| `poster-maker`      | 1.1.0  | ✅   | 海报模板 + LLM 文案。                                                   |
+
+### 视频生成 (4)
+
+| 插件             | 版本  | 状态 | 关键能力                                                                                        |
+| ---------------- | ----- | ---- | ----------------------------------------------------------------------------------------------- |
+| `seedance-video` | 1.2.0 | ✅   | 字节 Seedance 文生视频 / 图生视频。                                                              |
+| `ppt-to-video`   | 1.1.0 | ✅   | PPT → 单镜头视频。                                                                              |
+| `shorts-batch`   | 1.2.0 | ✅+🆕 | 批量短视频 + **Phase 3 video-pipeline 编排器**（plan→image→video→audio→subtitle→mux 6 步）。     |
+| `storyboard`     | 1.1.0 | ✅   | 分镜脚本生成（LLM）。                                                                           |
+
+### 视频处理 (5)
+
+| 插件                | 版本   | 状态 | 关键能力                                                                |
+| ------------------- | ------ | ---- | ----------------------------------------------------------------------- |
+| `highlight-cutter`  | 1.1.0  | ✅   | **去 `_load_sibling`** → 接 `contrib.asr` 自动选 paraformer / whisper。 |
+| `video-bg-remove`   | 1.1.0  | ✅   | 视频抠像（matanyone-cli）。                                             |
+| `video-color-grade` | 0.2.0  | ✅   | FFmpeg 自动调色（用 `auto_color_grade_filter`）。                       |
+| `video-translator`  | 1.1.0  | ✅   | **去 `_load_sibling`** → 自包含；ASR/TTS 全走 `contrib.*`。             |
+| `subtitle-maker`    | 1.1.0  | ✅   | **去 `_load_sibling`** → 接 `contrib.asr`。                             |
+
+### 音频/口播 (5)
+
+| 插件             | 版本  | 状态 | 关键能力                                                              |
+| ---------------- | ----- | ---- | --------------------------------------------------------------------- |
+| `avatar-speaker` | 1.1.0 | ✅   | 单段口播。**全量重写**接 `contrib.tts`，UI 抄 tongyi 模板。           |
+| `tts-studio`     | 1.1.0 | ✅   | 多角色长音频拼接。**去 `_load_sibling`** → 接 `contrib.tts`。         |
+| `dub-it`         | 1.1.0 | 🧪   | **故意保留为脚手架 example**：可注入 `Transcriber/Translator/Synth`。生产请用 `video-translator`。 |
+| `bgm-mixer`      | 0.2.0 | 🟡   | FFmpeg BGM 混音。无 UI。                                              |
+| `bgm-suggester`  | 0.2.0 | 🟡   | 基于场景 LLM 推荐 BGM。无 UI。                                        |
+
+### 转录归档 (1)
+
+| 插件                 | 版本   | 状态 | 关键能力                                                                                                       |
+| -------------------- | ------ | ---- | -------------------------------------------------------------------------------------------------------------- |
+| `transcribe-archive` | 0.2.0  | ✅   | 长音频分块 + 缓存 + 词级时间戳。通过 `ContribAdapterProvider` 桥接到 `contrib.asr`，保留原 chunking/cache 逻辑。 |
+
+### Phase 0–4 整改累计交付
+
+- **Phase 0**：`src/openakita/plugins/compat.py` `PLUGIN_API_VERSION = "2.0.0"` + `~1` 兼容窗口（17/21 插件因此从 "导入成功但不可见" 变可用）。
+- **Phase 1**：SDK `0.6.0` → 新增 `contrib.tts` / `contrib.asr` 两个公共模块（39 例单测）。
+- **Phase 2**：单插件整改模板 `docs/plugin-overhaul-template.md` + 上面 21 个插件逐个走完模板。
+- **Phase 3**：`shorts-batch` 内置 6 步 `pipeline_orchestrator.py`（不新建 `video-pipeline` 插件，避免重复 brief 模型 / risk-score / worker 三件套）。
+- **Phase 4**：本文 + `CHANGELOG.md` Sprint 整改条目。
 
 ---
 
