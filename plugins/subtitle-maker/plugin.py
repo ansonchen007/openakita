@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import subprocess
 from pathlib import Path
 
@@ -17,9 +18,22 @@ from openakita_plugin_sdk.contrib import (
 )
 
 from subtitle_engine import (
-    burn_subtitles_command, to_srt, to_vtt, whisper_cpp_transcribe,
+    burn_subtitles_command, configure_credentials, to_srt, to_vtt,
+    transcribe_with_contrib_asr,
 )
 from task_manager import SubtitleTaskManager
+
+_SENSITIVE_CONFIG_KEYS = {"dashscope_api_key"}
+
+
+def _redacted_config(cfg: dict[str, str]) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for k, v in cfg.items():
+        if k in _SENSITIVE_CONFIG_KEYS and v:
+            out[k] = f"***{v[-4:]}" if len(v) > 4 else "***"
+        else:
+            out[k] = v
+    return out
 
 logger = logging.getLogger(__name__)
 
@@ -70,7 +84,15 @@ class Plugin(PluginBase):
             ],
             self._handle_tool_call,
         )
+        api.spawn_task(self._load_credentials())
         api.log("subtitle-maker loaded")
+
+    async def _load_credentials(self) -> None:
+        cfg = await self._tm.get_config()
+        configure_credentials(
+            dashscope_api_key=cfg.get("dashscope_api_key")
+            or os.environ.get("DASHSCOPE_API_KEY", ""),
+        )
 
     async def on_unload(self) -> None:
         workers = [t for t in list(self._workers.values()) if not t.done()]
@@ -114,12 +136,23 @@ class Plugin(PluginBase):
 
         @router.get("/config")
         async def get_config():
-            return await self._tm.get_config()
+            return _redacted_config(await self._tm.get_config())
 
         @router.post("/config")
         async def set_config(updates: dict):
             await self._tm.set_config({k: str(v) for k, v in updates.items()})
-            return await self._tm.get_config()
+            await self._load_credentials()
+            return _redacted_config(await self._tm.get_config())
+
+        @router.get("/settings")
+        async def get_settings():
+            return _redacted_config(await self._tm.get_config())
+
+        @router.post("/settings")
+        async def set_settings(updates: dict):
+            await self._tm.set_config({k: str(v) for k, v in updates.items()})
+            await self._load_credentials()
+            return _redacted_config(await self._tm.get_config())
 
         @router.post("/upload")
         async def upload(file: UploadFile = File(...)):
@@ -221,7 +254,8 @@ class Plugin(PluginBase):
 
     async def _run(self, task_id: str) -> None:
         rec = await self._tm.get_task(task_id)
-        if rec is None: return
+        if rec is None:
+            return
         params = rec.params
         source = Path(rec.extra.get("source_path") or "")
         if not source.exists():
@@ -233,18 +267,21 @@ class Plugin(PluginBase):
             self._events.emit("task_updated", {"id": task_id, "status": "running",
                                                "stage": "transcribe"})
 
-            chunks = await whisper_cpp_transcribe(
+            cfg = await self._tm.get_config()
+            chunks = await transcribe_with_contrib_asr(
                 source,
-                model=params.get("asr_model", "base"),
-                language=params.get("language", "auto"),
-                binary="whisper-cli",
+                provider_id=cfg.get("asr_provider", "auto"),
+                region=cfg.get("asr_region", "cn"),
+                language=params.get("language", cfg.get("asr_language", "auto")),
+                model=params.get("asr_model", cfg.get("asr_model", "base")),
+                binary=cfg.get("asr_binary", "whisper-cli"),
+                allow_stub=False,
             )
             if not chunks:
-                # whisper.cpp not installed → friendly stub w/ user guidance
                 from openakita_plugin_sdk.contrib import VendorError
                 raise VendorError(
-                    "whisper.cpp 未安装；安装后重试。"
-                    "https://github.com/ggerganov/whisper.cpp/releases",
+                    "未配置可用的 ASR 引擎：请在【设置】里填入 DashScope API Key，"
+                    "或安装 whisper.cpp (https://github.com/ggerganov/whisper.cpp/releases)。",
                     retryable=False,
                 )
 
@@ -260,7 +297,6 @@ class Plugin(PluginBase):
             if params.get("burn_into_video"):
                 self._events.emit("task_updated", {"id": task_id, "status": "running",
                                                    "stage": "burn"})
-                cfg = await self._tm.get_config()
                 ffmpeg = cfg.get("ffmpeg_path") or "ffmpeg"
                 burned_path = output_dir / f"{task_id}.mp4"
                 cmd = burn_subtitles_command(

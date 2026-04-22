@@ -1,44 +1,114 @@
-"""subtitle-maker — produce SRT / VTT / ASS from ASR chunks; burn into video.
+"""subtitle-maker — produce SRT / VTT from ASR chunks; burn into video.
 
-Reuses ``plugins/highlight-cutter/highlight_engine.py`` for the ASR step
-to avoid duplicating the whisper.cpp wrapper.  We import lazily (sys.path
-hack) so the dependency is explicit but isolated.
+Phase 2-04 of the overhaul playbook removes the cross-plugin shim that
+physically reached into a sibling plugin's ``providers`` /
+``highlight_engine`` modules. ASR now flows through
+:mod:`openakita_plugin_sdk.contrib.asr`, so this plugin no longer
+depends on highlight-cutter's load order or source layout.
 """
 
 from __future__ import annotations
 
-import math
+import logging
 import shutil
-import subprocess
-import importlib.util
-import sys
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
+from typing import Any
 
-# Reuse highlight-cutter's ASR without polluting sys.path (avoids name
-# collisions when several plugins each define their own ``providers.py``
-# / ``highlight_engine.py``).  Loaded under a unique module name.
-def _load_sibling(plugin_dir_name: str, module_name: str, alias: str):
-    src = Path(__file__).resolve().parent.parent / plugin_dir_name / f"{module_name}.py"
-    if alias in sys.modules:
-        return sys.modules[alias]
-    spec = importlib.util.spec_from_file_location(alias, src)
-    if spec is None or spec.loader is None:
-        raise ImportError(f"cannot load {src}")
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules[alias] = mod
-    spec.loader.exec_module(mod)
-    return mod
+from openakita_plugin_sdk.contrib.asr import (
+    ASRError,
+    select_provider as _sdk_select_asr,
+)
+
+logger = logging.getLogger(__name__)
 
 
-_hc = _load_sibling("highlight-cutter", "highlight_engine", "_oa_hc_engine")
-TranscriptChunk = _hc.TranscriptChunk           # noqa: F401
-whisper_cpp_transcribe = _hc.whisper_cpp_transcribe  # noqa: F401
+# ── transcript dataclass (back-compat with the old import shape) ──────
+
+
+@dataclass
+class TranscriptChunk:
+    """Sentence-ish granularity transcript segment.
+
+    Field names match the contrib.asr ``ASRChunk`` shape so callers can
+    read either type without renaming attributes.
+    """
+
+    start: float
+    end: float
+    text: str
+    confidence: float = 1.0
+
+
+# ── credentials registry ──────────────────────────────────────────────
+
+
+_CREDENTIALS: dict[str, str | None] = {
+    "dashscope_api_key": None,
+}
+
+
+def configure_credentials(
+    *,
+    dashscope_api_key: str | None = None,
+) -> None:
+    """Hot-update credentials used by subsequent ASR provider builds."""
+    if dashscope_api_key is not None:
+        _CREDENTIALS["dashscope_api_key"] = dashscope_api_key or None
+
+
+def _build_asr_configs(*, model: str, binary: str) -> dict[str, dict[str, Any]]:
+    dk = _CREDENTIALS.get("dashscope_api_key")
+    return {
+        "dashscope_paraformer": {"api_key": dk} if dk else {},
+        "whisper_local": {"binary": binary, "model": model},
+        "stub": {},
+    }
+
+
+async def transcribe_with_contrib_asr(
+    source: Path,
+    *,
+    provider_id: str = "auto",
+    region: str = "cn",
+    language: str = "auto",
+    model: str = "base",
+    binary: str = "whisper-cli",
+    allow_stub: bool = False,
+) -> list[TranscriptChunk]:
+    """Transcribe ``source`` using a ``contrib.asr`` provider.
+
+    Returns an empty list if no provider is available — the caller
+    surfaces a coached error so the user can install whisper.cpp or
+    configure DashScope.
+    """
+    configs = _build_asr_configs(model=model, binary=binary)
+    try:
+        provider = _sdk_select_asr(
+            provider_id, configs=configs, region=region, allow_stub=allow_stub,
+        )
+    except ASRError as exc:
+        logger.warning("contrib.asr select failed: %s", exc)
+        return []
+    try:
+        result = await provider.transcribe(source, language=language)
+    except ASRError as exc:
+        logger.warning("contrib.asr transcribe failed: %s", exc)
+        return []
+    return [
+        TranscriptChunk(start=c.start, end=c.end, text=c.text, confidence=c.confidence)
+        for c in result.chunks
+    ]
+
 
 __all__ = [
-    "TranscriptChunk", "whisper_cpp_transcribe",
-    "to_srt", "to_vtt", "burn_subtitles_command",
+    "TranscriptChunk",
+    "burn_subtitles_command",
+    "configure_credentials",
+    "to_srt",
+    "to_vtt",
+    "transcribe_with_contrib_asr",
 ]
 
 
@@ -53,7 +123,7 @@ def _format_ts_srt(seconds: float) -> str:
     sec = s % 60
     whole = int(sec)
     millis = int(round((sec - whole) * 1000))
-    if millis == 1000:  # rounding overflow
+    if millis == 1000:
         whole += 1
         millis = 0
     return f"{h:02d}:{m:02d}:{whole:02d},{millis:03d}"
@@ -95,15 +165,15 @@ def to_vtt(chunks: Iterable[TranscriptChunk]) -> str:
 
 
 def burn_subtitles_command(
-    *, source_video: Path, srt_file: Path, output: Path,
-    fps: int = 24, ffmpeg: str = "ffmpeg",
+    *,
+    source_video: Path,
+    srt_file: Path,
+    output: Path,
+    fps: int = 24,
+    ffmpeg: str = "ffmpeg",
 ) -> list[str]:
-    """Build an ffmpeg command that burns ``srt_file`` into ``source_video``.
-
-    Returns the command list — caller invokes ``subprocess.run(cmd, timeout=...)``.
-    """
+    """Build an ffmpeg command that burns ``srt_file`` into ``source_video``."""
     bin_path = ffmpeg if Path(ffmpeg).is_absolute() else (shutil.which(ffmpeg) or ffmpeg)
-    # ffmpeg subtitle filter wants forward slashes + escaped colons on Windows
     srt_arg = str(srt_file.as_posix()).replace(":", r"\\:")
     return [
         bin_path, "-y", "-hide_banner",
