@@ -1,0 +1,2362 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Avatar Studio · 数字人工作室</title>
+  <!--
+    Self-contained plugin UI: bootstrap + UI Kit are inlined under _assets/.
+    avatar-studio MUST NOT depend on host-mounted /api/plugins/_sdk/* — those
+    were retired in SDK 0.7.0. Every byte you see here is owned by this
+    plugin (see plugins-archive/_shared/web-uikit/ for the canonical
+    reference copy of the _assets/ files). React/ReactDOM/Babel are loaded
+    from unpkg via <script crossorigin>; everything else is local.
+  -->
+  <script src="_assets/bootstrap.js"></script>
+  <link rel="stylesheet" href="_assets/styles.css">
+  <script src="_assets/icons.js"></script>
+  <script src="_assets/i18n.js"></script>
+  <script src="_assets/markdown-mini.js"></script>
+  <link rel="preload" as="script" crossorigin href="https://unpkg.com/react@18/umd/react.production.min.js" />
+  <link rel="preload" as="script" crossorigin href="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" />
+  <link rel="preload" as="script" href="https://unpkg.com/@babel/standalone/babel.min.js" />
+  <style>
+    /* ── Theme tokens ── */
+    :root {
+      --bg: #f8fafc; --bg-card: #ffffff; --bg-hover: #f1f5f9;
+      --text: #1e293b; --text-muted: #64748b; --text-dim: #94a3b8;
+      --primary: #6366f1; --primary-hover: #4f46e5;
+      --success: #22c55e; --warning: #f59e0b; --danger: #ef4444;
+      --border: #e2e8f0; --radius: 8px;
+    }
+    [data-theme="dark"] {
+      --bg: #0f172a; --bg-card: #1e293b; --bg-hover: #334155;
+      --text: #f1f5f9; --text-muted: #94a3b8; --text-dim: #64748b;
+      --border: #334155;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root:not([data-theme="light"]) {
+        --bg: #0f172a; --bg-card: #1e293b; --bg-hover: #334155;
+        --text: #f1f5f9; --text-muted: #94a3b8; --text-dim: #64748b;
+        --border: #334155;
+      }
+    }
+    /* ── Reset + typography ── */
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--bg); color: var(--text); line-height: 1.5;
+      -webkit-font-smoothing: antialiased;
+    }
+    /* ── Layout shell ── */
+    .app { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+    .header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 10px 18px; border-bottom: 1px solid var(--border);
+      background: var(--bg-card);
+    }
+    .header h1 { font-size: 16px; font-weight: 600; display: flex; align-items: center; gap: 10px; }
+    .header h1 .ak-logo {
+      width: 28px; height: 28px; border-radius: 6px;
+      background: linear-gradient(135deg, var(--primary) 0%, #ec4899 100%);
+      color: #fff; display: inline-flex; align-items: center; justify-content: center;
+    }
+    .header h1 .ak-sub {
+      font-size: 12px; font-weight: 400; color: var(--text-muted);
+      margin-left: 6px;
+    }
+    .header-right { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--text-muted); }
+    .tabs {
+      display: flex; gap: 0; border-bottom: 1px solid var(--border);
+      background: var(--bg-card); padding: 0 14px;
+    }
+    .tab {
+      padding: 9px 16px; font-size: 13px; cursor: pointer;
+      border-bottom: 2px solid transparent; color: var(--text-muted);
+      transition: all .15s; white-space: nowrap;
+      display: inline-flex; align-items: center; gap: 6px;
+    }
+    .tab:hover { color: var(--text); background: var(--bg-hover); }
+    .tab.active { color: var(--primary); border-bottom-color: var(--primary); font-weight: 500; }
+    .tab .ico { font-size: 14px; }
+    .content { flex: 1; min-height: 0; overflow: hidden; padding: 14px 16px; position: relative; }
+    .content > div { max-height: 100%; overflow-y: auto; }
+    /* ── Cards / forms ── */
+    .card {
+      background: var(--bg-card); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 14px; margin-bottom: 12px;
+      box-shadow: 0 1px 2px rgba(0,0,0,.04);
+    }
+    .card-title {
+      font-size: 14px; font-weight: 600; margin-bottom: 12px;
+      display: flex; align-items: center; gap: 6px;
+    }
+    .label {
+      display: flex; align-items: center; gap: 8px;
+      font-size: 13px; font-weight: 600; color: var(--text);
+      margin: 0 0 8px; line-height: 1.3;
+    }
+    .label::before {
+      content: ""; display: inline-block; width: 3px; height: 14px;
+      border-radius: 2px; background: var(--primary); flex-shrink: 0;
+    }
+    .form-row { margin-bottom: 10px; }
+    .input {
+      width: 100%; padding: 8px 12px; border: 1px solid var(--border);
+      border-radius: 6px; background: var(--bg); color: var(--text);
+      font-size: 13px; outline: none; transition: border-color .15s, box-shadow .15s;
+    }
+    .input:focus { border-color: var(--primary); box-shadow: 0 0 0 2px rgba(99,102,241,.18); }
+    .textarea { resize: vertical; min-height: 80px; font-family: inherit; }
+    .select {
+      appearance: none; padding-right: 28px;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+      background-repeat: no-repeat; background-position: right 8px center;
+    }
+    /* ── Buttons ── */
+    .btn {
+      padding: 7px 14px; border-radius: 6px; border: 1px solid var(--border);
+      background: var(--bg-card); color: var(--text);
+      font-size: 13px; cursor: pointer; transition: all .15s;
+      display: inline-flex; align-items: center; gap: 6px;
+    }
+    .btn:hover { background: var(--bg-hover); }
+    .btn-primary { background: var(--primary); color: #fff; border-color: var(--primary); }
+    .btn-primary:hover { background: var(--primary-hover); }
+    .btn-primary:disabled, .btn:disabled { opacity: .5; cursor: not-allowed; }
+    .btn-sm { padding: 4px 10px; font-size: 12px; }
+    .btn-danger { color: var(--danger); border-color: var(--danger); background: var(--bg-card); }
+    .btn-danger:hover { background: rgba(239,68,68,.08); }
+    .btn-block {
+      display: flex; align-items: center; justify-content: center; gap: 8px;
+      width: 100%; padding: 12px 16px; font-size: 14px; font-weight: 600;
+      border-radius: 8px;
+    }
+    /* ── Helpers ── */
+    .flex { display: flex; } .gap-2 { gap: 8px; } .gap-3 { gap: 12px; } .gap-4 { gap: 16px; }
+    .items-center { align-items: center; } .justify-between { justify-content: space-between; }
+    .flex-1 { flex: 1; } .flex-wrap { flex-wrap: wrap; } .flex-col { flex-direction: column; }
+    .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+    .text-sm { font-size: 13px; } .text-xs { font-size: 11px; }
+    .text-muted { color: var(--text-muted); } .text-dim { color: var(--text-dim); }
+    .text-success { color: var(--success); } .text-warning { color: var(--warning); } .text-danger { color: var(--danger); }
+    .truncate { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    /* ── Tags / badges / mode chips ── */
+    .tag { display: inline-flex; align-items: center; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 500; }
+    .tag-blue { background: rgba(99,102,241,.15); color: #818cf8; }
+    .tag-orange { background: rgba(245,158,11,.15); color: #fbbf24; }
+    .tag-green { background: rgba(34,197,94,.15); color: #4ade80; }
+    .tag-red { background: rgba(239,68,68,.15); color: #f87171; }
+    .tag-gray { background: rgba(148,163,184,.15); color: #94a3b8; }
+    /* ── Mode chip group (CreateTab top row) ── */
+    .mode-group {
+      display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px; margin-bottom: 14px;
+    }
+    .mode-chip {
+      display: flex; flex-direction: column; align-items: flex-start;
+      gap: 4px; padding: 12px 14px;
+      border: 1px solid var(--border); border-radius: 10px;
+      background: var(--bg-card); cursor: pointer; transition: .15s;
+      text-align: left; user-select: none;
+    }
+    .mode-chip:hover { border-color: var(--primary); background: var(--bg-hover); }
+    .mode-chip.active { border-color: var(--primary); box-shadow: 0 0 0 1px var(--primary) inset; background: rgba(99,102,241,.06); }
+    .mode-chip__title { font-size: 13px; font-weight: 600; color: var(--text); display: flex; align-items: center; gap: 6px; }
+    .mode-chip__desc { font-size: 11px; color: var(--text-muted); line-height: 1.35; }
+    .mode-chip__icon { font-size: 16px; color: var(--primary); }
+    /* ── File upload zone ── */
+    .upload-zone {
+      border: 2px dashed var(--border); border-radius: var(--radius);
+      padding: 18px; text-align: center; cursor: pointer; transition: .15s;
+      color: var(--text-muted); position: relative;
+    }
+    .upload-zone:hover { border-color: var(--primary); background: rgba(99,102,241,.04); }
+    .upload-zone.has-file { border-style: solid; border-color: var(--primary); }
+    .upload-zone__preview {
+      max-width: 100%; max-height: 160px;
+      border-radius: 6px; margin: 0 auto 8px;
+    }
+    .upload-zone__preview-row { display: flex; gap: 6px; flex-wrap: wrap; justify-content: center; margin-bottom: 8px; }
+    .upload-zone__preview-row img { max-height: 100px; border-radius: 6px; }
+    .upload-zone .progress { margin-top: 6px; }
+    /* ── Split layout (Create tab) ── */
+    .split-layout { display: flex; gap: 16px; height: 100%; }
+    .split-left { width: 55%; min-width: 380px; overflow-y: auto; flex-shrink: 0; padding-right: 4px; }
+    .split-right { flex: 1; overflow-y: auto; padding-left: 4px; }
+    @media (max-width: 980px) {
+      .split-layout { flex-direction: column; }
+      .split-left { width: 100%; min-width: unset; }
+    }
+    /* ── Spinner & progress ── */
+    .spinner { width: 20px; height: 20px; border: 2px solid var(--border); border-top-color: var(--primary); border-radius: 50%; animation: spin .6s linear infinite; }
+    .spinner-sm { width: 14px; height: 14px; border: 2px solid var(--border); border-top-color: var(--primary); border-radius: 50%; animation: spin .6s linear infinite; display: inline-block; vertical-align: -2px; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .progress { width: 100%; height: 6px; background: var(--border); border-radius: 3px; overflow: hidden; }
+    .progress-fill { height: 100%; background: var(--primary); border-radius: 3px; transition: width .3s; }
+    /* ── Switch ── */
+    .switch { position: relative; width: 36px; height: 20px; border-radius: 10px; background: var(--border); cursor: pointer; transition: .2s; flex-shrink: 0; }
+    .switch.on { background: var(--primary); }
+    .switch::after { content: ''; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: #fff; transition: .2s; }
+    .switch.on::after { left: 18px; }
+    .toggle-row {
+      display: flex; align-items: center; gap: 10px;
+      padding: 8px 10px; border-radius: 6px;
+      cursor: pointer; transition: background .15s; user-select: none;
+    }
+    .toggle-row:hover { background: var(--bg-hover); }
+    .toggle-row__label { font-size: 13px; color: var(--text); flex: 1; }
+    /* ── Status badges ── */
+    .badge {
+      display: inline-flex; align-items: center; gap: 4px;
+      padding: 2px 8px; border-radius: 999px;
+      font-size: 11px; font-weight: 500; line-height: 1.4;
+    }
+    .badge-pending { background: rgba(148,163,184,.15); color: #94a3b8; }
+    .badge-running { background: rgba(99,102,241,.15); color: #818cf8; }
+    .badge-done { background: rgba(34,197,94,.15); color: #4ade80; }
+    .badge-failed { background: rgba(239,68,68,.15); color: #f87171; }
+    .badge-cancelled { background: rgba(245,158,11,.15); color: #fbbf24; }
+    .badge-approval { background: rgba(245,158,11,.18); color: #fbbf24; }
+    /* ── Empty state ── */
+    .empty-state {
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      padding: 48px 20px; color: var(--text-dim); text-align: center;
+    }
+    .empty-state .ico { font-size: 48px; opacity: .5; margin-bottom: 12px; }
+    .empty-state h4 { font-size: 14px; color: var(--text-muted); margin-bottom: 6px; font-weight: 500; }
+    .empty-state p { font-size: 12px; color: var(--text-dim); }
+    /* ── Tasks table ── */
+    .ak-table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 13px; }
+    .ak-table th, .ak-table td {
+      padding: 10px 12px; text-align: left;
+      border-bottom: 1px solid var(--border); vertical-align: middle;
+    }
+    .ak-table th {
+      font-weight: 600; color: var(--text-muted); font-size: 12px;
+      background: var(--bg-card); position: sticky; top: 0; z-index: 1;
+    }
+    .ak-table tr.row { cursor: pointer; transition: background .12s; }
+    .ak-table tr.row:hover { background: var(--bg-hover); }
+    .ak-table tr.row.selected { background: rgba(99,102,241,.08); }
+    .task-thumb {
+      width: 56px; height: 36px; border-radius: 4px; background: #000;
+      overflow: hidden; flex-shrink: 0;
+    }
+    .task-thumb img, .task-thumb video { width: 100%; height: 100%; object-fit: cover; }
+    /* ── Drawer (task detail) ── */
+    .drawer {
+      position: fixed; top: 0; right: 0; width: 460px; max-width: 100vw;
+      height: 100vh; background: var(--bg-card);
+      border-left: 1px solid var(--border);
+      box-shadow: -8px 0 24px rgba(0,0,0,.08);
+      display: flex; flex-direction: column; z-index: 1500;
+      animation: slide-in-right .18s ease-out;
+    }
+    .drawer-mask {
+      position: fixed; inset: 0; background: rgba(0,0,0,.25);
+      z-index: 1400; animation: fade-in .15s ease-out;
+    }
+    .drawer-head {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 12px 16px; border-bottom: 1px solid var(--border);
+    }
+    .drawer-body { flex: 1; overflow-y: auto; padding: 14px 16px; }
+    @keyframes slide-in-right { from { transform: translateX(100%); } to { transform: translateX(0); } }
+    @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+    /* ── Modal (cost exceed / task started) ── */
+    .modal-mask {
+      position: fixed; inset: 0; background: rgba(0,0,0,.5);
+      display: flex; align-items: center; justify-content: center;
+      z-index: 2000; padding: 20px; animation: fade-in .15s ease-out;
+    }
+    .modal-card {
+      background: var(--bg-card); border-radius: 12px;
+      padding: 22px 24px; max-width: 480px; width: 100%;
+      box-shadow: 0 20px 50px rgba(0,0,0,.25);
+      animation: scale-in .18s ease-out; max-height: 90vh; overflow-y: auto;
+    }
+    .modal-icon {
+      width: 42px; height: 42px; border-radius: 50%;
+      background: rgba(34,197,94,.12); color: var(--success);
+      display: flex; align-items: center; justify-content: center;
+      margin-bottom: 14px; font-size: 22px;
+    }
+    .modal-icon.warn { background: rgba(245,158,11,.15); color: var(--warning); }
+    .modal-title { font-size: 16px; font-weight: 600; margin-bottom: 6px; color: var(--text); }
+    .modal-desc { font-size: 13px; color: var(--text-muted); line-height: 1.6; margin-bottom: 14px; }
+    .modal-actions { display: flex; gap: 8px; justify-content: flex-end; }
+    @keyframes scale-in { from { transform: scale(.94); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+    /* ── Cost breakdown table ── */
+    .cost-table { width: 100%; font-size: 12px; border-collapse: collapse; }
+    .cost-table th, .cost-table td { padding: 6px 8px; text-align: right; border-bottom: 1px solid var(--border); }
+    .cost-table th:first-child, .cost-table td:first-child { text-align: left; }
+    .cost-table tr.total td { font-weight: 600; color: var(--primary); border-bottom: none; padding-top: 10px; }
+    /* ── Error panel ── */
+    .err-panel {
+      border: 1px solid rgba(239,68,68,.3); background: rgba(239,68,68,.06);
+      border-radius: 6px; padding: 10px 12px;
+    }
+    .err-panel__title { font-size: 13px; font-weight: 600; color: var(--danger); display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
+    .err-panel__msg { font-size: 12px; color: var(--text); margin-bottom: 6px; word-break: break-word; }
+    .err-panel ul { font-size: 12px; color: var(--text-muted); padding-left: 18px; }
+    .err-panel ul li { margin-bottom: 2px; }
+    /* ── API key pill ── */
+    .api-pill {
+      display: inline-flex; align-items: center; gap: 4px;
+      padding: 3px 10px; border-radius: 999px;
+      font-size: 12px; font-weight: 500;
+      background: rgba(34,197,94,.12); color: var(--success);
+      cursor: default;
+    }
+    .api-pill--missing {
+      background: rgba(245,158,11,.15); color: var(--warning); cursor: pointer;
+    }
+    .api-pill--missing:hover { filter: brightness(0.95); }
+    /* ── Collapsible ── */
+    .coll {
+      border: 1px solid var(--border); border-radius: 6px;
+      margin-bottom: 10px; overflow: hidden;
+    }
+    .coll-head {
+      padding: 8px 12px; cursor: pointer; display: flex; align-items: center;
+      justify-content: space-between; font-size: 13px; font-weight: 500;
+      background: var(--bg-card); user-select: none;
+    }
+    .coll-head:hover { background: var(--bg-hover); }
+    .coll-body { padding: 10px 12px; border-top: 1px solid var(--border); }
+    /* ── Settings sections ── */
+    .setting-section { margin-bottom: 22px; }
+    .setting-section h3 { font-size: 14px; font-weight: 600; margin-bottom: 10px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+    /* ── Voice / figure cards ── */
+    .lib-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; }
+    .lib-card {
+      border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px;
+      background: var(--bg-card); display: flex; flex-direction: column; gap: 6px;
+      transition: border-color .15s;
+    }
+    .lib-card:hover { border-color: var(--primary); }
+    .lib-card__head { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
+    .lib-card__title { font-size: 13px; font-weight: 600; }
+    .lib-card__sub { font-size: 11px; color: var(--text-muted); }
+    .lib-card__media { display: flex; align-items: center; gap: 6px; }
+    .lib-card__media audio { height: 28px; flex: 1; min-width: 0; }
+    .lib-card img.fig-thumb {
+      width: 100%; aspect-ratio: 1/1; object-fit: cover; border-radius: 6px; background: #000;
+    }
+    /* ── Toast (fallback when not in iframe) ── */
+    .ak-toast-stack { position: fixed; right: 20px; bottom: 20px; z-index: 3000; display: flex; flex-direction: column; gap: 8px; }
+    .ak-toast {
+      background: var(--bg-card); color: var(--text);
+      border: 1px solid var(--border); border-radius: 6px;
+      padding: 10px 14px; font-size: 13px; box-shadow: 0 4px 12px rgba(0,0,0,.1);
+      max-width: 320px;
+    }
+    .ak-toast.error { border-color: var(--danger); color: var(--danger); }
+    .ak-toast.warn { border-color: var(--warning); color: var(--warning); }
+    /* ── Misc ── */
+    .ico {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 1em; height: 1em; vertical-align: -0.125em; flex-shrink: 0;
+    }
+    .ico svg { width: 100%; height: 100%; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+    .divider { height: 1px; background: var(--border); margin: 12px 0; }
+    .kbd { font-family: monospace; font-size: 11px; padding: 1px 5px; border: 1px solid var(--border); border-radius: 3px; background: var(--bg-hover); }
+    code.inline { font-family: monospace; font-size: 12px; padding: 1px 4px; background: var(--bg-hover); border-radius: 3px; }
+  </style>
+</head>
+<body>
+<div id="root"></div>
+
+<!-- ─────────────────────────────────────────────────────────────────────
+     BRIDGE LAYER (vanilla JS, runs before React boots)
+     1:1 ported from seedance-video / tongyi-image with the only
+     difference being the plugin id default. Keep the API surface
+     stable so the React layer never needs the iframe-vs-direct fork.
+     ───────────────────────────────────────────────────────────────────── -->
+<script>
+const PLUGIN_ID_DEFAULT = "avatar-studio";
+const BRIDGE_VER = 1;
+let _ctx = null, _caps = [], _pending = {}, _handlers = {};
+let _bridgeConnected = false;
+const _inIframe = window.parent !== window;
+function uid() { return Math.random().toString(36).slice(2, 10) + Date.now().toString(36); }
+function post(msg) {
+  if (_inIframe) window.parent.postMessage({ __akita_bridge: true, version: BRIDGE_VER, ...msg }, "*");
+}
+function _detectApiBase() {
+  if (_ctx && _ctx.apiBase) return _ctx.apiBase;
+  const loc = window.location;
+  if (loc.port === "5173" || loc.port === "1420") return "http://127.0.0.1:18900";
+  return loc.origin;
+}
+function directFetch(method, path, body) {
+  const url = path.startsWith("http") ? path : _detectApiBase() + path;
+  const opts = { method, headers: { "Content-Type": "application/json" } };
+  if (body && method !== "GET" && method !== "HEAD") {
+    if (body instanceof FormData) { opts.body = body; delete opts.headers["Content-Type"]; }
+    else { opts.body = JSON.stringify(body); }
+  }
+  return fetch(url, opts).then(function (resp) {
+    return resp.json().then(function (json) {
+      return { ok: resp.ok, status: resp.status, body: json };
+    }).catch(function () { return { ok: resp.ok, status: resp.status, body: null }; });
+  });
+}
+function apiCall(method, path, body) {
+  if (!_inIframe || !_bridgeConnected) return directFetch(method, path, body);
+  return new Promise(function (resolve, reject) {
+    const id = uid();
+    _pending[id] = { resolve, reject };
+    post({ type: "bridge:api-request", requestId: id, payload: { method, path, body } });
+    setTimeout(function () {
+      if (_pending[id]) {
+        delete _pending[id];
+        directFetch(method, path, body).then(resolve).catch(reject);
+      }
+    }, 5000);
+  });
+}
+function pluginApi(method, path, body) {
+  const base = "/api/plugins/" + ((_ctx && _ctx.pluginId) || PLUGIN_ID_DEFAULT);
+  return apiCall(method, base + path, body);
+}
+window.addEventListener("message", function (e) {
+  const d = e.data;
+  if (!d || !d.__akita_bridge) return;
+  if (d.type === "bridge:init" && d.payload) {
+    _ctx = d.payload;
+    _bridgeConnected = true;
+    if (_ctx.theme) {
+      document.documentElement.setAttribute("data-theme", _ctx.theme.includes("dark") ? "dark" : "light");
+    }
+  }
+  if (d.type === "bridge:handshake-ack" && d.payload) {
+    _caps = d.payload.capabilities || [];
+    _bridgeConnected = true;
+  }
+  const _ackTypes = [
+    "bridge:api-response", "bridge:clipboard-ack", "bridge:download-ack",
+    "bridge:show-in-folder-ack", "bridge:pick-folder-ack",
+  ];
+  if (_ackTypes.indexOf(d.type) !== -1 && d.requestId && _pending[d.requestId]) {
+    _pending[d.requestId].resolve(d.payload);
+    delete _pending[d.requestId];
+  }
+  if (d.type === "bridge:theme-change" && d.payload) {
+    document.documentElement.setAttribute("data-theme", (d.payload.theme || "").includes("dark") ? "dark" : "light");
+  }
+  if (d.type === "bridge:event" && d.payload) {
+    const h = _handlers[d.payload.eventType];
+    if (h) h.forEach(function (fn) { fn(d.payload.data); });
+  }
+});
+let _readyInterval = null;
+function _sendReady() {
+  post({ type: "bridge:ready" });
+  post({ type: "bridge:handshake", payload: { sdkVersion: "1.0.0" } });
+}
+_sendReady();
+if (_inIframe) {
+  _readyInterval = setInterval(function () {
+    if (_bridgeConnected) { clearInterval(_readyInterval); return; }
+    _sendReady();
+  }, 300);
+  setTimeout(function () { if (_readyInterval) clearInterval(_readyInterval); }, 20000);
+}
+function onEvent(type, fn) { (_handlers[type] = _handlers[type] || []).push(fn); }
+function uploadFile(file, kind) {
+  const base = _detectApiBase() + "/api/plugins/" + ((_ctx && _ctx.pluginId) || PLUGIN_ID_DEFAULT);
+  const fd = new FormData();
+  fd.append("file", file);
+  if (kind) fd.append("kind", kind);
+  return fetch(base + "/upload", { method: "POST", body: fd }).then(function (r) { return r.json(); });
+}
+function showToast(body, type) {
+  type = type || "success";
+  if (_inIframe && _bridgeConnected) {
+    post({ type: "bridge:notification", payload: { title: "", body, type } });
+    return;
+  }
+  // Local fallback toast
+  let stack = document.querySelector(".ak-toast-stack");
+  if (!stack) {
+    stack = document.createElement("div");
+    stack.className = "ak-toast-stack";
+    document.body.appendChild(stack);
+  }
+  const t = document.createElement("div");
+  t.className = "ak-toast " + (type === "error" ? "error" : type === "warn" ? "warn" : "");
+  t.textContent = body;
+  stack.appendChild(t);
+  setTimeout(function () { t.remove(); }, 4000);
+}
+function downloadFile(url, filename) {
+  const resolved = url.startsWith("http") ? url : _detectApiBase() + url;
+  const fname = filename || "download";
+  if (_inIframe && _bridgeConnected) {
+    const id = uid();
+    _pending[id] = {
+      resolve: function (p) {
+        if (p && p.ok) showToast(p.path ? "已保存：" + p.path : "已开始下载", "success");
+        else showToast("下载失败：" + ((p && p.error) || "unknown"), "error");
+      },
+      reject: function (err) { showToast("下载失败：" + err, "error"); },
+    };
+    post({ type: "bridge:download", requestId: id, payload: { url: resolved, filename: fname } });
+    return;
+  }
+  const a = document.createElement("a");
+  a.href = resolved; a.download = fname; a.style.display = "none";
+  document.body.appendChild(a); a.click();
+  setTimeout(function () { document.body.removeChild(a); }, 300);
+}
+function copyToClipboard(text) {
+  if (_inIframe && _bridgeConnected) {
+    const id = uid();
+    _pending[id] = { resolve: function () { showToast("已复制"); }, reject: function () {} };
+    post({ type: "bridge:clipboard", requestId: id, payload: { text } });
+    return;
+  }
+  if (navigator.clipboard) navigator.clipboard.writeText(text).then(function () { showToast("已复制"); });
+}
+window.__bridge = {
+  apiCall, pluginApi, onEvent, uploadFile, downloadFile, showToast, copyToClipboard,
+  getCtx: function () { return _ctx; },
+};
+</script>
+
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+<!-- ─────────────────────────────────────────────────────────────────────
+     REACT BUSINESS LAYER (single Babel-compiled script)
+     ───────────────────────────────────────────────────────────────────── -->
+<script type="text/babel" data-type="module">
+const { useState, useEffect, useCallback, useMemo, useRef } = React;
+const { pluginApi, onEvent, uploadFile, downloadFile, showToast, copyToClipboard } = window.__bridge;
+
+/* ─── i18n dictionary (zh / en) ─────────────────────────────────────── */
+const I18N_DICT = {
+  zh: {
+    "app.title": "数字人工作室",
+    "app.subtitle": "DashScope · wan2.2-s2v / videoretalk / animate-mix / cosyvoice-v2",
+    "app.api.label": "API Key",
+    "app.api.tooltip": "未配置百炼 API Key — 点此前往设置",
+    "app.api.missing": "未配置 API Key",
+    "tabs.create": "创建",
+    "tabs.tasks": "任务",
+    "tabs.voices": "音色库",
+    "tabs.figures": "形象库",
+    "tabs.settings": "设置",
+    "banner.noKey.title": "尚未配置 DashScope API Key",
+    "banner.noKey.desc": "请到「设置」中填写百炼 API Key 后再提交任务。",
+    "banner.noKey.cta": "去设置",
+    "create.mode.photo_speak": "照片说话",
+    "create.mode.photo_speak.desc": "1 张人像照 + 文本/音频 → 开口讲话视频",
+    "create.mode.video_relip": "视频换嘴",
+    "create.mode.video_relip.desc": "原视频保留动作，仅同步嘴型到新音频",
+    "create.mode.video_reface": "视频换人",
+    "create.mode.video_reface.desc": "保留场景与动作，把视频里的主角换成新人物",
+    "create.mode.avatar_compose": "数字人合成",
+    "create.mode.avatar_compose.desc": "多图融合生成新形象，再生成口播视频",
+    "create.section.image": "人像 / 主体图",
+    "create.section.video": "参考视频",
+    "create.section.refImage": "参考人物图",
+    "create.section.composeImages": "合成参考图（最多 3 张）",
+    "create.section.text": "口播文本与音色",
+    "create.section.params": "输出参数",
+    "create.section.advanced": "高级",
+    "create.assets.upload": "拖入文件或点击上传",
+    "create.assets.fromLib": "从形象库选择",
+    "create.assets.replace": "重新选择",
+    "create.assets.optional": "可选",
+    "create.text.placeholder": "输入要合成的口播文本（支持中英文混合，建议 ≤ 1000 字）",
+    "create.text.voice": "音色",
+    "create.text.audioUpload": "或上传现成音频（mp3/wav，覆盖 TTS）",
+    "create.text.charCount": "{n} 字",
+    "create.params.resolution": "分辨率",
+    "create.params.aspect": "画面比例",
+    "create.params.duration": "时长（秒）",
+    "create.params.durationHint": "未上传音频时按此估算费用；上传/TTS 后以音频时长为准",
+    "create.params.qualityMode": "质量模式",
+    "create.params.qualityStd": "标准（0.60 元/秒）",
+    "create.params.qualityPro": "专业（1.20 元/秒，更精细）",
+    "create.params.composeSize": "合成图尺寸",
+    "create.params.composeSizeAuto": "随最后一张参考图",
+    "create.advanced.watermark": "添加 DashScope 水印",
+    "create.advanced.seed": "随机种子（-1 = 自动）",
+    "create.advanced.composePrompt": "融合 Prompt（必填）",
+    "create.advanced.composePrompt.placeholder": "例如：把第二张图的服饰穿到第一张人物身上，背景换成第三张的咖啡馆",
+    "create.advanced.aiPrompt": "用 qwen-vl-max 帮我写",
+    "create.submit": "提交任务",
+    "create.submit.preflight": "正在估算费用...",
+    "create.draft.saved": "草稿已自动保存",
+    "create.draft.cleared": "草稿已清空",
+    "create.draft.clear": "清空表单",
+    "preview.empty.title": "暂无任务",
+    "preview.empty.desc": "在左侧填写参数后点击「提交任务」",
+    "preview.queued": "已加入队列",
+    "preview.processing": "处理中... {pct}%",
+    "preview.gotoTasks": "查看任务详情",
+    "tasks.filter.all": "全部",
+    "tasks.filter.pending": "排队中",
+    "tasks.filter.running": "处理中",
+    "tasks.filter.done": "已完成",
+    "tasks.filter.failed": "失败",
+    "tasks.filter.cancelled": "已取消",
+    "tasks.col.mode": "模式",
+    "tasks.col.id": "任务 ID",
+    "tasks.col.status": "状态",
+    "tasks.col.created": "创建时间",
+    "tasks.col.cost": "费用",
+    "tasks.col.actions": "操作",
+    "tasks.action.cancel": "取消",
+    "tasks.action.retry": "重试",
+    "tasks.action.download": "下载",
+    "tasks.action.delete": "删除",
+    "tasks.empty": "暂无任务",
+    "tasks.empty.hint": "在「创建」页提交第一个任务吧",
+    "tasks.detail.title": "任务详情",
+    "tasks.detail.params": "参数",
+    "tasks.detail.cost": "费用明细",
+    "tasks.detail.metadata": "元数据 JSON",
+    "tasks.detail.error": "错误信息",
+    "tasks.detail.copyId": "复制任务 ID",
+    "voices.system": "系统音色",
+    "voices.custom": "自定义音色",
+    "voices.create": "克隆新音色",
+    "voices.create.label": "音色名称",
+    "voices.create.audio": "参考音频（mp3/wav，5-30 秒最佳）",
+    "voices.create.submit": "提交克隆",
+    "voices.empty.custom": "暂无自定义音色，上传一段录音即可克隆",
+    "voices.delete.confirm": "确认删除该自定义音色？",
+    "figures.title": "形象库",
+    "figures.upload": "上传新形象",
+    "figures.upload.label": "形象名称",
+    "figures.upload.image": "人像图（png/jpg，单人正面）",
+    "figures.upload.submit": "上传并预检",
+    "figures.empty": "形象库为空，上传一张正面人像图开始",
+    "figures.detect.pending": "等待预检",
+    "figures.detect.pass": "可用",
+    "figures.detect.fail": "预检未通过",
+    "figures.detect.hint": "请确保是真人正面照，无水印、无遮挡",
+    "figures.delete.confirm": "确认删除该形象？",
+    "settings.section.api": "API Key",
+    "settings.section.defaults": "默认偏好",
+    "settings.section.storage": "存储与清理",
+    "settings.section.advanced": "高级",
+    "settings.section.about": "关于",
+    "settings.api.placeholder": "sk-xxxxxxxxxxxxxxxx",
+    "settings.api.test": "测试连接",
+    "settings.api.test.ok": "API Key 有效",
+    "settings.api.test.fail": "API Key 无效：{msg}",
+    "settings.api.region": "服务地域",
+    "settings.api.region.bj": "北京 (默认)",
+    "settings.api.region.sg": "新加坡",
+    "settings.defaults.resolution": "默认分辨率",
+    "settings.defaults.voice": "默认音色",
+    "settings.defaults.threshold": "成本确认阈值（元）",
+    "settings.defaults.thresholdHint": "单次任务超过此金额时弹窗确认",
+    "settings.storage.dir": "数据目录",
+    "settings.storage.usage": "当前占用：{n}",
+    "settings.storage.cleanup": "清理 {n} 天前的过期任务",
+    "settings.storage.cleanup.btn": "立即清理",
+    "settings.advanced.timeout": "DashScope 请求超时（秒）",
+    "settings.advanced.maxRetry": "最大重试次数",
+    "settings.about.version": "版本",
+    "settings.about.docs": "插件文档",
+    "settings.about.feedback": "反馈问题",
+    "settings.save": "保存设置",
+    "settings.save.ok": "设置已保存",
+    "cost.title": "费用预估",
+    "cost.col.item": "项目",
+    "cost.col.units": "用量",
+    "cost.col.unit": "单价",
+    "cost.col.subtotal": "小计",
+    "cost.total": "合计",
+    "cost.exceed.title": "费用超过确认阈值",
+    "cost.exceed.desc": "本次任务预估 {total}，已超过你设置的阈值 {threshold}。是否继续提交？",
+    "cost.exceed.confirm": "确认提交",
+    "cost.exceed.cancel": "再想想",
+    "started.title": "任务已提交",
+    "started.desc": "任务正在 DashScope 队列中处理，可在「任务」标签页查看进度。",
+    "started.gotoTasks": "查看任务",
+    "started.stay": "继续创建",
+    "common.confirm": "确定",
+    "common.cancel": "取消",
+    "common.delete": "删除",
+    "common.save": "保存",
+    "common.close": "关闭",
+    "common.refresh": "刷新",
+    "common.copy": "复制",
+    "common.upload": "上传",
+    "common.optional": "（可选）",
+    "common.required": "（必填）",
+    "err.network": "网络错误",
+    "err.timeout": "请求超时",
+    "err.rate_limit": "请求过于频繁",
+    "err.auth": "API Key 无效",
+    "err.not_found": "资源不存在",
+    "err.moderation": "内容审核未通过",
+    "err.quota": "余额不足或配额超限",
+    "err.dependency": "输入素材不符合要求",
+    "err.unknown": "未知错误",
+    "err.title": "插件渲染出错",
+    "err.retry": "重试",
+    "err.stackLabel": "技术细节（堆栈）",
+  },
+  en: {
+    "app.title": "Avatar Studio",
+    "app.subtitle": "DashScope · wan2.2-s2v / videoretalk / animate-mix / cosyvoice-v2",
+    "app.api.label": "API Key",
+    "app.api.tooltip": "DashScope API Key not configured — click to open Settings",
+    "app.api.missing": "API Key missing",
+    "tabs.create": "Create",
+    "tabs.tasks": "Tasks",
+    "tabs.voices": "Voices",
+    "tabs.figures": "Figures",
+    "tabs.settings": "Settings",
+    "banner.noKey.title": "DashScope API Key not configured",
+    "banner.noKey.desc": "Add your Bailian API Key under Settings before submitting tasks.",
+    "banner.noKey.cta": "Open Settings",
+    "create.mode.photo_speak": "Photo Speak",
+    "create.mode.photo_speak.desc": "1 portrait + text/audio → talking video",
+    "create.mode.video_relip": "Video Re-lip",
+    "create.mode.video_relip.desc": "Keep original motion, sync lips to new audio",
+    "create.mode.video_reface": "Video Reface",
+    "create.mode.video_reface.desc": "Replace the actor while preserving scene & action",
+    "create.mode.avatar_compose": "Avatar Compose",
+    "create.mode.avatar_compose.desc": "Blend multiple references into a new figure, then synthesise speech",
+    "create.section.image": "Portrait / subject image",
+    "create.section.video": "Reference video",
+    "create.section.refImage": "Character image",
+    "create.section.composeImages": "Reference images (up to 3)",
+    "create.section.text": "Speech text & voice",
+    "create.section.params": "Output parameters",
+    "create.section.advanced": "Advanced",
+    "create.assets.upload": "Drop file here or click to upload",
+    "create.assets.fromLib": "Pick from library",
+    "create.assets.replace": "Replace",
+    "create.assets.optional": "Optional",
+    "create.text.placeholder": "Type the speech text (CN/EN mixed OK, ≤ 1000 chars recommended)",
+    "create.text.voice": "Voice",
+    "create.text.audioUpload": "Or upload an existing audio file (overrides TTS)",
+    "create.text.charCount": "{n} chars",
+    "create.params.resolution": "Resolution",
+    "create.params.aspect": "Aspect ratio",
+    "create.params.duration": "Duration (sec)",
+    "create.params.durationHint": "Used to estimate cost when no audio is uploaded; otherwise audio length wins",
+    "create.params.qualityMode": "Quality mode",
+    "create.params.qualityStd": "Standard (¥0.60 / sec)",
+    "create.params.qualityPro": "Pro (¥1.20 / sec, finer detail)",
+    "create.params.composeSize": "Compose size",
+    "create.params.composeSizeAuto": "Match last reference image",
+    "create.advanced.watermark": "Add DashScope watermark",
+    "create.advanced.seed": "Random seed (-1 = auto)",
+    "create.advanced.composePrompt": "Compose prompt (required)",
+    "create.advanced.composePrompt.placeholder": "e.g. dress the person in image #1 with the outfit from image #2 in the cafe from image #3",
+    "create.advanced.aiPrompt": "Let qwen-vl-max draft it",
+    "create.submit": "Submit task",
+    "create.submit.preflight": "Estimating cost...",
+    "create.draft.saved": "Draft auto-saved",
+    "create.draft.cleared": "Draft cleared",
+    "create.draft.clear": "Clear form",
+    "preview.empty.title": "No active task",
+    "preview.empty.desc": "Fill out the left panel and hit Submit",
+    "preview.queued": "Queued",
+    "preview.processing": "Processing... {pct}%",
+    "preview.gotoTasks": "Open task details",
+    "tasks.filter.all": "All",
+    "tasks.filter.pending": "Queued",
+    "tasks.filter.running": "Running",
+    "tasks.filter.done": "Done",
+    "tasks.filter.failed": "Failed",
+    "tasks.filter.cancelled": "Cancelled",
+    "tasks.col.mode": "Mode",
+    "tasks.col.id": "Task ID",
+    "tasks.col.status": "Status",
+    "tasks.col.created": "Created",
+    "tasks.col.cost": "Cost",
+    "tasks.col.actions": "Actions",
+    "tasks.action.cancel": "Cancel",
+    "tasks.action.retry": "Retry",
+    "tasks.action.download": "Download",
+    "tasks.action.delete": "Delete",
+    "tasks.empty": "No tasks yet",
+    "tasks.empty.hint": "Submit your first task from the Create tab",
+    "tasks.detail.title": "Task details",
+    "tasks.detail.params": "Parameters",
+    "tasks.detail.cost": "Cost breakdown",
+    "tasks.detail.metadata": "Metadata JSON",
+    "tasks.detail.error": "Error",
+    "tasks.detail.copyId": "Copy task id",
+    "voices.system": "System voices",
+    "voices.custom": "Custom voices",
+    "voices.create": "Clone a new voice",
+    "voices.create.label": "Voice label",
+    "voices.create.audio": "Reference audio (mp3/wav, 5–30s ideal)",
+    "voices.create.submit": "Submit clone",
+    "voices.empty.custom": "No custom voices yet — upload a sample to clone one",
+    "voices.delete.confirm": "Delete this custom voice?",
+    "figures.title": "Figure library",
+    "figures.upload": "Add a figure",
+    "figures.upload.label": "Figure label",
+    "figures.upload.image": "Portrait (png/jpg, frontal single person)",
+    "figures.upload.submit": "Upload & pre-check",
+    "figures.empty": "Figure library is empty — add a frontal portrait to start",
+    "figures.detect.pending": "Awaiting pre-check",
+    "figures.detect.pass": "Ready",
+    "figures.detect.fail": "Pre-check failed",
+    "figures.detect.hint": "Use a clear frontal photo, no watermark, no occlusion",
+    "figures.delete.confirm": "Delete this figure?",
+    "settings.section.api": "API Key",
+    "settings.section.defaults": "Defaults",
+    "settings.section.storage": "Storage & cleanup",
+    "settings.section.advanced": "Advanced",
+    "settings.section.about": "About",
+    "settings.api.placeholder": "sk-xxxxxxxxxxxxxxxx",
+    "settings.api.test": "Test connection",
+    "settings.api.test.ok": "API Key works",
+    "settings.api.test.fail": "API Key invalid: {msg}",
+    "settings.api.region": "Region",
+    "settings.api.region.bj": "Beijing (default)",
+    "settings.api.region.sg": "Singapore",
+    "settings.defaults.resolution": "Default resolution",
+    "settings.defaults.voice": "Default voice",
+    "settings.defaults.threshold": "Cost confirm threshold (¥)",
+    "settings.defaults.thresholdHint": "Show a confirmation modal when a single task exceeds this amount",
+    "settings.storage.dir": "Data directory",
+    "settings.storage.usage": "Current usage: {n}",
+    "settings.storage.cleanup": "Remove tasks older than {n} days",
+    "settings.storage.cleanup.btn": "Clean up now",
+    "settings.advanced.timeout": "DashScope request timeout (s)",
+    "settings.advanced.maxRetry": "Max retries",
+    "settings.about.version": "Version",
+    "settings.about.docs": "Docs",
+    "settings.about.feedback": "Report an issue",
+    "settings.save": "Save settings",
+    "settings.save.ok": "Settings saved",
+    "cost.title": "Cost preview",
+    "cost.col.item": "Item",
+    "cost.col.units": "Units",
+    "cost.col.unit": "Unit price",
+    "cost.col.subtotal": "Subtotal",
+    "cost.total": "Total",
+    "cost.exceed.title": "Cost exceeds your threshold",
+    "cost.exceed.desc": "Estimated {total}, above your threshold of {threshold}. Continue?",
+    "cost.exceed.confirm": "Submit anyway",
+    "cost.exceed.cancel": "Re-think",
+    "started.title": "Task submitted",
+    "started.desc": "Your task is queued in DashScope; track progress under Tasks.",
+    "started.gotoTasks": "Open Tasks",
+    "started.stay": "Stay & create more",
+    "common.confirm": "Confirm",
+    "common.cancel": "Cancel",
+    "common.delete": "Delete",
+    "common.save": "Save",
+    "common.close": "Close",
+    "common.refresh": "Refresh",
+    "common.copy": "Copy",
+    "common.upload": "Upload",
+    "common.optional": " (optional)",
+    "common.required": " (required)",
+    "err.network": "Network error",
+    "err.timeout": "Timed out",
+    "err.rate_limit": "Rate limited",
+    "err.auth": "Invalid API Key",
+    "err.not_found": "Resource not found",
+    "err.moderation": "Blocked by content moderation",
+    "err.quota": "Quota exceeded / balance too low",
+    "err.dependency": "Input asset does not satisfy DashScope requirements",
+    "err.unknown": "Unknown error",
+    "err.title": "Plugin render error",
+    "err.retry": "Retry",
+    "err.stackLabel": "Technical details (stack trace)",
+  },
+};
+
+const _i18n = (function () {
+  if (window.OpenAkitaI18n && typeof window.OpenAkitaI18n.register === "function") {
+    window.OpenAkitaI18n.register(I18N_DICT);
+  }
+  let loc = (window.OpenAkitaI18n && window.OpenAkitaI18n.getLocale && window.OpenAkitaI18n.getLocale()) || "zh";
+  const subs = new Set();
+  return {
+    t: function (k, vars) {
+      const base = (loc || "zh").split(/[-_]/)[0];
+      let tpl = (I18N_DICT[loc] && I18N_DICT[loc][k])
+        || (I18N_DICT[base] && I18N_DICT[base][k])
+        || (I18N_DICT.en && I18N_DICT.en[k])
+        || k;
+      if (vars) {
+        tpl = String(tpl).replace(/\{(\w+)\}/g, function (_m, n) {
+          return vars[n] != null ? String(vars[n]) : "{" + n + "}";
+        });
+      }
+      return tpl;
+    },
+    setLocale: function (l) { loc = l; subs.forEach(function (fn) { fn(l); }); },
+    getLocale: function () { return loc; },
+    subscribe: function (fn) { subs.add(fn); return function () { subs.delete(fn); }; },
+  };
+})();
+function useT() { return _i18n.t.bind(_i18n); }
+function _tr(k, vars) { return _i18n.t(k, vars); }
+
+/* ─── Misc helpers ─────────────────────────────────────────────────── */
+function formatBytes(n) {
+  if (!n || n < 0) return "0 B";
+  const u = ["B", "KB", "MB", "GB"]; let i = 0; let v = n;
+  while (v >= 1024 && i < u.length - 1) { v /= 1024; i += 1; }
+  return v.toFixed(v >= 10 || i === 0 ? 0 : 1) + " " + u[i];
+}
+function formatDuration(s) {
+  if (s == null) return "—";
+  const m = Math.floor(s / 60); const r = Math.round(s % 60);
+  return m > 0 ? m + "m" + r + "s" : r + "s";
+}
+function formatTime(ts) {
+  if (!ts) return "—";
+  const d = new Date(ts * 1000);
+  const pad = function (n) { return n < 10 ? "0" + n : "" + n; };
+  return d.getMonth() + 1 + "/" + d.getDate() + " " + pad(d.getHours()) + ":" + pad(d.getMinutes());
+}
+function shortId(s) { return s ? s.slice(0, 8) : ""; }
+
+const DRAFT_PREFIX = "avatar-studio:draft:";
+function loadDraft(key) {
+  try { const v = localStorage.getItem(DRAFT_PREFIX + key); return v ? JSON.parse(v) : null; }
+  catch (_) { return null; }
+}
+function saveDraft(key, value) {
+  try { localStorage.setItem(DRAFT_PREFIX + key, JSON.stringify(value)); }
+  catch (_) {}
+}
+function clearDraft(key) {
+  try { localStorage.removeItem(DRAFT_PREFIX + key); }
+  catch (_) {}
+}
+function useDraft(key, initial) {
+  const [v, setV] = useState(function () { return loadDraft(key) || initial; });
+  useEffect(function () {
+    const id = setTimeout(function () { saveDraft(key, v); }, 400);
+    return function () { clearTimeout(id); };
+  }, [key, v]);
+  return [v, setV, function () { clearDraft(key); setV(initial); }];
+}
+
+/* ─── Tiny <Ico> component ────────────────────────────────────────── */
+const ICONS = {
+  video: '<polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2"/>',
+  list: '<line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/>',
+  mic: '<path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/>',
+  user: '<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>',
+  cog: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>',
+  upload: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>',
+  download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>',
+  trash: '<polyline points="3 6 5 6 21 6"/><path d="M19 6l-2 14a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/>',
+  refresh: '<polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10"/><path d="M20.49 15a9 9 0 0 1-14.85 3.36L1 14"/>',
+  close: '<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>',
+  check: '<polyline points="20 6 9 17 4 12"/>',
+  warn: '<path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>',
+  info: '<circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/>',
+  copy: '<rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>',
+  play: '<polygon points="5 3 19 12 5 21 5 3"/>',
+  image: '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/>',
+  film: '<rect x="2" y="2" width="20" height="20" rx="2.18"/><line x1="7" y1="2" x2="7" y2="22"/><line x1="17" y1="2" x2="17" y2="22"/><line x1="2" y1="12" x2="22" y2="12"/><line x1="2" y1="7" x2="7" y2="7"/><line x1="2" y1="17" x2="7" y2="17"/><line x1="17" y1="17" x2="22" y2="17"/><line x1="17" y1="7" x2="22" y2="7"/>',
+  swap: '<polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/>',
+  layers: '<polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/>',
+  plus: '<line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>',
+  cancel: '<circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/>',
+  loader: '<line x1="12" y1="2" x2="12" y2="6"/><line x1="12" y1="18" x2="12" y2="22"/><line x1="4.93" y1="4.93" x2="7.76" y2="7.76"/><line x1="16.24" y1="16.24" x2="19.07" y2="19.07"/><line x1="2" y1="12" x2="6" y2="12"/><line x1="18" y1="12" x2="22" y2="12"/><line x1="4.93" y1="19.07" x2="7.76" y2="16.24"/><line x1="16.24" y1="7.76" x2="19.07" y2="4.93"/>',
+};
+function Ico(props) {
+  const svg = ICONS[props.name] || "";
+  return (
+    <span className={"ico " + (props.cls || "")} aria-hidden="true"
+          dangerouslySetInnerHTML={{ __html: '<svg viewBox="0 0 24 24">' + svg + '</svg>' }} />
+  );
+}
+
+/* ─── Common UI atoms ─────────────────────────────────────────────── */
+function Switch({ on, onChange, disabled }) {
+  return (
+    <span className={"switch " + (on ? "on" : "")}
+          onClick={function () { if (!disabled && onChange) onChange(!on); }}
+          role="switch" aria-checked={!!on} />
+  );
+}
+
+function Collapsible({ title, defaultOpen, children }) {
+  const [open, setOpen] = useState(!!defaultOpen);
+  return (
+    <div className="coll">
+      <div className="coll-head" onClick={function () { setOpen(!open); }}>
+        <span>{title}</span>
+        <Ico name={open ? "close" : "plus"} />
+      </div>
+      {open && <div className="coll-body">{children}</div>}
+    </div>
+  );
+}
+
+function StatusBadge({ status }) {
+  const t = useT();
+  const map = {
+    pending: { cls: "badge-pending", label: t("tasks.filter.pending") },
+    running: { cls: "badge-running", label: t("tasks.filter.running") },
+    done: { cls: "badge-done", label: t("tasks.filter.done") },
+    failed: { cls: "badge-failed", label: t("tasks.filter.failed") },
+    cancelled: { cls: "badge-cancelled", label: t("tasks.filter.cancelled") },
+    approval_required: { cls: "badge-approval", label: "待确认" },
+  };
+  const m = map[status] || { cls: "badge-pending", label: status || "—" };
+  return <span className={"badge " + m.cls}>{m.label}</span>;
+}
+
+function EmptyState({ icon, title, hint }) {
+  return (
+    <div className="empty-state">
+      <Ico name={icon || "info"} />
+      <h4>{title}</h4>
+      {hint && <p>{hint}</p>}
+    </div>
+  );
+}
+
+function ErrorPanel({ kind, message, hints }) {
+  const t = useT();
+  const label = t("err." + (kind || "unknown"));
+  return (
+    <div className="err-panel">
+      <div className="err-panel__title"><Ico name="warn"/> {label}</div>
+      {message && <div className="err-panel__msg">{message}</div>}
+      {hints && hints.length > 0 && (
+        <ul>{hints.map(function (h, i) { return <li key={i}>{h}</li>; })}</ul>
+      )}
+    </div>
+  );
+}
+
+function CostBreakdown({ items, total, formattedTotal }) {
+  const t = useT();
+  if (!items || !items.length) return null;
+  return (
+    <div>
+      <table className="cost-table">
+        <thead>
+          <tr>
+            <th>{t("cost.col.item")}</th>
+            <th>{t("cost.col.units")}</th>
+            <th>{t("cost.col.unit")}</th>
+            <th>{t("cost.col.subtotal")}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {items.map(function (it, i) {
+            return (
+              <tr key={i}>
+                <td>
+                  {it.name || it.label}
+                  {it.note && <div className="text-xs text-dim">{it.note}</div>}
+                </td>
+                <td>{it.units}</td>
+                <td>¥{Number(it.unit_price).toFixed(4)}</td>
+                <td>¥{Number(it.subtotal).toFixed(4)}</td>
+              </tr>
+            );
+          })}
+          <tr className="total">
+            <td colSpan="3">{t("cost.total")}</td>
+            <td>{formattedTotal || "¥" + Number(total || 0).toFixed(2)}</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function CostExceedModal({ preview, threshold, onConfirm, onCancel }) {
+  const t = useT();
+  if (!preview) return null;
+  return (
+    <div className="modal-mask" onClick={onCancel}>
+      <div className="modal-card" onClick={function (e) { e.stopPropagation(); }}>
+        <div className="modal-icon warn"><Ico name="warn"/></div>
+        <div className="modal-title">{t("cost.exceed.title")}</div>
+        <div className="modal-desc">
+          {t("cost.exceed.desc", {
+            total: preview.formatted_total || "¥" + Number(preview.total || 0).toFixed(2),
+            threshold: "¥" + Number(threshold || 0).toFixed(2),
+          })}
+        </div>
+        <CostBreakdown items={preview.items} total={preview.total} formattedTotal={preview.formatted_total} />
+        <div className="divider"/>
+        <div className="modal-actions">
+          <button className="btn" onClick={onCancel}>{t("cost.exceed.cancel")}</button>
+          <button className="btn btn-primary" onClick={onConfirm}>{t("cost.exceed.confirm")}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function TaskStartedModal({ taskId, onGotoTasks, onClose }) {
+  const t = useT();
+  if (!taskId) return null;
+  return (
+    <div className="modal-mask" onClick={onClose}>
+      <div className="modal-card" onClick={function (e) { e.stopPropagation(); }}>
+        <div className="modal-icon"><Ico name="check"/></div>
+        <div className="modal-title">{t("started.title")}</div>
+        <div className="modal-desc">
+          {t("started.desc")}
+          <div className="text-xs text-muted" style={{marginTop: 6}}>ID: <code className="inline">{shortId(taskId)}</code></div>
+        </div>
+        <div className="modal-actions">
+          <button className="btn" onClick={onClose}>{t("started.stay")}</button>
+          <button className="btn btn-primary" onClick={onGotoTasks}>{t("started.gotoTasks")}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ─── File upload zone ────────────────────────────────────────────── */
+function FileUploadZone({ accept, multiple, onUploaded, value, max, kind, hint }) {
+  const t = useT();
+  const inputRef = useRef(null);
+  const [busy, setBusy] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const items = Array.isArray(value) ? value : (value ? [value] : []);
+
+  const handleFiles = useCallback(async function (files) {
+    if (!files || !files.length) return;
+    const list = Array.from(files);
+    if (max && items.length + list.length > max) {
+      showToast("最多 " + max + " 个文件", "error");
+      return;
+    }
+    setBusy(true); setProgress(0);
+    const results = [];
+    for (let i = 0; i < list.length; i++) {
+      try {
+        const r = await uploadFile(list[i], kind);
+        if (r && (r.ok || r.url || r.preview_url || r.path)) results.push(r);
+        else { showToast("上传失败：" + (r && r.error || "unknown"), "error"); }
+      } catch (e) { showToast("上传失败：" + e, "error"); }
+      setProgress(Math.round(((i + 1) / list.length) * 100));
+    }
+    setBusy(false); setProgress(0);
+    if (results.length && onUploaded) {
+      onUploaded(multiple ? items.concat(results) : results[0]);
+    }
+  }, [items, kind, max, multiple, onUploaded]);
+
+  const previewSrc = function (it) {
+    return it.preview_url || it.url || it.thumb_url || (it.path ? "" : "");
+  };
+  const isVideo = function (it) {
+    const url = previewSrc(it) || ""; const name = (it.filename || it.name || "").toLowerCase();
+    return /\.(mp4|webm|mov|avi)(\?|$)/i.test(url) || /\.(mp4|webm|mov|avi)$/i.test(name);
+  };
+
+  return (
+    <div className={"upload-zone " + (items.length ? "has-file" : "")}
+         onClick={function () { if (!busy) inputRef.current && inputRef.current.click(); }}
+         onDragOver={function (e) { e.preventDefault(); }}
+         onDrop={function (e) { e.preventDefault(); handleFiles(e.dataTransfer.files); }}>
+      <input ref={inputRef} type="file" accept={accept} multiple={!!multiple}
+             style={{display: "none"}}
+             onChange={function (e) { handleFiles(e.target.files); e.target.value = ""; }} />
+      {items.length > 0 ? (
+        <div>
+          {items.length === 1 && !isVideo(items[0]) && previewSrc(items[0]) && (
+            <img src={previewSrc(items[0])} alt="" className="upload-zone__preview" />
+          )}
+          {items.length === 1 && isVideo(items[0]) && previewSrc(items[0]) && (
+            <video src={previewSrc(items[0])} controls className="upload-zone__preview" />
+          )}
+          {items.length > 1 && (
+            <div className="upload-zone__preview-row">
+              {items.map(function (it, i) {
+                return previewSrc(it)
+                  ? (isVideo(it)
+                    ? <video key={i} src={previewSrc(it)} muted />
+                    : <img key={i} src={previewSrc(it)} alt="" />)
+                  : <div key={i} className="text-xs text-muted">{it.filename || "file"}</div>;
+              })}
+            </div>
+          )}
+          <div className="text-xs text-muted">
+            {items.map(function (it) { return it.filename || it.name || "file"; }).join(", ")}
+          </div>
+          <button type="button" className="btn btn-sm" style={{marginTop: 8}}
+                  onClick={function (e) { e.stopPropagation(); inputRef.current && inputRef.current.click(); }}>
+            <Ico name="refresh"/> {t("create.assets.replace")}
+          </button>
+        </div>
+      ) : (
+        <div>
+          <Ico name="upload" cls="ico-lg" />
+          <div className="text-sm" style={{marginTop: 6}}>{t("create.assets.upload")}</div>
+          {hint && <div className="text-xs text-dim" style={{marginTop: 4}}>{hint}</div>}
+        </div>
+      )}
+      {busy && (
+        <div className="progress" style={{marginTop: 8}}>
+          <div className="progress-fill" style={{width: progress + "%"}} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ─── Business hooks ─────────────────────────────────────────────── */
+function useCatalog() {
+  const [cat, setCat] = useState(null);
+  useEffect(function () {
+    pluginApi("GET", "/catalog").then(function (r) {
+      if (r.ok && r.body) setCat(r.body);
+    }).catch(function () {});
+  }, []);
+  return cat;
+}
+
+function useSettings() {
+  const [s, setS] = useState({});
+  const [loaded, setLoaded] = useState(false);
+  const refresh = useCallback(function () {
+    pluginApi("GET", "/settings").then(function (r) {
+      setLoaded(true);
+      if (r.ok && r.body) setS(r.body.config || r.body || {});
+    }).catch(function () { setLoaded(true); });
+  }, []);
+  useEffect(function () { refresh(); }, [refresh]);
+  const save = useCallback(async function (patch) {
+    const r = await pluginApi("PUT", "/settings", patch);
+    if (r.ok) { setS(Object.assign({}, s, patch)); showToast(_tr("settings.save.ok")); }
+    else { showToast("保存失败", "error"); }
+    return r;
+  }, [s]);
+  return { settings: s, loaded, refresh, save };
+}
+
+function useTasks() {
+  const [tasks, setTasks] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const refresh = useCallback(async function () {
+    setLoading(true);
+    try {
+      const r = await pluginApi("GET", "/tasks");
+      if (r.ok && r.body && Array.isArray(r.body.tasks)) setTasks(r.body.tasks);
+    } finally { setLoading(false); }
+  }, []);
+  useEffect(function () { refresh(); }, [refresh]);
+  useEffect(function () {
+    onEvent("plugin:avatar-studio:task_update", function (data) {
+      if (!data || !data.task_id) return;
+      setTasks(function (prev) {
+        const idx = prev.findIndex(function (x) { return x.id === data.task_id; });
+        if (idx === -1) {
+          // optimistic insert if backend created the task without us seeing GET
+          return prev;
+        }
+        const copy = prev.slice();
+        copy[idx] = Object.assign({}, copy[idx], data);
+        return copy;
+      });
+    });
+  }, []);
+  return { tasks, loading, refresh, setTasks };
+}
+
+function useVoices() {
+  const [voices, setVoices] = useState([]);
+  const refresh = useCallback(async function () {
+    const r = await pluginApi("GET", "/voices");
+    if (r.ok && r.body && Array.isArray(r.body.voices)) setVoices(r.body.voices);
+  }, []);
+  useEffect(function () { refresh(); }, [refresh]);
+  return { voices, refresh };
+}
+
+function useFigures() {
+  const [figures, setFigures] = useState([]);
+  const refresh = useCallback(async function () {
+    const r = await pluginApi("GET", "/figures");
+    if (r.ok && r.body && Array.isArray(r.body.figures)) setFigures(r.body.figures);
+  }, []);
+  useEffect(function () { refresh(); }, [refresh]);
+  return { figures, refresh };
+}
+
+/* ─── CreateTab ───────────────────────────────────────────────────── */
+const RESOLUTIONS = ["480P", "720P"];
+const ASPECTS = ["1:1", "9:16", "16:9", "3:4", "4:3"];
+
+const MODE_DEFS = [
+  { id: "photo_speak", icon: "user", needsImage: true, needsVideo: false, needsTts: true, needsRefImage: false, needsCompose: false },
+  { id: "video_relip", icon: "film", needsImage: false, needsVideo: true, needsTts: true, needsRefImage: false, needsCompose: false },
+  { id: "video_reface", icon: "swap", needsImage: false, needsVideo: true, needsTts: false, needsRefImage: true, needsCompose: false },
+  { id: "avatar_compose", icon: "layers", needsImage: false, needsVideo: false, needsTts: true, needsRefImage: false, needsCompose: true },
+];
+
+function ModeChips({ active, onChange }) {
+  const t = useT();
+  return (
+    <div className="mode-group">
+      {MODE_DEFS.map(function (m) {
+        return (
+          <button key={m.id} type="button"
+                  className={"mode-chip " + (active === m.id ? "active" : "")}
+                  onClick={function () { onChange(m.id); }}>
+            <span className="mode-chip__title">
+              <span className="mode-chip__icon"><Ico name={m.icon}/></span>
+              {t("create.mode." + m.id)}
+            </span>
+            <span className="mode-chip__desc">{t("create.mode." + m.id + ".desc")}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function VoicePicker({ voices, value, onChange }) {
+  const t = useT();
+  return (
+    <select className="input select" value={value || ""}
+            onChange={function (e) { onChange(e.target.value); }}>
+      <option value="">{t("create.text.voice")}…</option>
+      {voices.filter(function (v) { return v.is_system; }).length > 0 && (
+        <optgroup label={t("voices.system")}>
+          {voices.filter(function (v) { return v.is_system; }).map(function (v) {
+            return <option key={v.id} value={v.dashscope_voice_id || v.id}>{v.label}</option>;
+          })}
+        </optgroup>
+      )}
+      {voices.filter(function (v) { return !v.is_system; }).length > 0 && (
+        <optgroup label={t("voices.custom")}>
+          {voices.filter(function (v) { return !v.is_system; }).map(function (v) {
+            return <option key={v.id} value={v.dashscope_voice_id || v.id}>{v.label}</option>;
+          })}
+        </optgroup>
+      )}
+    </select>
+  );
+}
+
+function FigurePicker({ figures, onPick }) {
+  const t = useT();
+  const ready = figures.filter(function (f) { return f.detect_pass; });
+  if (!ready.length) return null;
+  return (
+    <details style={{marginTop: 6}}>
+      <summary style={{cursor: "pointer", fontSize: 12, color: "var(--text-muted)"}}>
+        {t("create.assets.fromLib")} ({ready.length})
+      </summary>
+      <div style={{display: "flex", gap: 6, flexWrap: "wrap", marginTop: 6}}>
+        {ready.map(function (f) {
+          return (
+            <div key={f.id} style={{cursor: "pointer", textAlign: "center"}}
+                 onClick={function () { onPick(f); }}>
+              <img src={f.preview_url} alt={f.label}
+                   style={{width: 64, height: 64, objectFit: "cover", borderRadius: 6}} />
+              <div className="text-xs text-muted truncate" style={{maxWidth: 64}}>{f.label}</div>
+            </div>
+          );
+        })}
+      </div>
+    </details>
+  );
+}
+
+function CreateTab({ onGoToTasks, settings, voices, figures }) {
+  const t = useT();
+  const [mode, setModeRaw] = useState(function () { return loadDraft("mode") || "photo_speak"; });
+  const setMode = function (m) { setModeRaw(m); saveDraft("mode", m); };
+  const md = MODE_DEFS.find(function (x) { return x.id === mode; }) || MODE_DEFS[0];
+
+  // Per-mode draft form, isolated per mode so switching does not lose state.
+  const [form, setForm, resetForm] = useDraft("form:" + mode, {
+    image: null, video: null, refImage: null, composeImages: [],
+    text: "", voice_id: settings.default_voice || "longxiaochun_v2",
+    audio: null, resolution: settings.default_resolution || "480P",
+    aspect: "16:9", duration: 5, mode_pro: false, watermark: false,
+    seed: -1, compose_prompt: "", compose_size: "",
+  });
+  // When mode flips, reload the draft for that mode.
+  useEffect(function () {
+    const fresh = loadDraft("form:" + mode) || {
+      image: null, video: null, refImage: null, composeImages: [],
+      text: "", voice_id: settings.default_voice || "longxiaochun_v2",
+      audio: null, resolution: settings.default_resolution || "480P",
+      aspect: "16:9", duration: 5, mode_pro: false, watermark: false,
+      seed: -1, compose_prompt: "", compose_size: "",
+    };
+    setForm(fresh);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode]);
+
+  const [submitting, setSubmitting] = useState(false);
+  const [pendingPreview, setPendingPreview] = useState(null);
+  const [startedTaskId, setStartedTaskId] = useState(null);
+  const [aiBusy, setAiBusy] = useState(false);
+
+  const update = function (k, v) { setForm(Object.assign({}, form, { [k]: v })); };
+
+  const buildPayload = function (cost_approved) {
+    const assets = {};
+    if (md.needsImage && form.image) assets.image_url = form.image.preview_url || form.image.url;
+    if (md.needsVideo && form.video) assets.video_url = form.video.preview_url || form.video.url;
+    if (md.needsRefImage && form.refImage) assets.image_url = form.refImage.preview_url || form.refImage.url;
+    if (md.needsCompose && form.composeImages && form.composeImages.length) {
+      assets.ref_images_url = form.composeImages.map(function (it) { return it.preview_url || it.url; });
+    }
+    if (form.audio) assets.audio_url = form.audio.preview_url || form.audio.url;
+    return {
+      mode,
+      prompt: "",
+      text: form.text || "",
+      voice_id: form.voice_id || "",
+      resolution: form.resolution,
+      aspect: form.aspect,
+      duration: form.duration,
+      mode_pro: !!form.mode_pro,
+      watermark: !!form.watermark,
+      seed: form.seed != null ? form.seed : -1,
+      compose_prompt: form.compose_prompt || "",
+      compose_size: form.compose_size || "",
+      assets,
+      cost_approved: !!cost_approved,
+    };
+  };
+
+  const submit = useCallback(async function () {
+    const payload = buildPayload(false);
+    // Pre-flight cost preview
+    setSubmitting(true);
+    try {
+      const cp = await pluginApi("POST", "/cost-preview", payload);
+      if (!cp.ok) { showToast("估价失败：" + (cp.body && cp.body.message || ""), "error"); return; }
+      const preview = (cp.body && cp.body.preview) || cp.body || {};
+      const threshold = Number(settings.cost_threshold_cny || settings.cost_threshold || 5);
+      if (preview.total > threshold) {
+        setPendingPreview(preview);
+        return; // Wait for user confirmation in modal.
+      }
+      await actuallyCreate(payload);
+    } finally { setSubmitting(false); }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [form, mode, settings]);
+
+  const actuallyCreate = useCallback(async function (payload) {
+    setSubmitting(true);
+    try {
+      const r = await pluginApi("POST", "/tasks", payload);
+      if (!r.ok) {
+        showToast(
+          (r.body && r.body.message) || (r.body && r.body.code) || "提交失败",
+          "error",
+        );
+        return;
+      }
+      const tid = r.body && (
+        (r.body.task && (r.body.task.id || r.body.task.task_id))
+        || r.body.task_id || r.body.id
+      );
+      if (tid) {
+        setStartedTaskId(tid);
+        // Clear ALL drafts for this mode so the form is fresh next time.
+        clearDraft("form:" + mode);
+      }
+    } finally { setSubmitting(false); }
+  }, [mode]);
+
+  const aiWritePrompt = useCallback(async function () {
+    if (!form.composeImages || form.composeImages.length === 0) {
+      showToast("请先上传至少一张参考图", "warn");
+      return;
+    }
+    setAiBusy(true);
+    try {
+      const r = await pluginApi("POST", "/ai/compose-prompt", {
+        ref_images_url: form.composeImages.map(function (it) { return it.preview_url || it.url; }),
+      });
+      if (r.ok && r.body && r.body.prompt) {
+        update("compose_prompt", r.body.prompt);
+      } else {
+        showToast("生成失败，请手动输入 prompt", "warn");
+      }
+    } catch (e) { showToast("生成失败：" + e, "error"); }
+    finally { setAiBusy(false); }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [form.composeImages]);
+
+  const liveTask = useTaskHeartbeat(startedTaskId);
+
+  return (
+    <div className="split-layout">
+      <div className="split-left">
+        <ModeChips active={mode} onChange={setMode} />
+
+        {/* ── Asset uploads ──────────────────────────────────── */}
+        {md.needsImage && (
+          <div className="card">
+            <div className="label"><Ico name="user"/>{t("create.section.image")}</div>
+            <FileUploadZone accept="image/*" kind="image"
+                            value={form.image}
+                            onUploaded={function (v) { update("image", v); }}
+                            hint="png/jpg，正面单人照效果最佳" />
+            <FigurePicker figures={figures} onPick={function (f) { update("image", { preview_url: f.preview_url, url: f.preview_url, filename: f.label }); }} />
+          </div>
+        )}
+        {md.needsVideo && (
+          <div className="card">
+            <div className="label"><Ico name="film"/>{t("create.section.video")}</div>
+            <FileUploadZone accept="video/*" kind="video"
+                            value={form.video}
+                            onUploaded={function (v) { update("video", v); }}
+                            hint="mp4，建议 ≤ 30 秒" />
+          </div>
+        )}
+        {md.needsRefImage && (
+          <div className="card">
+            <div className="label"><Ico name="user"/>{t("create.section.refImage")}</div>
+            <FileUploadZone accept="image/*" kind="image"
+                            value={form.refImage}
+                            onUploaded={function (v) { update("refImage", v); }}
+                            hint="想要替换成的人物正面照" />
+            <FigurePicker figures={figures} onPick={function (f) { update("refImage", { preview_url: f.preview_url, url: f.preview_url, filename: f.label }); }} />
+          </div>
+        )}
+        {md.needsCompose && (
+          <div className="card">
+            <div className="label"><Ico name="layers"/>{t("create.section.composeImages")}</div>
+            <FileUploadZone accept="image/*" kind="image" multiple max={3}
+                            value={form.composeImages}
+                            onUploaded={function (v) { update("composeImages", v); }}
+                            hint="最多 3 张：人物 + 服饰 + 场景" />
+            <div className="form-row" style={{marginTop: 10}}>
+              <div className="label"><Ico name="info"/>{t("create.advanced.composePrompt")}</div>
+              <textarea className="input textarea"
+                        placeholder={t("create.advanced.composePrompt.placeholder")}
+                        value={form.compose_prompt}
+                        onChange={function (e) { update("compose_prompt", e.target.value); }} />
+              <button type="button" className="btn btn-sm" style={{marginTop: 6}}
+                      disabled={aiBusy} onClick={aiWritePrompt}>
+                {aiBusy && <span className="spinner-sm"/>}
+                <Ico name="info"/> {t("create.advanced.aiPrompt")}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* ── Text + voice (TTS) ─────────────────────────────── */}
+        {md.needsTts && (
+          <div className="card">
+            <div className="label"><Ico name="mic"/>{t("create.section.text")}</div>
+            <textarea className="input textarea"
+                      placeholder={t("create.text.placeholder")}
+                      value={form.text}
+                      onChange={function (e) { update("text", e.target.value); }} />
+            <div className="text-xs text-dim" style={{textAlign: "right", marginTop: 2}}>
+              {t("create.text.charCount", { n: (form.text || "").length })}
+            </div>
+            <div className="form-row" style={{marginTop: 8}}>
+              <VoicePicker voices={voices} value={form.voice_id}
+                           onChange={function (v) { update("voice_id", v); }} />
+            </div>
+            <div className="form-row">
+              <div className="text-xs text-muted" style={{marginBottom: 4}}>{t("create.text.audioUpload")}</div>
+              <FileUploadZone accept="audio/*" kind="audio"
+                              value={form.audio}
+                              onUploaded={function (v) { update("audio", v); }} />
+            </div>
+          </div>
+        )}
+
+        {/* ── Output parameters ──────────────────────────────── */}
+        <div className="card">
+          <div className="label"><Ico name="cog"/>{t("create.section.params")}</div>
+          {(mode === "photo_speak" || mode === "avatar_compose") && (
+            <div className="grid-2">
+              <div>
+                <div className="text-xs text-muted" style={{marginBottom: 4}}>{t("create.params.resolution")}</div>
+                <select className="input select" value={form.resolution}
+                        onChange={function (e) { update("resolution", e.target.value); }}>
+                  {RESOLUTIONS.map(function (r) { return <option key={r} value={r}>{r}</option>; })}
+                </select>
+              </div>
+              <div>
+                <div className="text-xs text-muted" style={{marginBottom: 4}}>{t("create.params.aspect")}</div>
+                <select className="input select" value={form.aspect}
+                        onChange={function (e) { update("aspect", e.target.value); }}>
+                  {ASPECTS.map(function (a) { return <option key={a} value={a}>{a}</option>; })}
+                </select>
+              </div>
+            </div>
+          )}
+          {mode === "video_reface" && (
+            <div>
+              <div className="text-xs text-muted" style={{marginBottom: 4}}>{t("create.params.qualityMode")}</div>
+              <div className="flex gap-2">
+                <label className={"mode-chip " + (!form.mode_pro ? "active" : "")} style={{flex: 1, padding: "8px 12px"}}>
+                  <input type="radio" checked={!form.mode_pro} onChange={function () { update("mode_pro", false); }} style={{display: "none"}} />
+                  <span className="mode-chip__title">wan-std</span>
+                  <span className="mode-chip__desc">{t("create.params.qualityStd")}</span>
+                </label>
+                <label className={"mode-chip " + (form.mode_pro ? "active" : "")} style={{flex: 1, padding: "8px 12px"}}>
+                  <input type="radio" checked={form.mode_pro} onChange={function () { update("mode_pro", true); }} style={{display: "none"}} />
+                  <span className="mode-chip__title">wan-pro</span>
+                  <span className="mode-chip__desc">{t("create.params.qualityPro")}</span>
+                </label>
+              </div>
+            </div>
+          )}
+          {!form.audio && md.needsTts === false && (
+            <div className="form-row" style={{marginTop: 10}}>
+              <div className="text-xs text-muted" style={{marginBottom: 4}}>{t("create.params.duration")}</div>
+              <input type="number" className="input" min="1" max="60" value={form.duration}
+                     onChange={function (e) { update("duration", parseInt(e.target.value, 10) || 5); }} />
+              <div className="text-xs text-dim" style={{marginTop: 2}}>{t("create.params.durationHint")}</div>
+            </div>
+          )}
+        </div>
+
+        {/* ── Advanced ──────────────────────────────────────── */}
+        <Collapsible title={t("create.section.advanced")}>
+          <div className="toggle-row" onClick={function () { update("watermark", !form.watermark); }}>
+            <span className="toggle-row__label">{t("create.advanced.watermark")}</span>
+            <Switch on={form.watermark} onChange={function (v) { update("watermark", v); }} />
+          </div>
+          <div className="form-row" style={{marginTop: 8}}>
+            <div className="text-xs text-muted" style={{marginBottom: 4}}>{t("create.advanced.seed")}</div>
+            <input type="number" className="input" value={form.seed}
+                   onChange={function (e) { update("seed", parseInt(e.target.value, 10)); }} />
+          </div>
+          {mode === "avatar_compose" && (
+            <div className="form-row">
+              <div className="text-xs text-muted" style={{marginBottom: 4}}>{t("create.params.composeSize")}</div>
+              <input type="text" className="input" placeholder={t("create.params.composeSizeAuto")}
+                     value={form.compose_size}
+                     onChange={function (e) { update("compose_size", e.target.value); }} />
+            </div>
+          )}
+        </Collapsible>
+
+        {/* ── Submit row ────────────────────────────────────── */}
+        <div className="flex gap-2" style={{marginTop: 14}}>
+          <button className="btn btn-primary btn-block" disabled={submitting} onClick={submit}>
+            {submitting && <span className="spinner-sm"/>}
+            <Ico name="play"/> {submitting ? t("create.submit.preflight") : t("create.submit")}
+          </button>
+          <button className="btn" type="button" onClick={function () { resetForm(); showToast(t("create.draft.cleared")); }}>
+            {t("create.draft.clear")}
+          </button>
+        </div>
+      </div>
+
+      {/* ── Right preview pane ──────────────────────────────── */}
+      <div className="split-right">
+        <div className="card" style={{height: "100%", display: "flex", flexDirection: "column"}}>
+          {!startedTaskId ? (
+            <EmptyState icon="video" title={t("preview.empty.title")} hint={t("preview.empty.desc")} />
+          ) : (
+            <>
+              <div className="card-title">
+                <Ico name="video"/>
+                {liveTask && liveTask.status === "done" ? "完成" : t("preview.processing", { pct: Math.round((liveTask && liveTask.progress) || 0) })}
+              </div>
+              {liveTask && liveTask.output_url
+                ? <video src={liveTask.output_url} controls style={{width: "100%", borderRadius: 6, background: "#000"}} />
+                : (
+                  <div style={{padding: 24, textAlign: "center", color: "var(--text-muted)"}}>
+                    <span className="spinner" style={{margin: "0 auto 8px"}} />
+                    <div>ID: <code className="inline">{shortId(startedTaskId)}</code></div>
+                  </div>
+                )}
+              <button className="btn btn-sm" style={{marginTop: 10, alignSelf: "flex-start"}} onClick={onGoToTasks}>
+                {t("preview.gotoTasks")}
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+
+      {pendingPreview && (
+        <CostExceedModal preview={pendingPreview}
+                         threshold={settings.cost_threshold_cny || 5}
+                         onConfirm={async function () {
+                           const p = pendingPreview;
+                           setPendingPreview(null);
+                           await actuallyCreate(buildPayload(true));
+                         }}
+                         onCancel={function () { setPendingPreview(null); }} />
+      )}
+      {startedTaskId && !pendingPreview && (
+        <TaskStartedModal taskId={startedTaskId}
+                          onGotoTasks={function () { setStartedTaskId(null); onGoToTasks(); }}
+                          onClose={function () { setStartedTaskId(null); }} />
+      )}
+    </div>
+  );
+}
+
+function useTaskHeartbeat(taskId) {
+  const [task, setTask] = useState(null);
+  useEffect(function () {
+    if (!taskId) { setTask(null); return; }
+    let stopped = false;
+    const tick = function () {
+      if (stopped) return;
+      pluginApi("GET", "/tasks/" + taskId).then(function (r) {
+        if (stopped) return;
+        if (r.ok && r.body) setTask(r.body.task || r.body);
+      }).finally(function () {
+        if (!stopped) setTimeout(tick, 4000);
+      });
+    };
+    tick();
+    return function () { stopped = true; };
+  }, [taskId]);
+  return task;
+}
+
+/* ─── TasksTab ───────────────────────────────────────────────────── */
+function TasksTab() {
+  const t = useT();
+  const { tasks, loading, refresh, setTasks } = useTasks();
+  const [filterStatus, setFilterStatus] = useState("all");
+  const [filterMode, setFilterMode] = useState("all");
+  const [activeId, setActiveId] = useState(null);
+
+  const filtered = useMemo(function () {
+    return tasks.filter(function (x) {
+      if (filterStatus !== "all" && x.status !== filterStatus) return false;
+      if (filterMode !== "all" && x.mode !== filterMode) return false;
+      return true;
+    });
+  }, [tasks, filterStatus, filterMode]);
+  const active = activeId ? tasks.find(function (x) { return x.id === activeId; }) : null;
+
+  const cancelTask = async function (id) {
+    const r = await pluginApi("POST", "/tasks/" + id + "/cancel", {});
+    if (r.ok) { showToast("已请求取消"); refresh(); }
+    else { showToast("取消失败", "error"); }
+  };
+  const retryTask = async function (id) {
+    const r = await pluginApi("POST", "/tasks/" + id + "/retry", {});
+    if (r.ok) { showToast("已重新提交"); refresh(); }
+    else { showToast("重试失败", "error"); }
+  };
+  const deleteTask = async function (id) {
+    const r = await pluginApi("DELETE", "/tasks/" + id);
+    if (r.ok) {
+      setTasks(function (prev) { return prev.filter(function (x) { return x.id !== id; }); });
+      if (activeId === id) setActiveId(null);
+    }
+  };
+  const downloadOutput = function (task) {
+    if (task.output_url) downloadFile(task.output_url, "avatar-studio_" + shortId(task.id) + ".mp4");
+  };
+
+  return (
+    <div>
+      <div className="flex items-center gap-2" style={{marginBottom: 12}}>
+        <select className="input select" style={{width: 130}}
+                value={filterStatus} onChange={function (e) { setFilterStatus(e.target.value); }}>
+          <option value="all">{t("tasks.filter.all")}</option>
+          <option value="pending">{t("tasks.filter.pending")}</option>
+          <option value="running">{t("tasks.filter.running")}</option>
+          <option value="done">{t("tasks.filter.done")}</option>
+          <option value="failed">{t("tasks.filter.failed")}</option>
+          <option value="cancelled">{t("tasks.filter.cancelled")}</option>
+        </select>
+        <select className="input select" style={{width: 160}}
+                value={filterMode} onChange={function (e) { setFilterMode(e.target.value); }}>
+          <option value="all">{t("tasks.filter.all")}</option>
+          {MODE_DEFS.map(function (m) { return <option key={m.id} value={m.id}>{t("create.mode." + m.id)}</option>; })}
+        </select>
+        <button className="btn btn-sm" onClick={refresh} disabled={loading}>
+          <Ico name="refresh"/> {t("common.refresh")}
+        </button>
+        <span className="text-xs text-muted">{filtered.length} / {tasks.length}</span>
+      </div>
+
+      {filtered.length === 0
+        ? <EmptyState icon="list" title={t("tasks.empty")} hint={t("tasks.empty.hint")} />
+        : (
+          <div className="card" style={{padding: 0}}>
+            <table className="ak-table">
+              <thead>
+                <tr>
+                  <th>{t("tasks.col.mode")}</th>
+                  <th>{t("tasks.col.id")}</th>
+                  <th>{t("tasks.col.status")}</th>
+                  <th>{t("tasks.col.created")}</th>
+                  <th>{t("tasks.col.cost")}</th>
+                  <th style={{textAlign: "right"}}>{t("tasks.col.actions")}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.map(function (x) {
+                  return (
+                    <tr key={x.id}
+                        className={"row " + (activeId === x.id ? "selected" : "")}
+                        onClick={function () { setActiveId(x.id); }}>
+                      <td>
+                        <span className="flex items-center gap-2">
+                          <Ico name={(MODE_DEFS.find(function (m) { return m.id === x.mode; }) || {}).icon || "video"} />
+                          <span>{t("create.mode." + x.mode)}</span>
+                        </span>
+                      </td>
+                      <td><code className="inline">{shortId(x.id)}</code></td>
+                      <td><StatusBadge status={x.status}/></td>
+                      <td className="text-xs text-muted">{formatTime(x.created_at)}</td>
+                      <td className="text-xs">{x.cost_total != null ? "¥" + Number(x.cost_total).toFixed(2) : "—"}</td>
+                      <td style={{textAlign: "right"}}>
+                        <span onClick={function (e) { e.stopPropagation(); }}>
+                          {(x.status === "running" || x.status === "pending") && (
+                            <button className="btn btn-sm" onClick={function () { cancelTask(x.id); }}><Ico name="cancel"/></button>
+                          )}
+                          {x.status === "failed" && (
+                            <button className="btn btn-sm" onClick={function () { retryTask(x.id); }}><Ico name="refresh"/></button>
+                          )}
+                          {x.output_url && (
+                            <button className="btn btn-sm" onClick={function () { downloadOutput(x); }}><Ico name="download"/></button>
+                          )}
+                          <button className="btn btn-sm btn-danger" onClick={function () { deleteTask(x.id); }}><Ico name="trash"/></button>
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+      {active && (
+        <>
+          <div className="drawer-mask" onClick={function () { setActiveId(null); }} />
+          <div className="drawer">
+            <div className="drawer-head">
+              <strong>{t("tasks.detail.title")} <code className="inline" style={{marginLeft: 6}}>{shortId(active.id)}</code></strong>
+              <span>
+                <button className="btn btn-sm" onClick={function () { copyToClipboard(active.id); }}>
+                  <Ico name="copy"/> {t("tasks.detail.copyId")}
+                </button>
+                <button className="btn btn-sm" style={{marginLeft: 6}} onClick={function () { setActiveId(null); }}>
+                  <Ico name="close"/>
+                </button>
+              </span>
+            </div>
+            <div className="drawer-body">
+              <div className="flex items-center gap-2" style={{marginBottom: 10}}>
+                <StatusBadge status={active.status}/>
+                <span className="text-xs text-muted">{formatTime(active.created_at)}</span>
+              </div>
+              {active.output_url && (
+                <video src={active.output_url} controls
+                       style={{width: "100%", borderRadius: 6, background: "#000", marginBottom: 12}} />
+              )}
+              {active.error_kind && (
+                <div style={{marginBottom: 12}}>
+                  <div className="label"><Ico name="warn"/>{t("tasks.detail.error")}</div>
+                  <ErrorPanel kind={active.error_kind}
+                              message={active.error_message}
+                              hints={active.error_hints} />
+                </div>
+              )}
+              {active.cost_breakdown && (
+                <div style={{marginBottom: 12}}>
+                  <div className="label"><Ico name="info"/>{t("tasks.detail.cost")}</div>
+                  <CostBreakdown items={active.cost_breakdown.items}
+                                 total={active.cost_breakdown.total}
+                                 formattedTotal={active.cost_breakdown.formatted_total} />
+                </div>
+              )}
+              <Collapsible title={t("tasks.detail.params")}>
+                <pre style={{fontSize: 11, overflow: "auto", maxHeight: 240}}>{JSON.stringify(active.params || {}, null, 2)}</pre>
+              </Collapsible>
+              <Collapsible title={t("tasks.detail.metadata")}>
+                <pre style={{fontSize: 11, overflow: "auto", maxHeight: 240}}>{JSON.stringify(active, null, 2)}</pre>
+              </Collapsible>
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+/* ─── VoicesTab ──────────────────────────────────────────────────── */
+function VoicesTab() {
+  const t = useT();
+  const { voices, refresh } = useVoices();
+  const [showCreate, setShowCreate] = useState(false);
+  const [draft, setDraft] = useState({ label: "", audio: null });
+  const [busy, setBusy] = useState(false);
+
+  const submitClone = async function () {
+    if (!draft.label || !draft.audio) { showToast("请填写名称并上传音频", "warn"); return; }
+    setBusy(true);
+    try {
+      const r = await pluginApi("POST", "/voices", {
+        label: draft.label,
+        source_audio_path: draft.audio.path || draft.audio.preview_url || draft.audio.url,
+      });
+      if (r.ok) {
+        showToast("克隆任务已提交，请等待 dashscope 处理");
+        setDraft({ label: "", audio: null });
+        setShowCreate(false);
+        refresh();
+      } else { showToast("提交失败：" + (r.body && r.body.message || ""), "error"); }
+    } finally { setBusy(false); }
+  };
+  const del = async function (v) {
+    if (!confirm(t("voices.delete.confirm"))) return;
+    const r = await pluginApi("DELETE", "/voices/" + v.id);
+    if (r.ok) refresh();
+  };
+
+  const sys = voices.filter(function (v) { return v.is_system; });
+  const cust = voices.filter(function (v) { return !v.is_system; });
+
+  return (
+    <div>
+      <div className="flex items-center justify-between" style={{marginBottom: 12}}>
+        <h3 style={{fontSize: 14, fontWeight: 600}}>{t("voices.system")} <span className="text-xs text-muted">· {sys.length}</span></h3>
+        <button className="btn btn-primary btn-sm" onClick={function () { setShowCreate(!showCreate); }}>
+          <Ico name="plus"/> {t("voices.create")}
+        </button>
+      </div>
+
+      {showCreate && (
+        <div className="card">
+          <div className="form-row">
+            <div className="label">{t("voices.create.label")}</div>
+            <input className="input" value={draft.label}
+                   onChange={function (e) { setDraft(Object.assign({}, draft, { label: e.target.value })); }} />
+          </div>
+          <div className="form-row">
+            <div className="label">{t("voices.create.audio")}</div>
+            <FileUploadZone accept="audio/*" kind="audio" value={draft.audio}
+                            onUploaded={function (v) { setDraft(Object.assign({}, draft, { audio: v })); }} />
+          </div>
+          <div className="flex gap-2 justify-between">
+            <button className="btn" onClick={function () { setShowCreate(false); }}>{t("common.cancel")}</button>
+            <button className="btn btn-primary" disabled={busy} onClick={submitClone}>
+              {busy && <span className="spinner-sm"/>} {t("voices.create.submit")}
+            </button>
+          </div>
+        </div>
+      )}
+
+      <div className="lib-grid" style={{marginBottom: 18}}>
+        {sys.map(function (v) {
+          return (
+            <div key={v.id} className="lib-card">
+              <div className="lib-card__head">
+                <div>
+                  <div className="lib-card__title">{v.label}</div>
+                  <div className="lib-card__sub">{v.gender || "—"} · {v.language || "zh"}</div>
+                </div>
+                <span className="tag tag-blue">系统</span>
+              </div>
+              {v.sample_url && (
+                <div className="lib-card__media">
+                  <audio src={v.sample_url} controls preload="none" />
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      <h3 style={{fontSize: 14, fontWeight: 600, marginBottom: 8}}>
+        {t("voices.custom")} <span className="text-xs text-muted">· {cust.length}</span>
+      </h3>
+      {cust.length === 0
+        ? <EmptyState icon="mic" title={t("voices.empty.custom")} />
+        : (
+          <div className="lib-grid">
+            {cust.map(function (v) {
+              return (
+                <div key={v.id} className="lib-card">
+                  <div className="lib-card__head">
+                    <div>
+                      <div className="lib-card__title">{v.label}</div>
+                      <div className="lib-card__sub text-xs text-dim">{shortId(v.dashscope_voice_id || v.id)}</div>
+                    </div>
+                    <button className="btn btn-sm btn-danger" onClick={function () { del(v); }}><Ico name="trash"/></button>
+                  </div>
+                  {v.sample_url && (
+                    <div className="lib-card__media">
+                      <audio src={v.sample_url} controls preload="none" />
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+    </div>
+  );
+}
+
+/* ─── FiguresTab ─────────────────────────────────────────────────── */
+function FiguresTab() {
+  const t = useT();
+  const { figures, refresh } = useFigures();
+  const [showCreate, setShowCreate] = useState(false);
+  const [draft, setDraft] = useState({ label: "", image: null });
+  const [busy, setBusy] = useState(false);
+
+  const submitFig = async function () {
+    if (!draft.label || !draft.image) { showToast("请填写名称并上传人像图", "warn"); return; }
+    setBusy(true);
+    try {
+      const r = await pluginApi("POST", "/figures", {
+        label: draft.label,
+        image_path: draft.image.path || draft.image.preview_url,
+        preview_url: draft.image.preview_url || draft.image.url,
+      });
+      if (r.ok) {
+        showToast("已提交预检");
+        setDraft({ label: "", image: null });
+        setShowCreate(false);
+        refresh();
+      } else { showToast("提交失败：" + (r.body && r.body.message || ""), "error"); }
+    } finally { setBusy(false); }
+  };
+  const del = async function (f) {
+    if (!confirm(t("figures.delete.confirm"))) return;
+    const r = await pluginApi("DELETE", "/figures/" + f.id);
+    if (r.ok) refresh();
+  };
+
+  return (
+    <div>
+      <div className="flex items-center justify-between" style={{marginBottom: 12}}>
+        <h3 style={{fontSize: 14, fontWeight: 600}}>{t("figures.title")} <span className="text-xs text-muted">· {figures.length}</span></h3>
+        <button className="btn btn-primary btn-sm" onClick={function () { setShowCreate(!showCreate); }}>
+          <Ico name="plus"/> {t("figures.upload")}
+        </button>
+      </div>
+
+      {showCreate && (
+        <div className="card">
+          <div className="form-row">
+            <div className="label">{t("figures.upload.label")}</div>
+            <input className="input" value={draft.label}
+                   onChange={function (e) { setDraft(Object.assign({}, draft, { label: e.target.value })); }} />
+          </div>
+          <div className="form-row">
+            <div className="label">{t("figures.upload.image")}</div>
+            <FileUploadZone accept="image/*" kind="image" value={draft.image}
+                            onUploaded={function (v) { setDraft(Object.assign({}, draft, { image: v })); }}
+                            hint={t("figures.detect.hint")} />
+          </div>
+          <div className="flex gap-2 justify-between">
+            <button className="btn" onClick={function () { setShowCreate(false); }}>{t("common.cancel")}</button>
+            <button className="btn btn-primary" disabled={busy} onClick={submitFig}>
+              {busy && <span className="spinner-sm"/>} {t("figures.upload.submit")}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {figures.length === 0
+        ? <EmptyState icon="user" title={t("figures.empty")} />
+        : (
+          <div className="lib-grid">
+            {figures.map(function (f) {
+              const detect = f.detect_pass === true ? "pass" : f.detect_pass === false ? "fail" : "pending";
+              const detectLabel = t("figures.detect." + detect);
+              const cls = detect === "pass" ? "tag-green" : detect === "fail" ? "tag-red" : "tag-gray";
+              return (
+                <div key={f.id} className="lib-card">
+                  {f.preview_url && <img className="fig-thumb" src={f.preview_url} alt={f.label} />}
+                  <div className="lib-card__head">
+                    <div>
+                      <div className="lib-card__title">{f.label}</div>
+                      <div className="lib-card__sub"><span className={"tag " + cls}>{detectLabel}</span></div>
+                    </div>
+                    <button className="btn btn-sm btn-danger" onClick={function () { del(f); }}><Ico name="trash"/></button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+    </div>
+  );
+}
+
+/* ─── SettingsTab ────────────────────────────────────────────────── */
+function SettingsTab({ settings, onSaved, voices }) {
+  const t = useT();
+  const [draft, setDraft] = useState(function () { return Object.assign({}, settings); });
+  useEffect(function () { setDraft(Object.assign({}, settings)); }, [settings]);
+  const [testBusy, setTestBusy] = useState(false);
+  const [storage, setStorage] = useState(null);
+
+  useEffect(function () {
+    pluginApi("GET", "/healthz").then(function (r) {
+      if (r.ok && r.body && r.body.storage) setStorage(r.body.storage);
+    }).catch(function () {});
+  }, []);
+
+  const update = function (k, v) { setDraft(Object.assign({}, draft, { [k]: v })); };
+
+  const save = async function () {
+    const r = await pluginApi("PUT", "/settings", {
+      api_key: draft.api_key || "",
+      base_url: draft.base_url || "",
+      default_resolution: draft.default_resolution || "480P",
+      default_voice: draft.default_voice || "longxiaochun_v2",
+      cost_threshold_cny: Number(draft.cost_threshold_cny || 5),
+      timeout_sec: Number(draft.timeout_sec || 60),
+      max_retries: Number(draft.max_retries || 2),
+      retention_days: Number(draft.retention_days || 30),
+    });
+    if (r.ok) { showToast(t("settings.save.ok")); if (onSaved) onSaved(draft); }
+    else { showToast("保存失败", "error"); }
+  };
+
+  const testConn = async function () {
+    setTestBusy(true);
+    try {
+      // Save first so the test uses the latest key (Pixelle A10).
+      await pluginApi("PUT", "/settings", { api_key: draft.api_key || "" });
+      const r = await pluginApi("GET", "/healthz");
+      if (r.ok && r.body && r.body.api_reachable) showToast(t("settings.api.test.ok"));
+      else showToast(t("settings.api.test.fail", { msg: r.body && r.body.message || "unreachable" }), "error");
+    } finally { setTestBusy(false); }
+  };
+
+  const cleanup = async function () {
+    const r = await pluginApi("POST", "/cleanup", { retention_days: Number(draft.retention_days || 30) });
+    if (r.ok) showToast("已清理 " + (r.body && r.body.removed || 0) + " 条任务");
+  };
+
+  return (
+    <div style={{maxWidth: 720, margin: "0 auto"}}>
+      <div className="setting-section">
+        <h3>{t("settings.section.api")}</h3>
+        <div className="form-row">
+          <input className="input" type="password"
+                 placeholder={t("settings.api.placeholder")}
+                 value={draft.api_key || ""}
+                 onChange={function (e) { update("api_key", e.target.value); }} />
+        </div>
+        <div className="form-row">
+          <div className="text-xs text-muted" style={{marginBottom: 4}}>{t("settings.api.region")}</div>
+          <select className="input select" value={draft.base_url || ""}
+                  onChange={function (e) { update("base_url", e.target.value); }}>
+            <option value="">{t("settings.api.region.bj")}</option>
+            <option value="https://dashscope-intl.aliyuncs.com">{t("settings.api.region.sg")}</option>
+          </select>
+        </div>
+        <button className="btn" disabled={testBusy} onClick={testConn}>
+          {testBusy && <span className="spinner-sm"/>} {t("settings.api.test")}
+        </button>
+      </div>
+
+      <div className="setting-section">
+        <h3>{t("settings.section.defaults")}</h3>
+        <div className="grid-2">
+          <div>
+            <div className="text-xs text-muted" style={{marginBottom: 4}}>{t("settings.defaults.resolution")}</div>
+            <select className="input select" value={draft.default_resolution || "480P"}
+                    onChange={function (e) { update("default_resolution", e.target.value); }}>
+              {RESOLUTIONS.map(function (r) { return <option key={r} value={r}>{r}</option>; })}
+            </select>
+          </div>
+          <div>
+            <div className="text-xs text-muted" style={{marginBottom: 4}}>{t("settings.defaults.voice")}</div>
+            <select className="input select" value={draft.default_voice || ""}
+                    onChange={function (e) { update("default_voice", e.target.value); }}>
+              {voices.map(function (v) {
+                return <option key={v.id} value={v.dashscope_voice_id || v.id}>{v.label}</option>;
+              })}
+            </select>
+          </div>
+        </div>
+        <div className="form-row" style={{marginTop: 10}}>
+          <div className="text-xs text-muted" style={{marginBottom: 4}}>{t("settings.defaults.threshold")}</div>
+          <input type="number" className="input" min="0" step="0.5"
+                 value={draft.cost_threshold_cny != null ? draft.cost_threshold_cny : 5}
+                 onChange={function (e) { update("cost_threshold_cny", Number(e.target.value)); }} />
+          <div className="text-xs text-dim" style={{marginTop: 2}}>{t("settings.defaults.thresholdHint")}</div>
+        </div>
+      </div>
+
+      <div className="setting-section">
+        <h3>{t("settings.section.storage")}</h3>
+        {storage && (
+          <div className="text-xs text-muted" style={{marginBottom: 6}}>
+            {t("settings.storage.usage", { n: formatBytes(storage.bytes_used || 0) })}
+            {storage.dir && <span> · <code className="inline">{storage.dir}</code></span>}
+          </div>
+        )}
+        <div className="flex items-center gap-2">
+          <input type="number" className="input" style={{width: 100}}
+                 value={draft.retention_days != null ? draft.retention_days : 30}
+                 onChange={function (e) { update("retention_days", Number(e.target.value)); }} />
+          <span className="text-xs text-muted flex-1">{t("settings.storage.cleanup", { n: draft.retention_days != null ? draft.retention_days : 30 })}</span>
+          <button className="btn btn-sm" onClick={cleanup}>{t("settings.storage.cleanup.btn")}</button>
+        </div>
+      </div>
+
+      <div className="setting-section">
+        <h3>{t("settings.section.advanced")}</h3>
+        <div className="grid-2">
+          <div>
+            <div className="text-xs text-muted" style={{marginBottom: 4}}>{t("settings.advanced.timeout")}</div>
+            <input type="number" className="input" min="10" max="600"
+                   value={draft.timeout_sec != null ? draft.timeout_sec : 60}
+                   onChange={function (e) { update("timeout_sec", Number(e.target.value)); }} />
+          </div>
+          <div>
+            <div className="text-xs text-muted" style={{marginBottom: 4}}>{t("settings.advanced.maxRetry")}</div>
+            <input type="number" className="input" min="0" max="5"
+                   value={draft.max_retries != null ? draft.max_retries : 2}
+                   onChange={function (e) { update("max_retries", Number(e.target.value)); }} />
+          </div>
+        </div>
+      </div>
+
+      <div className="setting-section">
+        <h3>{t("settings.section.about")}</h3>
+        <div className="text-sm text-muted">
+          {t("settings.about.version")}: <code className="inline">1.0.0</code>
+        </div>
+      </div>
+
+      <button className="btn btn-primary btn-block" onClick={save} style={{marginTop: 14}}>
+        <Ico name="check"/> {t("settings.save")}
+      </button>
+    </div>
+  );
+}
+
+/* ─── Top-level App ──────────────────────────────────────────────── */
+const TAB_IDS = ["create", "tasks", "voices", "figures", "settings"];
+const TAB_ICONS = { create: "video", tasks: "list", voices: "mic", figures: "user", settings: "cog" };
+
+function App() {
+  const t = useT();
+  const [, force] = useState(0);
+  useEffect(function () { return _i18n.subscribe(function () { force(function (n) { return n + 1; }); }); }, []);
+  const [activeTab, setActiveTab] = useState(0);
+  const { settings, loaded: settingsLoaded, save: saveSettings, refresh: refreshSettings } = useSettings();
+  const { voices } = useVoices();
+  const { figures } = useFigures();
+
+  const apiKeyDisplay = settings.api_key ? (settings.api_key.length > 12 ? settings.api_key.slice(0, 4) + "..." + settings.api_key.slice(-4) : settings.api_key) : "";
+  const settingsIdx = TAB_IDS.indexOf("settings");
+  const showKeyBanner = settingsLoaded && !settings.api_key && activeTab !== settingsIdx;
+
+  return (
+    <div className="app">
+      <div className="header">
+        <h1>
+          <span className="ak-logo"><Ico name="video"/></span>
+          {t("app.title")}
+          <span className="ak-sub">{t("app.subtitle")}</span>
+        </h1>
+        <div className="header-right">
+          {apiKeyDisplay
+            ? <span className="api-pill" title={settings.api_key}>
+                <Ico name="check"/> {t("app.api.label")}: {apiKeyDisplay}
+              </span>
+            : <span className="api-pill api-pill--missing"
+                    onClick={function () { setActiveTab(settingsIdx); }}
+                    title={t("app.api.tooltip")}>
+                <Ico name="warn"/> {t("app.api.missing")}
+              </span>}
+        </div>
+      </div>
+      <div className="tabs">
+        {TAB_IDS.map(function (id, i) {
+          return (
+            <div key={id} className={"tab " + (activeTab === i ? "active" : "")}
+                 onClick={function () { setActiveTab(i); }}>
+              <Ico name={TAB_ICONS[id]}/> {t("tabs." + id)}
+            </div>
+          );
+        })}
+      </div>
+      {showKeyBanner && (
+        <div style={{padding: "12px 16px 0"}}>
+          <div className="err-panel" style={{borderColor: "rgba(245,158,11,.3)", background: "rgba(245,158,11,.06)"}}>
+            <div className="err-panel__title" style={{color: "var(--warning)"}}>
+              <Ico name="warn"/> {t("banner.noKey.title")}
+            </div>
+            <div className="err-panel__msg">{t("banner.noKey.desc")}</div>
+            <button className="btn btn-sm" style={{marginTop: 6}}
+                    onClick={function () { setActiveTab(settingsIdx); }}>
+              {t("banner.noKey.cta")}
+            </button>
+          </div>
+        </div>
+      )}
+      <div className="content">
+        {activeTab === 0 && <CreateTab onGoToTasks={function () { setActiveTab(1); }}
+                                       settings={settings} voices={voices} figures={figures} />}
+        {activeTab === 1 && <TasksTab/>}
+        {activeTab === 2 && <VoicesTab/>}
+        {activeTab === 3 && <FiguresTab/>}
+        {activeTab === 4 && <SettingsTab settings={settings} voices={voices}
+                                          onSaved={function () { refreshSettings(); }} />}
+      </div>
+    </div>
+  );
+}
+
+class PluginErrorBoundary extends React.Component {
+  constructor(p) { super(p); this.state = { error: null, info: null }; }
+  static getDerivedStateFromError(error) { return { error }; }
+  componentDidCatch(error, info) { this.setState({ info }); console.error("[avatar-studio] render error:", error, info); }
+  reset = () => this.setState({ error: null, info: null });
+  render() {
+    if (!this.state.error) return this.props.children;
+    const err = this.state.error;
+    const stack = (err && err.stack) || String(err);
+    const compStack = (this.state.info && this.state.info.componentStack) || "";
+    const tr = function (k) { return _i18n.t(k); };
+    return (
+      <div style={{padding: 24, maxWidth: 820, margin: "0 auto"}}>
+        <div className="err-panel">
+          <div className="err-panel__title"><Ico name="warn"/> {tr("err.title")}</div>
+          <div className="err-panel__msg">{err && err.message ? err.message : String(err)}</div>
+          <button className="btn btn-sm" onClick={this.reset}>{tr("err.retry")}</button>
+        </div>
+        <details style={{marginTop: 16, fontSize: 12, color: "var(--text-muted)"}} open>
+          <summary style={{cursor: "pointer", marginBottom: 8}}>{tr("err.stackLabel")}</summary>
+          <pre style={{padding: 12, background: "var(--bg-card)", border: "1px solid var(--border)", borderRadius: 6, overflow: "auto", maxHeight: 240, whiteSpace: "pre-wrap", wordBreak: "break-word"}}>
+{stack}
+{compStack ? "\n--- React component stack ---" + compStack : ""}
+          </pre>
+        </details>
+      </div>
+    );
+  }
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(
+  <PluginErrorBoundary><App /></PluginErrorBoundary>
+);
+if (window.OpenAkita && typeof window.OpenAkita.ready === "function") {
+  window.OpenAkita.ready();
+}
+</script>
+</body>
+</html>

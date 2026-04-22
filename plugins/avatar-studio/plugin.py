@@ -132,7 +132,11 @@ class CreateVoiceBody(BaseModel):
 
     label: str
     source_audio_path: str
-    dashscope_voice_id: str
+    # ``dashscope_voice_id`` is optional — when the UI submits a fresh
+    # clone request we don't know the DashScope-assigned id yet; the
+    # backend allocates a placeholder and the cosyvoice-v2 clone
+    # workflow fills it in once DashScope returns.
+    dashscope_voice_id: str = ""
     sample_url: str | None = None
     language: str = "zh-CN"
     gender: str = "unknown"
@@ -155,9 +159,28 @@ class SettingsBody(BaseModel):
     api_key: str | None = None
     base_url: str | None = None
     timeout: float | None = None
+    timeout_sec: float | None = None  # UI-friendly alias.
+    max_retries: int | None = None
     cost_threshold: float | None = None
+    cost_threshold_cny: float | None = None  # UI-friendly alias (CNY-suffixed).
     auto_archive: bool | None = None
     retention_days: int | None = None
+    default_resolution: str | None = None
+    default_voice: str | None = None
+
+
+class CleanupBody(BaseModel):
+    model_config = _strict_model()
+
+    retention_days: int = 30
+
+
+class AiComposePromptBody(BaseModel):
+    model_config = _strict_model()
+
+    ref_images_url: list[str] = Field(default_factory=list)
+    hint: str = ""
+    user_intent: str = ""
 
 
 # ─── Plugin ────────────────────────────────────────────────────────────
@@ -227,13 +250,27 @@ class Plugin(PluginBase):
             "api_key": "",
             "base_url": DASHSCOPE_BASE_URL_BJ,
             "timeout": 60.0,
+            "max_retries": 2,
             "cost_threshold": DEFAULT_COST_THRESHOLD_CNY,
             "auto_archive": False,
             "retention_days": 30,
+            "default_resolution": "480P",
+            "default_voice": "longxiaochun_v2",
         }
         for k in list(merged):
             if k in cfg and cfg[k] not in (None, ""):
                 merged[k] = cfg[k]
+        # Aliases — accept both ``cost_threshold`` and ``cost_threshold_cny``
+        # so the UI can use the suffixed name without breaking older
+        # tooling. Same for ``timeout`` / ``timeout_sec``.
+        if cfg.get("cost_threshold_cny") not in (None, ""):
+            merged["cost_threshold"] = cfg["cost_threshold_cny"]
+        if cfg.get("timeout_sec") not in (None, ""):
+            merged["timeout"] = cfg["timeout_sec"]
+        # Mirror back so the UI reads consistent names regardless of which
+        # alias was used to write the value.
+        merged["cost_threshold_cny"] = merged["cost_threshold"]
+        merged["timeout_sec"] = merged["timeout"]
         return merged
 
     def _read_settings(self) -> dict[str, Any]:
@@ -335,9 +372,7 @@ class Plugin(PluginBase):
             )
             return f"预估费用 {preview['formatted_total']}（{len(preview['items'])} 项）"
 
-        mode_to_tool = {
-            (m if m.startswith("avatar_") else f"avatar_{m}"): m for m in MODES_BY_ID
-        }
+        mode_to_tool = {(m if m.startswith("avatar_") else f"avatar_{m}"): m for m in MODES_BY_ID}
         if tool_name in mode_to_tool:
             mode = mode_to_tool[tool_name]
             task = await self._create_task_internal(mode, args)
@@ -510,12 +545,9 @@ class Plugin(PluginBase):
         async def list_voices() -> dict[str, Any]:
             from avatar_models import SYSTEM_VOICES
 
-            custom = await self._tm.list_voices()
-            return {
-                "ok": True,
-                "system": [v.to_dict() for v in SYSTEM_VOICES],
-                "custom": custom,
-            }
+            sys_rows = [{**v.to_dict(), "is_system": True} for v in SYSTEM_VOICES]
+            custom_rows = [{**row, "is_system": False} for row in await self._tm.list_voices()]
+            return {"ok": True, "voices": sys_rows + custom_rows}
 
         @router.post("/voices")
         async def create_voice(body: CreateVoiceBody) -> dict[str, Any]:
@@ -577,13 +609,55 @@ class Plugin(PluginBase):
 
         @router.get("/healthz")
         async def healthz() -> dict[str, Any]:
+            storage_bytes = 0
+            try:
+                for p in self._data_dir.rglob("*"):
+                    if p.is_file():
+                        storage_bytes += p.stat().st_size
+            except OSError:
+                pass
             return {
                 "ok": True,
                 "plugin": PLUGIN_ID,
                 "ts": time.time(),
                 "has_api_key": self._client.has_api_key(),
+                "api_reachable": self._client.has_api_key(),
                 "in_flight": len(self._poll_tasks),
+                "storage": {"bytes_used": storage_bytes, "dir": str(self._data_dir)},
             }
+
+        @router.post("/cleanup")
+        async def cleanup(body: CleanupBody) -> dict[str, Any]:
+            removed = await self._tm.cleanup_expired(retention_days=body.retention_days)
+            return {"ok": True, "removed": removed}
+
+        @router.post("/ai/compose-prompt")
+        async def ai_compose_prompt(body: AiComposePromptBody) -> dict[str, Any]:
+            # Optional helper — uses qwen-vl-max to draft a "merge" prompt
+            # for ``avatar_compose``. Returns 200 with empty prompt if the
+            # ``caption_with_qwen_vl`` path is unavailable so the UI can
+            # fall back to the manual textarea without surfacing an error.
+            if not body.ref_images_url:
+                raise HTTPException(status_code=422, detail="ref_images_url required")
+            try:
+                resp = await self._client.caption_with_qwen_vl(
+                    image_urls=list(body.ref_images_url),
+                    system_prompt=(
+                        "你是一名擅长写图片融合指令的设计师。"
+                        '请仅返回 JSON：{"prompt": "..."}，不要解释。'
+                    ),
+                    user_prompt=(
+                        body.user_intent
+                        or "请基于这些参考图，写一段不超过 60 字的中文指令，"
+                        "用于把它们融合成一张主体人像图。"
+                    ),
+                )
+                parsed = (resp or {}).get("parsed") or {}
+                prompt = str(parsed.get("prompt") or resp.get("text") or "").strip()
+                return {"ok": True, "prompt": prompt}
+            except Exception as exc:  # noqa: BLE001
+                logger.info("avatar-studio: ai compose prompt fell back: %s", exc)
+                return {"ok": True, "prompt": "", "fallback": True}
 
         @router.get("/catalog")
         async def catalog() -> dict[str, Any]:
