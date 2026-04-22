@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] - 2026-04-22
 
+### Fixed — `plugins/ecommerce-image` v0.2.1：转圈白屏 + 后端硬化（plugin_api `~1` → `~2`）
+
+- **UI 不再卡转圈**：`_assets/{bootstrap,styles,icons,i18n}` 4 件齐全，
+  `apiCall` 优先 `OpenAkita.api`（5s 超时）回退 `directFetch`，render 后
+  `OpenAkita?.ready()` 通知宿主收起 spinner。
+- **UI 风格对齐**：`Ic` 双路径优先 `OpenAkitaIcons`、`PromptGuide` / 列表
+  / 表头 emoji 全部换 SVG，settings 改右侧 480px 抽屉，sidebar 加左侧
+  primary accent bar 与 `oa-list-panel` 节奏对齐；外层包
+  `PluginErrorBoundary`，render 抛错回 `oa-config-banner` 不再白屏。
+- **后端 hardening**：
+  - `_ensure_ready()` 单点 `Depends` 在 `_async_init` 完成前所有路由 503，
+    彻底消除 `self._tm is None` 竞争。
+  - 3 处 `asyncio.get_event_loop().create_task` 全部走
+    `api.spawn_task(name=...)`，host 卸载时统一 cancel + drain。
+  - `on_unload` 改 `async`：先 cancel + await `_init_task` / `_poll_task`，
+    再守卫式 close `dashscope` / `ark` / `tm`。
+  - `/upload` 1 MiB 分块 + 50 MB 上限 + Content-Length 提前 413。
+  - `update_task(**fields)` 上 `_UPDATABLE_COLS` 白名单，未知列丢警告
+    而不是拼进 SQL。
+- **manifest**：`plugin_api ~1 → ~2`，`version 0.2.0 → 0.2.1`。
+
 ### Changed — SDK 主动收缩，回归"最小插件壳子"定位
 
 完整执行 [SDK Refocus Cleanup 计划](.cursor/plans/sdk_refocus_cleanup_b3b5f02d.plan.md)。
