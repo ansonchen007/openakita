@@ -260,6 +260,7 @@ prompt + (可选 ref) → vendor.POST → task_id →
 | --- | --- | --- | --- |
 | `tongyi-image` | 0.3.x | DashScope wanx2 / qwen-image。**新插件抄它的 `plugin.py` / UI**。 | `tongyi_inline/{upload_preview, storage_stats}.py` |
 | `seedance-video` | 1.2.x | 字节 Seedance 文生视频 / 图生视频，含 long-video 链式生成。 | `seedance_inline/{vendor_client, upload_preview, storage_stats, llm_json_parser, parallel_executor}.py` |
+| `ecommerce-image` | 0.2.1 | 19 个电商场景 feature（主图 / 详情页 / 海报 / 视频）；DashScope + Ark 双 provider。**已升 `plugin_api ~2`**：`api.spawn_task` / async on_unload / `_ensure_ready` 守卫 / `_UPDATABLE_COLS` 白名单。 | `ecom_*.py` 同目录平铺（无 `_inline/` 子目录） |
 
 > 这两个插件**不**从 `openakita_plugin_sdk.contrib` import 任何东西（contrib 已删）。所有 helper 都在自家 `_inline/` 里 vendor 一份。
 
@@ -269,7 +270,7 @@ prompt + (可选 ref) → vendor.POST → task_id →
 
 | 类别 | 插件 |
 | --- | --- |
-| 图像生成 | `image-edit` · `local-sd-flux` · `ecommerce-image` · `smart-poster-grid` · `poster-maker` |
+| 图像生成 | `image-edit` · `local-sd-flux` · `smart-poster-grid` · `poster-maker` （`ecommerce-image` 已于 2026-04-22 复活回 `plugins/` 一等公民） |
 | 视频生成 | `ppt-to-video` · `shorts-batch` · `storyboard` |
 | 视频处理 | `highlight-cutter` · `video-bg-remove` · `video-color-grade` · `video-translator` · `subtitle-maker` |
 | 音频口播 | `avatar-speaker` · `tts-studio` · `dub-it` · `bgm-mixer` · `bgm-suggester` |
