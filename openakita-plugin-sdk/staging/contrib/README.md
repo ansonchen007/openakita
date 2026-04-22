@@ -48,7 +48,8 @@
 
 - `tool_result.py` — `ToolResult` 工具结果包装
 - `parallel_executor.py` — `run_parallel` 受限并发
-- `skill_loader.py` — SKILL.md 加载（曾在 SDK 顶层）
+
+> `skill_loader.py` 也属 staging,但因为它从未挂在 `contrib` 命名空间下(曾经直接放在 SDK 顶层),所以物理位置是同级目录 `staging/skill_loader.py`,对应测试 `staging/tests/test_skill_loader.py`。性质与本目录一致:**0 消费者、不打包、不进 CI**。
 
 ## 历史
 

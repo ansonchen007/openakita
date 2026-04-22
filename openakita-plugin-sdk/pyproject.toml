@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "openakita-plugin-sdk"
 version = "0.7.0"
-description = "SDK for building OpenAkita plugins — protocols, base classes, testing helpers, and Plugin 2.0 UI support"
+description = "SDK for building OpenAkita plugins — protocols, base classes, testing helpers"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11"
