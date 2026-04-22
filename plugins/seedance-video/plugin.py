@@ -118,6 +118,10 @@ class SystemInstallBody(BaseModel):
     method_index: int = 0
 
 
+class SystemUninstallBody(BaseModel):
+    method_index: int = 0
+
+
 class Plugin(PluginBase):
     def on_load(self, api: PluginAPI) -> None:
         self._api = api
@@ -659,9 +663,28 @@ class Plugin(PluginBase):
 
         @router.post("/prompt-optimize")
         async def optimize_prompt_endpoint(body: PromptOptimizeBody) -> dict:
+            # Distinguish "permission not granted" (fixable in-app via the
+            # /permissions/grant button) from "host has no brain configured"
+            # (needs the user to set up an LLM in main settings). Both look
+            # identical via get_brain()==None but have very different fixes.
+            if not self._api.has_permission("brain.access"):
+                return {
+                    "ok": False,
+                    "error": "missing_permission",
+                    "permission": "brain.access",
+                    "message": (
+                        "AI 优化未授权：插件缺少 brain.access 权限。"
+                        "请到「设置 → 系统组件 → 权限」点「一键授予」，"
+                        "或到「设置中心 → 插件管理 → Seedance 视频生成 → 权限」勾选保存。"
+                    ),
+                }
             brain = self._api.get_brain()
             if not brain:
-                return {"ok": False, "error": "LLM 不可用，请在主设置中配置 LLM"}
+                return {
+                    "ok": False,
+                    "error": "brain_unavailable",
+                    "message": "LLM 不可用：主进程未注入 brain（请确认 OpenAkita 已正常配置 LLM）。",
+                }
             try:
                 result = await optimize_prompt(
                     brain=brain,
@@ -822,12 +845,56 @@ class Plugin(PluginBase):
                 raise HTTPException(status_code=422, detail=result)
             return result
 
+        @router.post("/system/{dep_id}/uninstall")
+        async def system_uninstall(dep_id: str, body: SystemUninstallBody) -> dict:
+            try:
+                result = await self._sysdeps.start_uninstall(
+                    dep_id, method_index=body.method_index,
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+            if not result.get("ok") and result.get("error") == "requires_sudo":
+                raise HTTPException(status_code=422, detail=result)
+            return result
+
         @router.get("/system/{dep_id}/status")
         async def system_status(dep_id: str) -> dict:
             try:
                 return self._sysdeps.status(dep_id)
             except ValueError as exc:
                 raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+        # --- Self-service permission check ---
+        #
+        # Surfaces the gap between manifest.permissions (what the plugin
+        # NEEDS) and the runtime granted set (what the host actually gave
+        # us). The frontend uses this to render an in-app "Grant" banner
+        # so first-time users are not silently broken because they never
+        # opened the host's plugin-manager permission dialog.
+
+        @router.get("/permissions/check")
+        async def permissions_check() -> dict:
+            # Hard-coded list of permissions this plugin's user-facing
+            # features actually exercise. Keep in sync with plugin.json.
+            required = [
+                ("brain.access",   "AI 优化提示词 / 故事板分镜（需要主进程 LLM）"),
+                ("routes.register", "插件 HTTP 接口（前端调用）"),
+            ]
+            checks = [
+                {
+                    "permission": p,
+                    "feature": label,
+                    "granted": bool(self._api.has_permission(p)),
+                }
+                for p, label in required
+            ]
+            missing = [c["permission"] for c in checks if not c["granted"]]
+            return {
+                "ok": True,
+                "all_granted": not missing,
+                "missing": missing,
+                "checks": checks,
+            }
 
         @router.post("/long-video/storyboard")
         async def decompose_storyboard_ep(body: StoryboardDecomposeBody) -> dict:
