@@ -126,6 +126,8 @@ plugins/*
 !plugins/seedance-video/ui/
 !plugins/seedance-video/ui/dist/
 !plugins/seedance-video/ui/dist/**
+!plugins/ecommerce-image/
+!plugins/ecommerce-image/**
 
 # Archived plugins (not auto-loaded; see plugins-archive/README.md)
 plugins-archive/*
