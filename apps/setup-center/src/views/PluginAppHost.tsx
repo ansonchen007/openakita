@@ -311,7 +311,7 @@ export default function PluginAppHost({ pluginId, apiBase, onViewChange }: Plugi
             ) : null}
             <div className="spinner" style={{ width: 44, height: 44, margin: "0 auto 16px" }} />
             <div style={{ fontSize: 15, fontWeight: 500, color: "var(--text, #1e293b)" }}>
-              {t("pluginApp.loadingTitle", "正在加载 {{name}}…", { name: displayTitle })}
+              {t("pluginApp.loadingTitle", { defaultValue: "正在加载 {{name}}…", name: displayTitle })}
             </div>
             {slow && (
               <div style={{ marginTop: 10, fontSize: 12, color: "var(--text-muted, #94a3b8)" }}>
