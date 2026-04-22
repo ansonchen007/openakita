@@ -321,11 +321,16 @@ api.register_hook("on_schedule", scheduled_task)  # hooks.basic 权限
 
 ---
 
-## Plugin 2.0 — UI 插件接口 / UI Plugin APIs
+## UI 插件接口 / UI Plugin APIs
 
-以下方法是 Plugin 2.0 新增的，用于全栈 UI 插件开发。
+以下方法用于 UI 插件（plugin.json 含 `"ui"` 段）的后端：让 Python 侧能向 iframe 推事件、收事件、暴露文件下载。**前端资源全部由插件自己自包含**（HTML / JS / CSS 放在 `ui/dist/_assets/`），SDK 不再分发任何前端文件,host 也不再 mount `/api/plugins/_sdk/*`。
 
-The following methods are new in Plugin 2.0, for full-stack UI plugin development.
+These methods serve UI plugins (manifest with a `"ui"` block) on the
+backend side: pushing events to the iframe, receiving events from it,
+and exposing file downloads. **Frontend assets must be fully
+self-contained** under each plugin's `ui/dist/_assets/` — the SDK ships
+no frontend files in 0.7.0+, and the host no longer mounts
+`/api/plugins/_sdk/*`.
 
 ### 文件响应 / File Response
 
@@ -365,9 +370,12 @@ api.register_ui_event_handler("user_action", handle_user_action)
 version = api.ui_api_version  # 当前: "1.0.0" / Current: "1.0.0"
 ```
 
-详细的前端 SDK 和 Bridge 协议文档见 [plugin-ui.md](plugin-ui.md)。
+前端 bridge 的具体协议（`bridge:theme-change` / `bridge:locale-change` / `window.OpenAkita.api(...)` 等）见参考插件 `plugins/tongyi-image/ui/dist/index.html` 与 `plugins/seedance-video/ui/dist/index.html`，以及归档参考副本 `plugins-archive/_shared/web-uikit/`。
 
-See [plugin-ui.md](plugin-ui.md) for the full frontend SDK and Bridge protocol documentation.
+For the bridge protocol (`bridge:theme-change`, `bridge:locale-change`,
+`window.OpenAkita.api(...)`, etc.) refer to the two first-class plugins
+under `plugins/` and the archived reference copy at
+`plugins-archive/_shared/web-uikit/`.
 
 ---
 
@@ -447,5 +455,4 @@ The host tracks runtime errors. **10 errors** within a **5-minute sliding window
 - [permissions.md](permissions.md) — 权限完整列表 / Full permission catalog
 - [hooks.md](hooks.md) — 钩子回调详情 / Hook callback details
 - [rest-api.md](rest-api.md) — 管理 API 端点 / Management API endpoints
-- [plugin-ui.md](plugin-ui.md) — UI 插件后端 API / UI plugin backend API
 - [testing.md](testing.md) — 测试指南 / Testing guide

@@ -10,6 +10,16 @@
 > `plugins-archive/_shared/` 的共享副本。详见
 > [SDK Refocus Cleanup 计划](.cursor/plans/sdk_refocus_cleanup_b3b5f02d.plan.md)
 > 与 [CHANGELOG `[Unreleased]`](../CHANGELOG.md) 段。
+>
+> **同期硬规则（SDK 0.7.0+）**：
+> 1. **UI 必须自包含** — 每个 UI 插件的 `ui/dist/index.html` 引用的所有
+>    `<script>` / `<link>` 必须落在自家 `ui/dist/_assets/`，走相对路径。
+>    SDK 不再分发任何前端文件，host 也不再 mount `/api/plugins/_sdk/*`。
+>    参考 `plugins/tongyi-image/` 与 `plugins/seedance-video/` 的 `_assets/` 布局。
+> 2. **archive 复活模式** — 旧插件 (`plugins-archive/<name>/`) 如想复活
+>    UI，需把 `plugins-archive/_shared/web-uikit/` 下用得到的 `bootstrap.js`
+>    / `ui-kit/*` `cp` 一份到自家 `ui/dist/_assets/` 再改路径，不要再
+>    引用 `/api/plugins/_sdk/*`。
 
 ---
 

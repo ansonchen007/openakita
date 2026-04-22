@@ -84,31 +84,21 @@ class Plugin(PluginBase):
 | **Hook** | React to lifecycle events | `api.register_hook()` |
 | **Skill** | Inject prompt guidance (SKILL.md) | Declarative (no code) |
 | **MCP** | Wrap an MCP server as a managed plugin | JSON config only |
-| **Full-Stack UI** 🆕 | Plugin with dedicated frontend page | `api.register_api_routes()` + Bridge SDK |
+| **UI** | Plugin with self-contained frontend page | `api.register_api_routes()` + iframe bridge |
 
-### Full-Stack UI Plugin (Quick Start)
+### UI Plugin Note (0.7.0+)
 
-```bash
-# Create a plugin with frontend UI
-my-ui-plugin/
-├── plugin.json          # Add "ui" section (see plugin-ui.md)
-├── plugin.py            # Backend: register routes + tools
-└── ui/dist/index.html   # Frontend: inline Bridge SDK + your app
-```
+The SDK no longer ships any frontend assets. UI plugins are expected to be
+**fully self-contained** — every JS / CSS file the HTML references must
+live under the plugin's own `ui/dist/_assets/` directory and be referenced
+via relative paths. The host does not mount `/api/plugins/_sdk/*` anymore.
 
-```json
-// plugin.json — key addition
-{
-  "ui": {
-    "entry": "ui/dist/index.html",
-    "title": "My App",
-    "sidebar_group": "apps"
-  },
-  "requires": { "plugin_ui_api": "~1" }
-}
-```
-
-See [UI Plugin Guide](plugin-ui.md) for the full Bridge SDK template and protocol reference.
+For a working reference see `plugins/tongyi-image/` and
+`plugins/seedance-video/` in the main repo. The legacy bootstrap.js + ui-kit
+bundle (theme/locale bridge, `oa-*` CSS, `OpenAkitaIcons`, `OpenAkitaI18n`,
+`OpenAkitaMarkdown`) is preserved as a copy-paste reference at
+`plugins-archive/_shared/web-uikit/` for anyone reviving an archived
+plugin's UI.
 
 ## Testing
 
@@ -127,8 +117,6 @@ def test_my_plugin():
 |-----|---------------|
 | [Getting Started](getting-started.md) | Full walkthrough from zero to running plugin |
 | [API Reference](api-reference.md) | All `PluginAPI` methods and signatures |
-| [**UI Plugin Guide**](plugin-ui.md) | 🆕 Full-stack UI plugin development (Plugin 2.0) |
-| [**UI / i18n / UI Kit Migration**](plugin-i18n-and-uikit-migration.md) | 🆕 Step-by-step guide to bring an existing plugin onto the shared `oa-*` UI Kit + bilingual (zh/en) i18n |
 | [Permissions](permissions.md) | Three-tier permission model |
 | [Hooks](hooks.md) | All 14 lifecycle hooks with callback signatures |
 | [Protocols](protocols.md) | Memory, Retrieval, Search interfaces |

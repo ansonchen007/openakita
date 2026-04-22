@@ -19,10 +19,10 @@ SDK `0.6.0 → 0.7.0`，`contrib/` 子包整体下沉，`plugins/` 从 21 → 2 
 - **保留** SDK 核心：`PluginBase` / `PluginAPI` / `PluginManifest` / `tool_definition` /
   `decorators` / `hooks` / `protocols` / `scaffold` / `testing` / `channel` / `llm` /
   `config` / `types` / `version` / `skill_loader`。
-- **删除** `web/ui-kit/` 中无消费者的 6 个 JS：`cost-preview.js` / `error-coach.js` /
-  `dep-gate.js`（保留——seedance 还用）/ `onboard-wizard.js` / `first-success-celebrate.js` /
-  `task-panel.js` / `event-helpers.js`。`bootstrap.js` / `styles.css` / `icons.js` /
-  `markdown-mini.js` / `i18n.js` / `dep-gate.js` 因 tongyi/seedance UI 仍引用而保留。
+- **删除** `web/ui-kit/` 中无消费者的 7 个 JS：`cost-preview.js` / `error-coach.js` /
+  `event-helpers.js` / `first-success-celebrate.js` / `onboard-wizard.js` /
+  `task-panel.js` / `dep-gate.js`。剩下的 `bootstrap.js` / `styles.css` / `icons.js` /
+  `markdown-mini.js` / `i18n.js` 也整体从 SDK 中**移除**——见下文「前端资源下沉」。
 
 #### 一等公民收敛到 `plugins/`（21 → 2）
 
