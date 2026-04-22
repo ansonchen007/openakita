@@ -410,13 +410,24 @@ class AvatarDashScopeClient(BaseVendorClient):
         ``dependency`` error_kind).
         """
         try:
+            import dashscope  # type: ignore[import-not-found]
             from dashscope.audio.tts_v2 import (  # type: ignore[import-not-found]
                 AudioFormat,
                 SpeechSynthesizer,
             )
         except ImportError as e:
+            # Cosyvoice-v2 has no synchronous HTTP endpoint — only
+            # the official SDK (which wraps a WebSocket stream).
+            # Tell the user to install it into the *same* interpreter
+            # that runs OpenAkita, not a global one — `sys.executable`
+            # makes that interpreter unambiguous (e.g. .venv path).
+            import sys
             raise VendorError(
-                "dashscope SDK is required for cosyvoice-v2 TTS — `pip install dashscope`",
+                "未安装 cosyvoice-v2 TTS 所需的 dashscope SDK。"
+                f"请在 OpenAkita 运行的 Python 环境中执行：\n"
+                f"    {sys.executable} -m pip install dashscope\n"
+                "（avatar-studio 仅在调用 cosyvoice-v2 TTS 时才需要此 SDK；"
+                "其他模式与「上传现成音频」流程不受影响。）",
                 status=None,
                 retryable=False,
                 kind=ERROR_KIND_DEPENDENCY,
@@ -431,6 +442,12 @@ class AvatarDashScopeClient(BaseVendorClient):
                 retryable=False,
                 kind="auth",
             )
+
+        # The dashscope SDK reads credentials from a *module-level* global
+        # (`dashscope.api_key`) or the `DASHSCOPE_API_KEY` env var rather
+        # than constructor args — so we must hot-set it here every call
+        # to follow Pixelle A10 (read settings on every call, never cache).
+        dashscope.api_key = api_key
 
         fmt_const = getattr(AudioFormat, f"{format.upper()}_24000HZ_MONO_16BIT", None)
         synth = SpeechSynthesizer(model=MODEL_COSYVOICE_V2, voice=voice_id)

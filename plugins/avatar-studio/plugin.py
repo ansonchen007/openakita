@@ -183,6 +183,123 @@ class AiComposePromptBody(BaseModel):
     user_intent: str = ""
 
 
+# ─── Static prompt-guide content (mirrors tongyi-image's GET /prompt-guide) ──
+# Hand-curated digital-human writing tips. Returned verbatim so the React
+# layer can render six <Collapsible> chapters without a network round-trip
+# to LLMs. Update keys here only — never inline strings into the React side.
+
+_PROMPT_GUIDE_ZH: dict[str, Any] = {
+    "intro": (
+        "数字人工作室的输出质量极大依赖输入素材与口播文本。下方按业务场景"
+        "整理常用配方、最佳实践与避坑清单，可点击展开。"
+    ),
+    "mode_formulas": {
+        "photo_speak": (
+            "正面单人证件照（建议 ≥ 512px，光线均匀） + 口播文本（≤ 1000 字，"
+            "建议每 30 字加一个标点） + 系统音色或克隆音色 → wan2.2-s2v"
+        ),
+        "video_relip": (
+            "≤ 30 秒原视频（人物正脸时长 ≥ 60%） + 全新口播音频/文本（音频时长"
+            "≤ 视频时长） → videoretalk（仅替换嘴型，保留头部姿态与表情）"
+        ),
+        "video_reface": (
+            "≤ 30 秒动作视频 + 1 张新人物正面照（无遮挡） → wan2.2-animate-mix"
+            "（保留场景与肢体动作，仅替换主角面部与发型）。pro 档位价格 2× "
+            "但贴合度更高，建议商用首选。"
+        ),
+        "avatar_compose": (
+            "1-3 张参考图（人物 / 服饰 / 场景，建议人物图放第一张） + 中文融合"
+            "指令（建议 ≤ 60 字，可让 qwen-vl-max 帮你写） + 口播文本 → "
+            "wan2.5-i2i-preview 合成新形象 → wan2.2-s2v 生成口播视频"
+        ),
+    },
+    "best_practices": [
+        "口播文本避免英文专有名词单独成句，cosyvoice-v2 可能逐字母拼读。",
+        "人物正面照请去除墨镜、口罩、刘海过厚等遮挡，否则 s2v-detect 预检不通过。",
+        "16:9 视频建议主体居中且头肩占比 ≥ 40%，避免脸部被裁切。",
+        "克隆音色上传 5–30 秒安静的纯人声样本（无背景音乐），效果最佳。",
+        "使用 1080P 时单价大幅上升（约 2.5×），如非商用建议 720P 起步。",
+    ],
+    "voice_tips": [
+        "知性温暖：longxiaochun_v2（默认）、longwan_v2",
+        "新闻播报：longmiao_v2、longxiaoxuan_v2",
+        "活泼少女：longxiaobai_v2、longxiaohui_v2",
+        "沉稳男声：longxiaocheng_v2、longhan_v2、longhua_v2",
+    ],
+    "video_reface_tips": [
+        "动作幅度大、频繁转身的视频效果差；建议正面对话/演讲类素材。",
+        "新人物图与原视频主角性别、年龄相近时贴合度更高。",
+        "若效果不理想，可切换 pro 档位（wan-pro）二次生成。",
+    ],
+    "compose_examples": [
+        '"把第二张图的服饰穿到第一张人物身上，背景换成第三张的咖啡馆"',
+        '"参考第一张人物的五官，融合第二张的发型，输出半身像"',
+        '"将三张图融合为一张电商套图，主角居中，左右各一件商品"',
+    ],
+    "faq": [
+        ("任务一直 pending？", "请到「设置」检查 API Key 是否填对，或在「任务」里取消后重新提交。"),
+        ("提示「内容审核未通过」？", "口播文本或图像中含敏感信息，请修改后重试。"),
+        ("提示「dependency 错误」？", "本机缺少 dashscope SDK，请运行 `pip install dashscope`。"),
+        ("如何降低费用？", "选择 480P 而非 720P/1080P；缩短口播文本；不使用 pro 档位。"),
+    ],
+}
+
+_PROMPT_GUIDE_EN: dict[str, Any] = {
+    "intro": (
+        "Avatar Studio output quality depends heavily on input assets and "
+        "speech text. The chapters below summarise recipes, best practices, "
+        "and pitfalls — click to expand."
+    ),
+    "mode_formulas": {
+        "photo_speak": (
+            "Front-facing portrait (≥ 512px, even lighting) + speech text "
+            "(≤ 1000 chars) + system or cloned voice → wan2.2-s2v"
+        ),
+        "video_relip": (
+            "≤ 30s source video (face visible ≥ 60%) + new audio/text "
+            "(audio ≤ video duration) → videoretalk (lips only)"
+        ),
+        "video_reface": (
+            "≤ 30s motion video + 1 new portrait → wan2.2-animate-mix "
+            "(scene + motion preserved, face replaced). pro tier costs 2×"
+        ),
+        "avatar_compose": (
+            "1–3 references (portrait / outfit / scene) + Chinese merge prompt "
+            "(qwen-vl-max can draft it) + speech text → wan2.5-i2i-preview → wan2.2-s2v"
+        ),
+    },
+    "best_practices": [
+        "Avoid English jargon as a standalone sentence — cosyvoice-v2 may spell letters.",
+        "Remove sunglasses / heavy fringe — s2v-detect will fail otherwise.",
+        "For 16:9, keep head-and-shoulders ≥ 40% to avoid face cropping.",
+        "Use a 5–30s clean voice sample (no music) for cloning.",
+        "1080P costs ~2.5× of 720P — start with 720P unless commercial.",
+    ],
+    "voice_tips": [
+        "Warm: longxiaochun_v2 (default), longwan_v2",
+        "Newscast: longmiao_v2, longxiaoxuan_v2",
+        "Bright girl: longxiaobai_v2, longxiaohui_v2",
+        "Calm male: longxiaocheng_v2, longhan_v2, longhua_v2",
+    ],
+    "video_reface_tips": [
+        "Avoid large pose swings; prefer talking-head sources.",
+        "Match gender/age of the new portrait to the original lead.",
+        "Re-run on the pro tier if the result feels off.",
+    ],
+    "compose_examples": [
+        '"Apply the outfit from image 2 to person in image 1, set scene to image 3"',
+        '"Keep image-1 face, blend image-2 hairstyle, output half-body shot"',
+        '"Compose three images into an e-commerce banner, person centred"',
+    ],
+    "faq": [
+        ("Task stays pending?", "Verify the API Key in Settings, or cancel & resubmit."),
+        ("'Moderation failed'?", "Sensitive content in text/image; rewrite and retry."),
+        ("'Dependency error'?", "dashscope SDK missing — run `pip install dashscope`."),
+        ("How to cut cost?", "Pick 480P; shorten text; skip pro tier."),
+    ],
+}
+
+
 # ─── Plugin ────────────────────────────────────────────────────────────
 
 
@@ -663,6 +780,17 @@ class Plugin(PluginBase):
         async def catalog() -> dict[str, Any]:
             cat = build_catalog()
             return {"ok": True, "catalog": cat.__dict__}
+
+        @router.get("/prompt-guide")
+        async def prompt_guide(locale: str = "zh") -> dict[str, Any]:
+            # Static, in-process knowledge base for the "提示词指南" tab.
+            # Mirrors tongyi-image's GET /prompt-guide so the React layer
+            # can reuse the same `<Collapsible>` rendering loop.
+            return {
+                "ok": True,
+                "locale": locale,
+                "guide": _PROMPT_GUIDE_ZH if locale != "en" else _PROMPT_GUIDE_EN,
+            }
 
         # Upload ──────────────────────────────────────────────────────
 

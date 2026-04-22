@@ -202,11 +202,55 @@
     .switch.on::after { left: 18px; }
     .toggle-row {
       display: flex; align-items: center; gap: 10px;
-      padding: 8px 10px; border-radius: 6px;
+      padding: 10px 12px; border-radius: 8px;
       cursor: pointer; transition: background .15s; user-select: none;
+      background: var(--bg);
+      border: 1px solid var(--border);
     }
     .toggle-row:hover { background: var(--bg-hover); }
     .toggle-row__label { font-size: 13px; color: var(--text); flex: 1; }
+    .toggle-row__hint { font-size: 11px; color: var(--text-dim); margin-top: 2px; }
+    /* ── Mode chip filter (tongyi-image style) ── */
+    .mode-btn {
+      padding: 6px 14px; border-radius: 999px;
+      border: 1px solid var(--border); background: var(--bg);
+      font-size: 12px; color: var(--text-muted); cursor: pointer;
+      transition: all .15s; line-height: 1.4;
+    }
+    .mode-btn:hover { background: var(--bg-hover); color: var(--text); }
+    .mode-btn.active {
+      background: var(--primary); color: #fff; border-color: var(--primary);
+    }
+    /* ── Task card (split-pane list) ── */
+    .task-card {
+      display: flex; gap: 10px; padding: 10px 12px;
+      border-radius: 8px; cursor: pointer; transition: all .15s;
+      border: 1px solid transparent; margin-bottom: 6px;
+    }
+    .task-card:hover { background: var(--bg-hover); }
+    .task-card.selected {
+      background: rgba(99,102,241,.08); border-color: rgba(99,102,241,.35);
+    }
+    .task-info { flex: 1; min-width: 0; }
+    .task-info h4 {
+      font-size: 13px; font-weight: 500; color: var(--text);
+      margin: 0 0 4px 0; line-height: 1.35;
+      overflow: hidden; text-overflow: ellipsis;
+      display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+    }
+    .task-meta {
+      display: flex; flex-wrap: wrap; gap: 6px 10px;
+      font-size: 11px; color: var(--text-dim);
+    }
+    .task-meta > span { display: inline-flex; align-items: center; gap: 3px; }
+    .spinner-sm {
+      width: 14px; height: 14px; border-radius: 50%;
+      border: 2px solid var(--border); border-top-color: var(--primary);
+      animation: spin .9s linear infinite;
+    }
+    /* ── Advanced section divider ── */
+    .oa-settings-section .toggle-row + .form-row,
+    .oa-settings-section .form-row + .toggle-row { margin-top: 12px; }
     /* ── Status badges ── */
     .badge {
       display: inline-flex; align-items: center; gap: 4px;
@@ -550,6 +594,7 @@ const I18N_DICT = {
     "tabs.tasks": "任务",
     "tabs.voices": "音色库",
     "tabs.figures": "形象库",
+    "tabs.guide": "提示词指南",
     "tabs.settings": "设置",
     "banner.noKey.title": "尚未配置 DashScope API Key",
     "banner.noKey.desc": "请到「设置」中填写百炼 API Key 后再提交任务。",
@@ -633,6 +678,54 @@ const I18N_DICT = {
     "voices.create.submit": "提交克隆",
     "voices.empty.custom": "暂无自定义音色，上传一段录音即可克隆",
     "voices.delete.confirm": "确认删除该自定义音色？",
+    "voices.preview": "试听",
+    "voices.preview.busy": "合成中...",
+    "voices.preview.text": "你好，欢迎使用数字人工作室",
+    "voices.preview.fail": "试听合成失败：{msg}",
+    "voices.preview.empty": "尚未生成试听音频，点击「试听」按钮试听",
+    "create.section.modelInfo": "模型与计费",
+    "create.modelInfo.model": "底层模型",
+    "create.modelInfo.price": "计费",
+    "create.modelInfo.maxRes": "支持分辨率",
+    "create.modelInfo.maxDur": "支持时长",
+    "create.modelInfo.input": "输入要求",
+    "create.modelInfo.notes": "限制说明",
+    "create.modelInfo.availability": "模型可用性",
+    "create.modelInfo.availability.value": "百炼公开模型，需在控制台「模型广场」找到对应模型开通后才可调用；同账号未开通的模型调用会返回 403。",
+    "create.modelInfo.availability.console": "前往百炼控制台 · 模型广场",
+    "create.modelInfo.availability.docs": "百炼平台介绍文档",
+    "tasks.filter.status": "状态",
+    "tasks.filter.mode": "模式",
+    "tasks.filter.allModes": "全部模式",
+    "tasks.totalCount": "共 {n} 个",
+    "tasks.empty.noSelection.title": "未选择任务",
+    "tasks.empty.noSelection.hint": "在左侧任务列表中点击一项查看详情",
+    "tasks.detail.id": "任务 ID",
+    "tasks.detail.mode": "模式",
+    "tasks.detail.model": "模型",
+    "tasks.detail.createdAt": "创建时间",
+    "tasks.detail.runningHint": "DashScope 正在生成，可在「任务」标签页查看实时进度。",
+    "tasks.detail.completedNoOutput": "任务已完成但未返回输出文件",
+    "tasks.detail.failedTitle": "任务失败",
+    "tasks.detail.recheck": "重新查询",
+    "tasks.detail.preview": "预览",
+    "tasks.detail.download": "下载",
+    "tasks.detail.retry": "重试",
+    "tasks.detail.delete": "删除",
+    "preview.result.title": "本次任务",
+    "preview.result.runningHint": "任务已提交至 DashScope，正在生成...",
+    "preview.result.viewInTasks": "查看任务详情",
+    "preview.result.refresh": "刷新结果",
+    "preview.result.failed": "生成失败",
+    "preview.result.completedNoOutput": "任务完成但未返回输出文件",
+    "create.aiPrompt.title": "调用 qwen-vl-max 多模态模型，根据已上传的参考图自动生成融合 Prompt",
+    "guide.intro": "数字人工作室的输出质量极大依赖输入素材与口播文本。下方按业务场景整理常用配方、最佳实践与避坑清单，可点击展开。",
+    "guide.section.formulas": "各模式配方",
+    "guide.section.bestPractices": "通用最佳实践",
+    "guide.section.voice": "音色选择建议",
+    "guide.section.reface": "视频换人最佳实践",
+    "guide.section.compose": "融合 Prompt 示例",
+    "guide.section.faq": "常见问题",
     "figures.title": "形象库",
     "figures.upload": "上传新形象",
     "figures.upload.label": "形象名称",
@@ -718,6 +811,7 @@ const I18N_DICT = {
     "tabs.tasks": "Tasks",
     "tabs.voices": "Voices",
     "tabs.figures": "Figures",
+    "tabs.guide": "Prompt Guide",
     "tabs.settings": "Settings",
     "banner.noKey.title": "DashScope API Key not configured",
     "banner.noKey.desc": "Add your Bailian API Key under Settings before submitting tasks.",
@@ -801,6 +895,54 @@ const I18N_DICT = {
     "voices.create.submit": "Submit clone",
     "voices.empty.custom": "No custom voices yet — upload a sample to clone one",
     "voices.delete.confirm": "Delete this custom voice?",
+    "voices.preview": "Preview",
+    "voices.preview.busy": "Synthesising...",
+    "voices.preview.text": "Hello, welcome to Avatar Studio.",
+    "voices.preview.fail": "Preview synth failed: {msg}",
+    "voices.preview.empty": "No sample yet — click Preview to synthesise one.",
+    "create.section.modelInfo": "Model & pricing",
+    "create.modelInfo.model": "Backing model",
+    "create.modelInfo.price": "Pricing",
+    "create.modelInfo.maxRes": "Resolutions",
+    "create.modelInfo.maxDur": "Duration",
+    "create.modelInfo.input": "Inputs",
+    "create.modelInfo.notes": "Notes",
+    "create.modelInfo.availability": "Availability",
+    "create.modelInfo.availability.value": "Public Bailian model — open the Model Marketplace in the console to enable it for your account, otherwise calls return 403.",
+    "create.modelInfo.availability.console": "Open Bailian console · Model Marketplace",
+    "create.modelInfo.availability.docs": "Bailian platform docs",
+    "tasks.filter.status": "Status",
+    "tasks.filter.mode": "Mode",
+    "tasks.filter.allModes": "All modes",
+    "tasks.totalCount": "{n} items",
+    "tasks.empty.noSelection.title": "No task selected",
+    "tasks.empty.noSelection.hint": "Pick a task on the left to view its details",
+    "tasks.detail.id": "Task ID",
+    "tasks.detail.mode": "Mode",
+    "tasks.detail.model": "Model",
+    "tasks.detail.createdAt": "Created",
+    "tasks.detail.runningHint": "DashScope is generating — track live progress in the Tasks tab.",
+    "tasks.detail.completedNoOutput": "Completed but no output file was returned",
+    "tasks.detail.failedTitle": "Task failed",
+    "tasks.detail.recheck": "Re-query",
+    "tasks.detail.preview": "Preview",
+    "tasks.detail.download": "Download",
+    "tasks.detail.retry": "Retry",
+    "tasks.detail.delete": "Delete",
+    "preview.result.title": "Current task",
+    "preview.result.runningHint": "Submitted to DashScope, generating...",
+    "preview.result.viewInTasks": "Open task details",
+    "preview.result.refresh": "Refresh result",
+    "preview.result.failed": "Generation failed",
+    "preview.result.completedNoOutput": "Task complete but no output file was returned",
+    "create.aiPrompt.title": "Call qwen-vl-max to draft a compose prompt from your uploaded reference images",
+    "guide.intro": "Output quality depends heavily on inputs. Click chapters to expand.",
+    "guide.section.formulas": "Mode recipes",
+    "guide.section.bestPractices": "Best practices",
+    "guide.section.voice": "Voice picker tips",
+    "guide.section.reface": "Reface best practices",
+    "guide.section.compose": "Compose prompt examples",
+    "guide.section.faq": "FAQ",
     "figures.title": "Figure library",
     "figures.upload": "Add a figure",
     "figures.upload.label": "Figure label",
@@ -972,6 +1114,9 @@ const ICONS = {
   plus: '<line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>',
   cancel: '<circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/>',
   loader: '<line x1="12" y1="2" x2="12" y2="6"/><line x1="12" y1="18" x2="12" y2="22"/><line x1="4.93" y1="4.93" x2="7.76" y2="7.76"/><line x1="16.24" y1="16.24" x2="19.07" y2="19.07"/><line x1="2" y1="12" x2="6" y2="12"/><line x1="18" y1="12" x2="22" y2="12"/><line x1="4.93" y1="19.07" x2="7.76" y2="16.24"/><line x1="16.24" y1="7.76" x2="19.07" y2="4.93"/>',
+  sparkles: '<path d="M12 3l1.6 4.4L18 9l-4.4 1.6L12 15l-1.6-4.4L6 9l4.4-1.6L12 3z"/><path d="M19 14l.8 2.2L22 17l-2.2.8L19 20l-.8-2.2L16 17l2.2-.8L19 14z"/><path d="M5 15l.6 1.4L7 17l-1.4.6L5 19l-.6-1.4L3 17l1.4-.6L5 15z"/>',
+  down: '<polyline points="6 9 12 15 18 9"/>',
+  external: '<path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/>',
 };
 function Ico(props) {
   const svg = ICONS[props.name] || "";
@@ -996,7 +1141,13 @@ function Collapsible({ title, defaultOpen, children }) {
     <div className="coll">
       <div className="coll-head" onClick={function () { setOpen(!open); }}>
         <span>{title}</span>
-        <Ico name={open ? "close" : "plus"} />
+        <span className="coll-chevron" style={{
+          transform: open ? "rotate(180deg)" : "rotate(0deg)",
+          transition: "transform .15s",
+          display: "inline-flex", alignItems: "center", color: "var(--text-muted)",
+        }}>
+          <Ico name="down" />
+        </span>
       </div>
       {open && <div className="coll-body">{children}</div>}
     </div>
@@ -1295,14 +1446,62 @@ function useFigures() {
 }
 
 /* ─── CreateTab ───────────────────────────────────────────────────── */
-const RESOLUTIONS = ["480P", "720P"];
+// All resolutions DashScope can hand back; per-mode subsets live in
+// MODE_DEFS[*].resolutions so we never present a value the backing model
+// will reject. Keep this list flat for the SettingsTab default picker.
+const RESOLUTIONS = ["480P", "720P", "1080P"];
 const ASPECTS = ["1:1", "9:16", "16:9", "3:4", "4:3"];
 
+// Per-mode capability matrix. The `model`, `price`, `resolutions`,
+// `maxDuration`, `inputs`, `notes` fields drive the in-place
+// "模型与计费" panel inside CreateTab so users can see exactly which
+// DashScope endpoint is wired up and what its hard limits are. Numbers
+// here mirror avatar_models.py's pricing constants — keep both in sync.
 const MODE_DEFS = [
-  { id: "photo_speak", icon: "user", needsImage: true, needsVideo: false, needsTts: true, needsRefImage: false, needsCompose: false },
-  { id: "video_relip", icon: "film", needsImage: false, needsVideo: true, needsTts: true, needsRefImage: false, needsCompose: false },
-  { id: "video_reface", icon: "swap", needsImage: false, needsVideo: true, needsTts: false, needsRefImage: true, needsCompose: false },
-  { id: "avatar_compose", icon: "layers", needsImage: false, needsVideo: false, needsTts: true, needsRefImage: false, needsCompose: true },
+  {
+    id: "photo_speak", icon: "user",
+    needsImage: true, needsVideo: false, needsTts: true,
+    needsRefImage: false, needsCompose: false,
+    model: "wan2.2-s2v + wan2.2-s2v-detect",
+    price: "¥0.60/s（标准）",
+    resolutions: ["480P", "720P"],
+    maxDuration: "≤ 60s",
+    inputs: "1 张正面证件照（≥ 512px）+ 文本/音频",
+    notes: "需要先做人脸预检（s2v-detect）。1080P 暂不支持。",
+  },
+  {
+    id: "video_relip", icon: "film",
+    needsImage: false, needsVideo: true, needsTts: true,
+    needsRefImage: false, needsCompose: false,
+    model: "videoretalk",
+    price: "¥0.40/s",
+    resolutions: ["原视频分辨率"],
+    maxDuration: "≤ 30s",
+    inputs: "原视频（人物正脸时长 ≥ 60%）+ 新音频/文本",
+    notes: "保留原视频画面与动作，仅替换嘴型；输出与输入同分辨率。",
+  },
+  {
+    id: "video_reface", icon: "swap",
+    needsImage: false, needsVideo: true, needsTts: false,
+    needsRefImage: true, needsCompose: false,
+    model: "wan2.2-animate-mix（std / pro 双档）",
+    price: "¥0.60/s（std） · ¥1.20/s（pro）",
+    resolutions: ["480P", "720P", "1080P"],
+    maxDuration: "≤ 30s",
+    inputs: "≤ 30s 动作视频 + 1 张新人物正面照",
+    notes: "保留场景与肢体动作，替换主角面部与发型；商用建议 pro 档。",
+  },
+  {
+    id: "avatar_compose", icon: "layers",
+    needsImage: false, needsVideo: false, needsTts: true,
+    needsRefImage: false, needsCompose: true,
+    model: "wan2.5-i2i-preview → wan2.2-s2v",
+    price: "¥0.20/张（合成） + ¥0.60/s（口播）",
+    resolutions: ["480P", "720P"],
+    maxDuration: "≤ 60s",
+    inputs: "1-3 张参考图 + 中文融合 prompt + 文本/音频",
+    notes: "qwen-vl-max 可代写 prompt；融合后才进入口播管线。",
+  },
 ];
 
 function ModeChips({ active, onChange }) {
@@ -1326,22 +1525,92 @@ function ModeChips({ active, onChange }) {
   );
 }
 
-function VoicePicker({ voices, value, onChange }) {
+function ModelInfoCard({ mode }) {
+  // Read-only summary card. Surfaces the underlying DashScope model
+  // name + pricing + hard limits for the currently picked mode so the
+  // user is never confused about why e.g. a 1080P option is missing
+  // (because the s2v model doesn't support it). Mirrors the "模型/比例/
+  // 分辨率" disclosure pattern from tongyi-image / seedance-video.
   const t = useT();
+  const md = MODE_DEFS.find(function (x) { return x.id === mode; });
+  if (!md) return null;
+  const Row = function (props) {
+    return (
+      <div style={{display: "flex", gap: 10, fontSize: 12, padding: "4px 0", lineHeight: 1.5}}>
+        <div style={{width: 76, color: "var(--text-muted)", flexShrink: 0}}>{props.label}</div>
+        <div style={{color: "var(--text)", flex: 1, wordBreak: "break-word"}}>{props.value}</div>
+      </div>
+    );
+  };
   return (
-    <select className="input select" value={value || ""}
+    <div className="card" style={{background: "rgba(99,102,241,.04)", borderColor: "rgba(99,102,241,.25)"}}>
+      <div className="label" style={{marginBottom: 6}}>
+        <Ico name="info"/>{t("create.section.modelInfo")}
+      </div>
+      <Row label={t("create.modelInfo.model")} value={md.model} />
+      <Row label={t("create.modelInfo.price")} value={md.price} />
+      <Row label={t("create.modelInfo.maxRes")} value={md.resolutions.join(" / ")} />
+      <Row label={t("create.modelInfo.maxDur")} value={md.maxDuration} />
+      <Row label={t("create.modelInfo.input")} value={md.inputs} />
+      <Row label={t("create.modelInfo.notes")} value={md.notes} />
+      <div style={{
+        marginTop: 8, paddingTop: 8, borderTop: "1px dashed rgba(99,102,241,.2)",
+        display: "flex", gap: 10, fontSize: 12, lineHeight: 1.5,
+      }}>
+        <div style={{width: 76, color: "var(--text-muted)", flexShrink: 0}}>
+          {t("create.modelInfo.availability")}
+        </div>
+        <div style={{color: "var(--text)", flex: 1}}>
+          <span>{t("create.modelInfo.availability.value")}</span>
+          <div style={{marginTop: 4, display: "flex", flexWrap: "wrap", gap: 10}}>
+            <a href="https://bailian.console.aliyun.com/?tab=model#/model-market"
+               target="_blank" rel="noopener noreferrer"
+               style={{color: "var(--primary)", display: "inline-flex", alignItems: "center", gap: 3}}>
+              <Ico name="external"/>{t("create.modelInfo.availability.console")}
+            </a>
+            <a href="https://help.aliyun.com/zh/model-studio/what-is-model-studio"
+               target="_blank" rel="noopener noreferrer"
+               style={{color: "var(--primary)", display: "inline-flex", alignItems: "center", gap: 3}}>
+              <Ico name="external"/>{t("create.modelInfo.availability.docs")}
+            </a>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function VoicePicker({ voices, value, onChange }) {
+  // Voice list is always non-empty (server seeds 9 system voices on
+  // startup). The previous "音色…" placeholder was selectable and would
+  // submit an empty voice_id — we now drop the placeholder entirely
+  // and auto-resolve `value` to the first system voice if it's empty
+  // or no longer in the list.
+  const t = useT();
+  const systemVoices = voices.filter(function (v) { return v.is_system; });
+  const customVoices = voices.filter(function (v) { return !v.is_system; });
+  const allIds = voices.map(function (v) { return v.dashscope_voice_id || v.id; });
+  const fallback = (systemVoices[0] && (systemVoices[0].dashscope_voice_id || systemVoices[0].id))
+                || (voices[0] && (voices[0].dashscope_voice_id || voices[0].id))
+                || "longxiaochun_v2";
+  const effective = (value && allIds.indexOf(value) >= 0) ? value : fallback;
+  useEffect(function () {
+    if (voices.length > 0 && effective !== value) onChange(effective);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [voices.length, value]);
+  return (
+    <select className="input select" value={effective}
             onChange={function (e) { onChange(e.target.value); }}>
-      <option value="">{t("create.text.voice")}…</option>
-      {voices.filter(function (v) { return v.is_system; }).length > 0 && (
+      {systemVoices.length > 0 && (
         <optgroup label={t("voices.system")}>
-          {voices.filter(function (v) { return v.is_system; }).map(function (v) {
+          {systemVoices.map(function (v) {
             return <option key={v.id} value={v.dashscope_voice_id || v.id}>{v.label}</option>;
           })}
         </optgroup>
       )}
-      {voices.filter(function (v) { return !v.is_system; }).length > 0 && (
+      {customVoices.length > 0 && (
         <optgroup label={t("voices.custom")}>
-          {voices.filter(function (v) { return !v.is_system; }).map(function (v) {
+          {customVoices.map(function (v) {
             return <option key={v.id} value={v.dashscope_voice_id || v.id}>{v.label}</option>;
           })}
         </optgroup>
@@ -1503,6 +1772,7 @@ function CreateTab({ onGoToTasks, settings, voices, figures }) {
     <div className="split-layout">
       <div className="split-left">
         <ModeChips active={mode} onChange={setMode} />
+        <ModelInfoCard mode={mode} />
 
         {/* ── Asset uploads ──────────────────────────────────── */}
         {md.needsImage && (
@@ -1542,16 +1812,25 @@ function CreateTab({ onGoToTasks, settings, voices, figures }) {
                             onUploaded={function (v) { update("composeImages", v); }}
                             hint="最多 3 张：人物 + 服饰 + 场景" />
             <div className="form-row" style={{marginTop: 10}}>
-              <div className="label"><Ico name="info"/>{t("create.advanced.composePrompt")}</div>
+              <div className="oa-section-label oa-section-label--inline" style={{marginBottom: 6}}>
+                <span style={{display: "inline-flex", alignItems: "center", gap: 4}}>
+                  <Ico name="info"/>{t("create.advanced.composePrompt")}
+                </span>
+                <button type="button" className="oa-ai-btn"
+                        title={t("create.aiPrompt.title")}
+                        disabled={aiBusy || !form.composeImages || form.composeImages.length === 0}
+                        onClick={aiWritePrompt}>
+                  {aiBusy
+                    ? <span className="spinner-sm" style={{width: 11, height: 11, borderWidth: 1.5}} />
+                    : <span className="oa-icon oa-ai-btn__icon"
+                            dangerouslySetInnerHTML={{__html: ICONS.sparkles ? ('<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' + ICONS.sparkles + '</svg>') : ""}} />}
+                  {t("create.advanced.aiPrompt")}
+                </button>
+              </div>
               <textarea className="input textarea"
                         placeholder={t("create.advanced.composePrompt.placeholder")}
                         value={form.compose_prompt}
                         onChange={function (e) { update("compose_prompt", e.target.value); }} />
-              <button type="button" className="btn btn-sm" style={{marginTop: 6}}
-                      disabled={aiBusy} onClick={aiWritePrompt}>
-                {aiBusy && <span className="spinner-sm"/>}
-                <Ico name="info"/> {t("create.advanced.aiPrompt")}
-              </button>
             </div>
           </div>
         )}
@@ -1583,26 +1862,34 @@ function CreateTab({ onGoToTasks, settings, voices, figures }) {
         {/* ── Output parameters ──────────────────────────────── */}
         <div className="card">
           <div className="label"><Ico name="cog"/>{t("create.section.params")}</div>
-          {(mode === "photo_speak" || mode === "avatar_compose") && (
+          {(mode === "photo_speak" || mode === "avatar_compose" || mode === "video_reface") && (
             <div className="grid-2">
               <div>
                 <div className="text-xs text-muted" style={{marginBottom: 4}}>{t("create.params.resolution")}</div>
                 <select className="input select" value={form.resolution}
                         onChange={function (e) { update("resolution", e.target.value); }}>
-                  {RESOLUTIONS.map(function (r) { return <option key={r} value={r}>{r}</option>; })}
+                  {(md.resolutions || RESOLUTIONS)
+                    .filter(function (r) { return r !== "原视频分辨率"; })
+                    .map(function (r) { return <option key={r} value={r}>{r}</option>; })}
                 </select>
               </div>
               <div>
                 <div className="text-xs text-muted" style={{marginBottom: 4}}>{t("create.params.aspect")}</div>
                 <select className="input select" value={form.aspect}
-                        onChange={function (e) { update("aspect", e.target.value); }}>
+                        onChange={function (e) { update("aspect", e.target.value); }}
+                        disabled={mode === "video_reface"}>
                   {ASPECTS.map(function (a) { return <option key={a} value={a}>{a}</option>; })}
                 </select>
               </div>
             </div>
           )}
+          {mode === "video_relip" && (
+            <div className="text-xs text-dim" style={{padding: "4px 0"}}>
+              <Ico name="info"/> 输出与原视频相同分辨率与比例，不可调整。
+            </div>
+          )}
           {mode === "video_reface" && (
-            <div>
+            <div style={{marginTop: 10}}>
               <div className="text-xs text-muted" style={{marginBottom: 4}}>{t("create.params.qualityMode")}</div>
               <div className="flex gap-2">
                 <label className={"mode-chip " + (!form.mode_pro ? "active" : "")} style={{flex: 1, padding: "8px 12px"}}>
@@ -1628,23 +1915,41 @@ function CreateTab({ onGoToTasks, settings, voices, figures }) {
           )}
         </div>
 
-        {/* ── Advanced ──────────────────────────────────────── */}
-        <Collapsible title={t("create.section.advanced")}>
+        {/* ── Advanced ──────────────────────────────────────────
+         * Each option is wrapped in its own card-like row so the
+         * boundary between toggle / number / text inputs is
+         * visually unambiguous (addresses "感觉没对齐" feedback). */}
+        <Collapsible title={<span style={{display: "inline-flex", alignItems: "center", gap: 6}}>
+          <Ico name="cog"/>{t("create.section.advanced")}
+        </span>}>
           <div className="toggle-row" onClick={function () { update("watermark", !form.watermark); }}>
-            <span className="toggle-row__label">{t("create.advanced.watermark")}</span>
+            <div style={{flex: 1}}>
+              <div className="toggle-row__label">{t("create.advanced.watermark")}</div>
+              <div className="toggle-row__hint">DashScope 在生成视频右下角添加平台水印。</div>
+            </div>
             <Switch on={form.watermark} onChange={function (v) { update("watermark", v); }} />
           </div>
-          <div className="form-row" style={{marginTop: 8}}>
-            <div className="text-xs text-muted" style={{marginBottom: 4}}>{t("create.advanced.seed")}</div>
+          <div className="form-row" style={{marginTop: 12}}>
+            <div className="oa-section-label">
+              <Ico name="info"/>{t("create.advanced.seed")}
+            </div>
             <input type="number" className="input" value={form.seed}
                    onChange={function (e) { update("seed", parseInt(e.target.value, 10)); }} />
+            <div className="text-xs text-dim" style={{marginTop: 4}}>
+              相同种子 + 相同输入 → 可复现的输出，便于调参对照。
+            </div>
           </div>
           {mode === "avatar_compose" && (
-            <div className="form-row">
-              <div className="text-xs text-muted" style={{marginBottom: 4}}>{t("create.params.composeSize")}</div>
+            <div className="form-row" style={{marginTop: 12}}>
+              <div className="oa-section-label">
+                <Ico name="info"/>{t("create.params.composeSize")}
+              </div>
               <input type="text" className="input" placeholder={t("create.params.composeSizeAuto")}
                      value={form.compose_size}
                      onChange={function (e) { update("compose_size", e.target.value); }} />
+              <div className="text-xs text-dim" style={{marginTop: 4}}>
+                例：1024*1024、768*1344；留空时随最后一张参考图。
+              </div>
             </div>
           )}
         </Collapsible>
@@ -1661,31 +1966,84 @@ function CreateTab({ onGoToTasks, settings, voices, figures }) {
         </div>
       </div>
 
-      {/* ── Right preview pane ──────────────────────────────── */}
-      <div className="split-right">
-        <div className="card" style={{height: "100%", display: "flex", flexDirection: "column"}}>
-          {!startedTaskId ? (
-            <EmptyState icon="video" title={t("preview.empty.title")} hint={t("preview.empty.desc")} />
-          ) : (
-            <>
-              <div className="card-title">
-                <Ico name="video"/>
-                {liveTask && liveTask.status === "done" ? "完成" : t("preview.processing", { pct: Math.round((liveTask && liveTask.progress) || 0) })}
+      {/* ── Right preview pane (tongyi-image style) ──────────── */}
+      <div className={"split-right oa-preview-area" + (!startedTaskId ? " oa-preview-area--centered" : "")}>
+        {startedTaskId && liveTask ? (
+          <div style={{width: "100%"}}>
+            <div className="card">
+              <div className="flex items-center justify-between" style={{marginBottom: 12}}>
+                <span className="card-title" style={{marginBottom: 0}}>{t("preview.result.title")}</span>
+                <StatusBadge status={liveTask.status}/>
               </div>
-              {liveTask && liveTask.output_url
-                ? <video src={liveTask.output_url} controls style={{width: "100%", borderRadius: 6, background: "#000"}} />
-                : (
-                  <div style={{padding: 24, textAlign: "center", color: "var(--text-muted)"}}>
-                    <span className="spinner" style={{margin: "0 auto 8px"}} />
-                    <div>ID: <code className="inline">{shortId(startedTaskId)}</code></div>
+
+              {(liveTask.status === "running" || liveTask.status === "pending") && (
+                <div className="empty-state" style={{padding: "40px 20px"}}>
+                  <div className="spinner" style={{width: 32, height: 32, marginBottom: 12}}/>
+                  <span className="text-sm text-muted">{t("preview.result.runningHint")}</span>
+                  {liveTask.progress != null && (
+                    <div style={{width: "70%", marginTop: 12}}>
+                      <div className="progress"><div className="progress-fill" style={{width: Math.round((liveTask.progress || 0) * 100) + "%"}}/></div>
+                      <div className="text-xs text-dim" style={{marginTop: 4, textAlign: "center"}}>
+                        {Math.round((liveTask.progress || 0) * 100)}%
+                      </div>
+                    </div>
+                  )}
+                  <button className="btn btn-sm" style={{marginTop: 12}} onClick={onGoToTasks}>
+                    <Ico name="list"/> {t("preview.result.viewInTasks")}
+                  </button>
+                </div>
+              )}
+
+              {liveTask.status === "done" && (
+                liveTask.output_url ? (
+                  <div>
+                    <video src={liveTask.output_url} controls
+                           style={{width: "100%", maxHeight: 480, borderRadius: 8, background: "#000"}} />
+                    <div className="flex gap-2" style={{marginTop: 10}}>
+                      <button className="btn btn-sm btn-primary"
+                              onClick={function () { downloadFile(liveTask.output_url, "avatar-studio_" + shortId(liveTask.id) + ".mp4"); }}>
+                        <Ico name="download"/> {t("tasks.detail.download")}
+                      </button>
+                      <button className="btn btn-sm" onClick={onGoToTasks}>
+                        <Ico name="list"/> {t("preview.result.viewInTasks")}
+                      </button>
+                    </div>
                   </div>
-                )}
-              <button className="btn btn-sm" style={{marginTop: 10, alignSelf: "flex-start"}} onClick={onGoToTasks}>
-                {t("preview.gotoTasks")}
-              </button>
-            </>
-          )}
-        </div>
+                ) : (
+                  <div className="empty-state" style={{padding: "30px 20px"}}>
+                    <Ico name="check" cls="text-success"/>
+                    <span className="text-sm text-muted" style={{marginTop: 8}}>{t("preview.result.completedNoOutput")}</span>
+                    <button className="btn btn-sm" style={{marginTop: 8}}
+                            onClick={function () { pluginApi("GET", "/tasks/" + startedTaskId); }}>
+                      <Ico name="refresh"/> {t("preview.result.refresh")}
+                    </button>
+                  </div>
+                )
+              )}
+
+              {liveTask.status === "failed" && liveTask.error_kind && (
+                <ErrorPanel kind={liveTask.error_kind}
+                            message={liveTask.error_message}
+                            hints={liveTask.error_hints} />
+              )}
+            </div>
+
+            {liveTask.cost_breakdown && (
+              <div className="card">
+                <div className="card-title"><Ico name="info"/>{t("tasks.detail.cost")}</div>
+                <CostBreakdown items={liveTask.cost_breakdown.items}
+                               total={liveTask.cost_breakdown.total}
+                               formattedTotal={liveTask.cost_breakdown.formatted_total} />
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className="oa-preview-empty">
+            <span className="oa-preview-empty__icon"><Ico name="video"/></span>
+            <div className="oa-preview-empty__title">{t("preview.empty.title")}</div>
+            <div className="oa-preview-empty__hint">{t("preview.empty.desc")}</div>
+          </div>
+        )}
       </div>
 
       {pendingPreview && (
@@ -1727,7 +2085,16 @@ function useTaskHeartbeat(taskId) {
   return task;
 }
 
-/* ─── TasksTab ───────────────────────────────────────────────────── */
+/* ─── TasksTab ─────────────────────────────────────────────────────
+ * Split-pane layout mirroring tongyi-image:
+ *   ┌──────────────────────┬─────────────────────────────────┐
+ *   │ chip filters (status │  selected task detail OR         │
+ *   │ + mode)              │  oa-preview-empty placeholder    │
+ *   │ ────────────         │                                  │
+ *   │ task-card list       │                                  │
+ *   │ ────────────         │                                  │
+ *   │ footer: "共 N 个"    │                                  │
+ *   └──────────────────────┴─────────────────────────────────┘ */
 function TasksTab() {
   const t = useT();
   const { tasks, loading, refresh, setTasks } = useTasks();
@@ -1742,6 +2109,16 @@ function TasksTab() {
       return true;
     });
   }, [tasks, filterStatus, filterMode]);
+
+  // Auto-select the first task in the filtered list once loaded so the
+  // right pane is never empty just because the user hasn't clicked yet.
+  useEffect(function () {
+    if (!activeId && filtered.length > 0) setActiveId(filtered[0].id);
+    if (activeId && !filtered.some(function (x) { return x.id === activeId; }) && filtered.length > 0) {
+      setActiveId(filtered[0].id);
+    }
+  }, [filtered.map(function (x) { return x.id; }).join(","), activeId]);
+
   const active = activeId ? tasks.find(function (x) { return x.id === activeId; }) : null;
 
   const cancelTask = async function (id) {
@@ -1765,137 +2142,316 @@ function TasksTab() {
     if (task.output_url) downloadFile(task.output_url, "avatar-studio_" + shortId(task.id) + ".mp4");
   };
 
+  const STATUS_FILTERS = [
+    { v: "all",       l: t("tasks.filter.all") },
+    { v: "running",   l: t("tasks.filter.running") },
+    { v: "pending",   l: t("tasks.filter.pending") },
+    { v: "done",      l: t("tasks.filter.done") },
+    { v: "failed",    l: t("tasks.filter.failed") },
+    { v: "cancelled", l: t("tasks.filter.cancelled") },
+  ];
+
   return (
-    <div>
-      <div className="flex items-center gap-2" style={{marginBottom: 12}}>
-        <select className="input select" style={{width: 130}}
-                value={filterStatus} onChange={function (e) { setFilterStatus(e.target.value); }}>
-          <option value="all">{t("tasks.filter.all")}</option>
-          <option value="pending">{t("tasks.filter.pending")}</option>
-          <option value="running">{t("tasks.filter.running")}</option>
-          <option value="done">{t("tasks.filter.done")}</option>
-          <option value="failed">{t("tasks.filter.failed")}</option>
-          <option value="cancelled">{t("tasks.filter.cancelled")}</option>
-        </select>
-        <select className="input select" style={{width: 160}}
-                value={filterMode} onChange={function (e) { setFilterMode(e.target.value); }}>
-          <option value="all">{t("tasks.filter.all")}</option>
-          {MODE_DEFS.map(function (m) { return <option key={m.id} value={m.id}>{t("create.mode." + m.id)}</option>; })}
-        </select>
-        <button className="btn btn-sm" onClick={refresh} disabled={loading}>
-          <Ico name="refresh"/> {t("common.refresh")}
-        </button>
-        <span className="text-xs text-muted">{filtered.length} / {tasks.length}</span>
+    <div className="split-layout">
+      {/* ── Left: filters + task list ─────────────────────────── */}
+      <div className="split-left oa-list-panel">
+        <div className="oa-list-panel__filters">
+          <div>
+            <div className="oa-section-label">{t("tasks.filter.status")}</div>
+            <div className="oa-filter-group__buttons">
+              {STATUS_FILTERS.map(function (f) {
+                return (
+                  <button key={f.v} type="button"
+                          className={"mode-btn " + (filterStatus === f.v ? "active" : "")}
+                          onClick={function () { setFilterStatus(f.v); }}>{f.l}</button>
+                );
+              })}
+            </div>
+          </div>
+          <div>
+            <div className="oa-section-label">{t("tasks.filter.mode")}</div>
+            <div className="oa-filter-group__buttons">
+              <button type="button"
+                      className={"mode-btn " + (filterMode === "all" ? "active" : "")}
+                      onClick={function () { setFilterMode("all"); }}>{t("tasks.filter.allModes")}</button>
+              {MODE_DEFS.map(function (m) {
+                return (
+                  <button key={m.id} type="button"
+                          className={"mode-btn " + (filterMode === m.id ? "active" : "")}
+                          onClick={function () { setFilterMode(m.id); }}>
+                    <span style={{display: "inline-flex", alignItems: "center", gap: 4}}>
+                      <Ico name={m.icon}/> {t("create.mode." + m.id)}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+
+        <hr className="oa-list-panel__divider" />
+
+        <div className="oa-list-panel__items">
+          {loading && tasks.length === 0 ? (
+            <div className="empty-state"><div className="spinner"/></div>
+          ) : filtered.length === 0 ? (
+            <div className="oa-preview-empty" style={{minHeight: 160, padding: "24px 16px"}}>
+              <span className="oa-preview-empty__icon"><Ico name="list"/></span>
+              <div className="oa-preview-empty__title">{t("tasks.empty")}</div>
+              <div className="oa-preview-empty__hint">{t("tasks.empty.hint")}</div>
+            </div>
+          ) : (
+            filtered.map(function (tk) {
+              const md = MODE_DEFS.find(function (m) { return m.id === tk.mode; }) || {};
+              return (
+                <div key={tk.id}
+                     className={"task-card " + (activeId === tk.id ? "selected" : "")}
+                     onClick={function () { setActiveId(tk.id); }}>
+                  <div className="task-thumb">
+                    {tk.output_url
+                      ? <video src={tk.output_url} muted preload="metadata"/>
+                      : tk.status === "running" || tk.status === "pending"
+                          ? <div style={{display: "flex", alignItems: "center", justifyContent: "center", height: "100%"}}>
+                              <span className="spinner-sm"/>
+                            </div>
+                          : <span className="text-dim text-xs"
+                                  style={{display: "flex", alignItems: "center", justifyContent: "center", height: "100%"}}>—</span>}
+                  </div>
+                  <div className="task-info">
+                    <h4>
+                      <Ico name={md.icon || "video"}/>
+                      <span style={{marginLeft: 4}}>{t("create.mode." + tk.mode)}</span>
+                    </h4>
+                    <div className="task-meta">
+                      <StatusBadge status={tk.status}/>
+                      <span className="text-xs">{formatTime(tk.created_at)}</span>
+                      {tk.cost_total != null && (
+                        <span className="text-xs">¥{Number(tk.cost_total).toFixed(2)}</span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              );
+            })
+          )}
+        </div>
+
+        <div className="oa-list-panel__footer"
+             style={{display: "flex", alignItems: "center", gap: 8}}>
+          <span>{t("tasks.totalCount", { n: filtered.length })}</span>
+          <button className="btn btn-sm" onClick={refresh} disabled={loading}
+                  style={{marginLeft: "auto"}}>
+            <Ico name="refresh"/> {t("common.refresh")}
+          </button>
+        </div>
       </div>
 
-      {filtered.length === 0
-        ? <EmptyState icon="list" title={t("tasks.empty")} hint={t("tasks.empty.hint")} />
-        : (
-          <div className="card" style={{padding: 0}}>
-            <table className="ak-table">
-              <thead>
-                <tr>
-                  <th>{t("tasks.col.mode")}</th>
-                  <th>{t("tasks.col.id")}</th>
-                  <th>{t("tasks.col.status")}</th>
-                  <th>{t("tasks.col.created")}</th>
-                  <th>{t("tasks.col.cost")}</th>
-                  <th style={{textAlign: "right"}}>{t("tasks.col.actions")}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filtered.map(function (x) {
-                  return (
-                    <tr key={x.id}
-                        className={"row " + (activeId === x.id ? "selected" : "")}
-                        onClick={function () { setActiveId(x.id); }}>
-                      <td>
-                        <span className="flex items-center gap-2">
-                          <Ico name={(MODE_DEFS.find(function (m) { return m.id === x.mode; }) || {}).icon || "video"} />
-                          <span>{t("create.mode." + x.mode)}</span>
-                        </span>
-                      </td>
-                      <td><code className="inline">{shortId(x.id)}</code></td>
-                      <td><StatusBadge status={x.status}/></td>
-                      <td className="text-xs text-muted">{formatTime(x.created_at)}</td>
-                      <td className="text-xs">{x.cost_total != null ? "¥" + Number(x.cost_total).toFixed(2) : "—"}</td>
-                      <td style={{textAlign: "right"}}>
-                        <span onClick={function (e) { e.stopPropagation(); }}>
-                          {(x.status === "running" || x.status === "pending") && (
-                            <button className="btn btn-sm" onClick={function () { cancelTask(x.id); }}><Ico name="cancel"/></button>
-                          )}
-                          {x.status === "failed" && (
-                            <button className="btn btn-sm" onClick={function () { retryTask(x.id); }}><Ico name="refresh"/></button>
-                          )}
-                          {x.output_url && (
-                            <button className="btn btn-sm" onClick={function () { downloadOutput(x); }}><Ico name="download"/></button>
-                          )}
-                          <button className="btn btn-sm btn-danger" onClick={function () { deleteTask(x.id); }}><Ico name="trash"/></button>
-                        </span>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+      {/* ── Right: task detail or empty state ─────────────────── */}
+      <div className={"split-right oa-preview-area" + (!active ? " oa-preview-area--centered" : "")}>
+        {active ? (
+          <div style={{width: "100%"}}>
+            <div className="card">
+              <div className="flex items-center justify-between" style={{marginBottom: 12}}>
+                <span className="card-title" style={{marginBottom: 0}}>
+                  {t("tasks.detail.title")}
+                  <code className="inline" style={{marginLeft: 8, fontSize: 11}}>{shortId(active.id)}</code>
+                </span>
+                <div className="flex gap-2">
+                  <button className="btn btn-sm" onClick={function () { copyToClipboard(active.id); }}>
+                    <Ico name="copy"/> {t("tasks.detail.copyId")}
+                  </button>
+                  {(active.status === "running" || active.status === "pending") && (
+                    <button className="btn btn-sm" onClick={function () { cancelTask(active.id); }}>
+                      <Ico name="cancel"/> {t("tasks.action.cancel")}
+                    </button>
+                  )}
+                  {active.status === "failed" && (
+                    <button className="btn btn-sm" onClick={function () { retryTask(active.id); }}>
+                      <Ico name="refresh"/> {t("tasks.detail.retry")}
+                    </button>
+                  )}
+                  {active.output_url && (
+                    <button className="btn btn-sm btn-primary" onClick={function () { downloadOutput(active); }}>
+                      <Ico name="download"/> {t("tasks.detail.download")}
+                    </button>
+                  )}
+                  <button className="btn btn-sm btn-danger" onClick={function () { deleteTask(active.id); }}>
+                    <Ico name="trash"/> {t("tasks.detail.delete")}
+                  </button>
+                </div>
+              </div>
+
+              {active.status === "done" && (
+                active.output_url
+                  ? <video src={active.output_url} controls
+                           style={{width: "100%", maxHeight: 480, borderRadius: 8, background: "#000"}} />
+                  : (
+                    <div className="empty-state" style={{padding: "30px 20px"}}>
+                      <Ico name="check" cls="text-success"/>
+                      <span className="text-sm text-muted" style={{marginTop: 8}}>{t("tasks.detail.completedNoOutput")}</span>
+                      <button className="btn btn-sm btn-primary" style={{marginTop: 8}}
+                              onClick={refresh}>
+                        <Ico name="refresh"/> {t("tasks.detail.recheck")}
+                      </button>
+                    </div>
+                  )
+              )}
+
+              {(active.status === "running" || active.status === "pending") && (
+                <div className="empty-state" style={{padding: "40px 20px"}}>
+                  <div className="spinner" style={{width: 32, height: 32, marginBottom: 12}}/>
+                  <span className="text-sm text-muted">{t("tasks.detail.runningHint")}</span>
+                  {active.progress != null && (
+                    <div style={{width: "60%", marginTop: 12}}>
+                      <div className="progress"><div className="progress-fill" style={{width: Math.round((active.progress || 0) * 100) + "%"}}/></div>
+                      <div className="text-xs text-dim" style={{marginTop: 4, textAlign: "center"}}>
+                        {Math.round((active.progress || 0) * 100)}%
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {active.status === "failed" && active.error_kind && (
+                <ErrorPanel kind={active.error_kind}
+                            message={active.error_message}
+                            hints={active.error_hints} />
+              )}
+
+              {active.status === "cancelled" && (
+                <div style={{padding: 12, background: "rgba(245,158,11,.08)", borderRadius: 6,
+                             color: "var(--text-muted)", fontSize: 13, textAlign: "center"}}>
+                  {t("tasks.filter.cancelled")}
+                </div>
+              )}
+            </div>
+
+            <div className="card">
+              <div className="grid-2">
+                <div>
+                  <span className="text-xs text-dim">{t("tasks.detail.id")}</span>
+                  <div className="text-sm" style={{wordBreak: "break-all"}}>
+                    <code className="inline">{active.id}</code>
+                  </div>
+                </div>
+                <div>
+                  <span className="text-xs text-dim">{t("tasks.detail.mode")}</span>
+                  <div className="text-sm">{t("create.mode." + active.mode)}</div>
+                </div>
+                <div>
+                  <span className="text-xs text-dim">{t("tasks.detail.model")}</span>
+                  <div className="text-sm">
+                    <code className="inline">
+                      {(MODE_DEFS.find(function (m) { return m.id === active.mode; }) || {}).model || "—"}
+                    </code>
+                  </div>
+                </div>
+                <div>
+                  <span className="text-xs text-dim">{t("tasks.detail.createdAt")}</span>
+                  <div className="text-sm">{formatTime(active.created_at)}</div>
+                </div>
+              </div>
+            </div>
+
+            {active.cost_breakdown && (
+              <div className="card">
+                <div className="card-title"><Ico name="info"/>{t("tasks.detail.cost")}</div>
+                <CostBreakdown items={active.cost_breakdown.items}
+                               total={active.cost_breakdown.total}
+                               formattedTotal={active.cost_breakdown.formatted_total} />
+              </div>
+            )}
+
+            <Collapsible title={t("tasks.detail.params")}>
+              <pre style={{fontSize: 11, overflow: "auto", maxHeight: 240, margin: 0,
+                           background: "var(--bg)", padding: 8, borderRadius: 6}}>
+                {JSON.stringify(active.params || {}, null, 2)}
+              </pre>
+            </Collapsible>
+            <Collapsible title={t("tasks.detail.metadata")}>
+              <pre style={{fontSize: 11, overflow: "auto", maxHeight: 240, margin: 0,
+                           background: "var(--bg)", padding: 8, borderRadius: 6}}>
+                {JSON.stringify(active, null, 2)}
+              </pre>
+            </Collapsible>
+          </div>
+        ) : (
+          <div className="oa-preview-empty">
+            <span className="oa-preview-empty__icon"><Ico name="list"/></span>
+            <div className="oa-preview-empty__title">{t("tasks.empty.noSelection.title")}</div>
+            <div className="oa-preview-empty__hint">{t("tasks.empty.noSelection.hint")}</div>
           </div>
         )}
-
-      {active && (
-        <>
-          <div className="drawer-mask" onClick={function () { setActiveId(null); }} />
-          <div className="drawer">
-            <div className="drawer-head">
-              <strong>{t("tasks.detail.title")} <code className="inline" style={{marginLeft: 6}}>{shortId(active.id)}</code></strong>
-              <span>
-                <button className="btn btn-sm" onClick={function () { copyToClipboard(active.id); }}>
-                  <Ico name="copy"/> {t("tasks.detail.copyId")}
-                </button>
-                <button className="btn btn-sm" style={{marginLeft: 6}} onClick={function () { setActiveId(null); }}>
-                  <Ico name="close"/>
-                </button>
-              </span>
-            </div>
-            <div className="drawer-body">
-              <div className="flex items-center gap-2" style={{marginBottom: 10}}>
-                <StatusBadge status={active.status}/>
-                <span className="text-xs text-muted">{formatTime(active.created_at)}</span>
-              </div>
-              {active.output_url && (
-                <video src={active.output_url} controls
-                       style={{width: "100%", borderRadius: 6, background: "#000", marginBottom: 12}} />
-              )}
-              {active.error_kind && (
-                <div style={{marginBottom: 12}}>
-                  <div className="label"><Ico name="warn"/>{t("tasks.detail.error")}</div>
-                  <ErrorPanel kind={active.error_kind}
-                              message={active.error_message}
-                              hints={active.error_hints} />
-                </div>
-              )}
-              {active.cost_breakdown && (
-                <div style={{marginBottom: 12}}>
-                  <div className="label"><Ico name="info"/>{t("tasks.detail.cost")}</div>
-                  <CostBreakdown items={active.cost_breakdown.items}
-                                 total={active.cost_breakdown.total}
-                                 formattedTotal={active.cost_breakdown.formatted_total} />
-                </div>
-              )}
-              <Collapsible title={t("tasks.detail.params")}>
-                <pre style={{fontSize: 11, overflow: "auto", maxHeight: 240}}>{JSON.stringify(active.params || {}, null, 2)}</pre>
-              </Collapsible>
-              <Collapsible title={t("tasks.detail.metadata")}>
-                <pre style={{fontSize: 11, overflow: "auto", maxHeight: 240}}>{JSON.stringify(active, null, 2)}</pre>
-              </Collapsible>
-            </div>
-          </div>
-        </>
-      )}
+      </div>
     </div>
   );
 }
 
 /* ─── VoicesTab ──────────────────────────────────────────────────── */
+function VoiceCard({ voice, onDelete }) {
+  // Per-card preview state. Clicking "试听" calls
+  // POST /voices/{dashscope_voice_id}/sample which synthesises a short
+  // demo via cosyvoice-v2 and returns a preview URL we can play inline.
+  const t = useT();
+  const [busy, setBusy] = useState(false);
+  const [url, setUrl] = useState(voice.sample_url || "");
+  const v = voice;
+  const cosyId = v.dashscope_voice_id || v.id;
+  const previewText = t("voices.preview.text");
+
+  const playPreview = async function () {
+    setBusy(true);
+    try {
+      const r = await pluginApi(
+        "POST",
+        "/voices/" + encodeURIComponent(cosyId)
+        + "/sample?text=" + encodeURIComponent(previewText),
+      );
+      if (r.ok && r.body && r.body.url) {
+        setUrl(r.body.url);
+      } else {
+        const msg = (r.body && (r.body.detail && r.body.detail.message || r.body.message)) || "unknown";
+        showToast(t("voices.preview.fail", { msg }), "error");
+      }
+    } catch (e) {
+      showToast(t("voices.preview.fail", { msg: String(e) }), "error");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="lib-card">
+      <div className="lib-card__head">
+        <div style={{minWidth: 0, flex: 1}}>
+          <div className="lib-card__title truncate">{v.label || v.label_zh || v.id}</div>
+          <div className="lib-card__sub truncate">
+            {(v.gender || "—") + " · " + (v.style || v.style_zh || v.language || "zh")}
+          </div>
+        </div>
+        {v.is_system
+          ? <span className="tag tag-blue">系统</span>
+          : <button className="btn btn-sm btn-danger" onClick={function () { onDelete(v); }}>
+              <Ico name="trash"/>
+            </button>}
+      </div>
+      <div className="text-xs text-dim truncate" title={cosyId}>
+        <code className="inline">{cosyId}</code>
+      </div>
+      <div className="lib-card__media" style={{flexDirection: "column", alignItems: "stretch", gap: 6}}>
+        {url
+          ? <audio src={url} controls preload="none" style={{width: "100%", height: 32}} />
+          : <div className="text-xs text-dim" style={{padding: "4px 0"}}>{t("voices.preview.empty")}</div>}
+        <button className="btn btn-sm" disabled={busy} onClick={playPreview}>
+          {busy && <span className="spinner-sm"/>}
+          <Ico name={busy ? "loader" : "play"}/>
+          {busy ? t("voices.preview.busy") : t("voices.preview")}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function VoicesTab() {
   const t = useT();
   const { voices, refresh } = useVoices();
@@ -1959,24 +2515,7 @@ function VoicesTab() {
       )}
 
       <div className="lib-grid" style={{marginBottom: 18}}>
-        {sys.map(function (v) {
-          return (
-            <div key={v.id} className="lib-card">
-              <div className="lib-card__head">
-                <div>
-                  <div className="lib-card__title">{v.label}</div>
-                  <div className="lib-card__sub">{v.gender || "—"} · {v.language || "zh"}</div>
-                </div>
-                <span className="tag tag-blue">系统</span>
-              </div>
-              {v.sample_url && (
-                <div className="lib-card__media">
-                  <audio src={v.sample_url} controls preload="none" />
-                </div>
-              )}
-            </div>
-          );
-        })}
+        {sys.map(function (v) { return <VoiceCard key={v.id} voice={v} onDelete={del} />; })}
       </div>
 
       <h3 style={{fontSize: 14, fontWeight: 600, marginBottom: 8}}>
@@ -1986,24 +2525,7 @@ function VoicesTab() {
         ? <EmptyState icon="mic" title={t("voices.empty.custom")} />
         : (
           <div className="lib-grid">
-            {cust.map(function (v) {
-              return (
-                <div key={v.id} className="lib-card">
-                  <div className="lib-card__head">
-                    <div>
-                      <div className="lib-card__title">{v.label}</div>
-                      <div className="lib-card__sub text-xs text-dim">{shortId(v.dashscope_voice_id || v.id)}</div>
-                    </div>
-                    <button className="btn btn-sm btn-danger" onClick={function () { del(v); }}><Ico name="trash"/></button>
-                  </div>
-                  {v.sample_url && (
-                    <div className="lib-card__media">
-                      <audio src={v.sample_url} controls preload="none" />
-                    </div>
-                  )}
-                </div>
-              );
-            })}
+            {cust.map(function (v) { return <VoiceCard key={v.id} voice={v} onDelete={del} />; })}
           </div>
         )}
     </div>
@@ -2101,10 +2623,16 @@ function FiguresTab() {
 
 /* ─── SettingsTab ────────────────────────────────────────────────── */
 function SettingsTab({ settings, onSaved, voices }) {
+  // Visual layout follows tongyi-image: each section is a separate
+  // .oa-settings-section card with a leading icon. The first row of
+  // the API card uses the .oa-config-field-callout treatment to draw a
+  // soft yellow frame when no key has been entered yet (Pixelle C5).
   const t = useT();
   const [draft, setDraft] = useState(function () { return Object.assign({}, settings); });
   useEffect(function () { setDraft(Object.assign({}, settings)); }, [settings]);
+  const [keyVisible, setKeyVisible] = useState(false);
   const [testBusy, setTestBusy] = useState(false);
+  const [savingKey, setSavingKey] = useState(false);
   const [storage, setStorage] = useState(null);
 
   useEffect(function () {
@@ -2115,25 +2643,37 @@ function SettingsTab({ settings, onSaved, voices }) {
 
   const update = function (k, v) { setDraft(Object.assign({}, draft, { [k]: v })); };
 
-  const save = async function () {
-    const r = await pluginApi("PUT", "/settings", {
+  // Patch save: only push the keys the caller touched. Each control
+  // wires its own onChange to call this with a {field: value} dict, so
+  // we never accidentally overwrite a sibling that's mid-edit.
+  const save = async function (patch) {
+    const r = await pluginApi("PUT", "/settings", patch);
+    if (r.ok) { showToast(t("settings.save.ok")); if (onSaved) onSaved(); }
+    else { showToast("保存失败", "error"); }
+  };
+
+  const saveAll = async function () {
+    await save({
       api_key: draft.api_key || "",
       base_url: draft.base_url || "",
       default_resolution: draft.default_resolution || "480P",
       default_voice: draft.default_voice || "longxiaochun_v2",
-      cost_threshold_cny: Number(draft.cost_threshold_cny || 5),
-      timeout_sec: Number(draft.timeout_sec || 60),
-      max_retries: Number(draft.max_retries || 2),
-      retention_days: Number(draft.retention_days || 30),
+      cost_threshold_cny: Number(draft.cost_threshold_cny != null ? draft.cost_threshold_cny : 5),
+      timeout_sec: Number(draft.timeout_sec != null ? draft.timeout_sec : 60),
+      max_retries: Number(draft.max_retries != null ? draft.max_retries : 2),
+      retention_days: Number(draft.retention_days != null ? draft.retention_days : 30),
     });
-    if (r.ok) { showToast(t("settings.save.ok")); if (onSaved) onSaved(draft); }
-    else { showToast("保存失败", "error"); }
+  };
+
+  const saveKey = async function () {
+    setSavingKey(true);
+    try { await save({ api_key: draft.api_key || "" }); }
+    finally { setSavingKey(false); }
   };
 
   const testConn = async function () {
     setTestBusy(true);
     try {
-      // Save first so the test uses the latest key (Pixelle A10).
       await pluginApi("PUT", "/settings", { api_key: draft.api_key || "" });
       const r = await pluginApi("GET", "/healthz");
       if (r.ok && r.body && r.body.api_reachable) showToast(t("settings.api.test.ok"));
@@ -2146,110 +2686,302 @@ function SettingsTab({ settings, onSaved, voices }) {
     if (r.ok) showToast("已清理 " + (r.body && r.body.removed || 0) + " 条任务");
   };
 
+  // Voice option list resilient to: (1) backend not yet responded
+  // (voices === []), (2) old records without a `label` field. Always
+  // render the current default as a fallback option so the <select>
+  // never collapses to an empty placeholder.
+  const voiceOptions = useMemo(function () {
+    const seen = {};
+    const out = [];
+    voices.forEach(function (v) {
+      const id = v.dashscope_voice_id || v.id;
+      if (!id || seen[id]) return;
+      seen[id] = true;
+      out.push({
+        id, label: v.label || v.label_zh || v.id, system: !!v.is_system,
+      });
+    });
+    const def = draft.default_voice || "longxiaochun_v2";
+    if (def && !seen[def]) out.unshift({ id: def, label: def, system: true });
+    return out;
+  }, [voices, draft.default_voice]);
+
   return (
     <div style={{maxWidth: 720, margin: "0 auto"}}>
-      <div className="setting-section">
-        <h3>{t("settings.section.api")}</h3>
-        <div className="form-row">
-          <input className="input" type="password"
-                 placeholder={t("settings.api.placeholder")}
-                 value={draft.api_key || ""}
-                 onChange={function (e) { update("api_key", e.target.value); }} />
+      {/* ── API 配置 ─────────────────────────────────────────── */}
+      <div className="setting-section oa-settings-section">
+        <h3 className="oa-settings-section__title">
+          <span className="oa-icon"><Ico name="cog"/></span>
+          {t("settings.section.api")}
+        </h3>
+        <div className={"form-row" + (draft.api_key ? "" : " oa-config-field-callout")}
+             data-callout={draft.api_key ? undefined : "必填项"}>
+          <div className="label">DashScope API Key</div>
+          <div className="flex gap-2">
+            <input className="input flex-1" type={keyVisible ? "text" : "password"}
+                   value={draft.api_key || ""} placeholder={t("settings.api.placeholder")}
+                   onChange={function (e) { update("api_key", e.target.value); }} />
+            <button className="btn btn-sm" type="button"
+                    onClick={function () { setKeyVisible(!keyVisible); }}>
+              {keyVisible ? "隐藏" : "显示"}
+            </button>
+            <button className="btn btn-sm btn-primary" type="button"
+                    disabled={savingKey} onClick={saveKey}>
+              {savingKey && <span className="spinner-sm"/>} 保存
+            </button>
+          </div>
+          <div className="text-xs text-dim" style={{marginTop: 4}}>
+            获取地址：
+            <a href="https://bailian.console.aliyun.com/#/api-key" target="_blank" rel="noopener"
+               style={{color: "var(--primary)"}}>阿里云百炼控制台</a>
+          </div>
         </div>
         <div className="form-row">
           <div className="text-xs text-muted" style={{marginBottom: 4}}>{t("settings.api.region")}</div>
-          <select className="input select" value={draft.base_url || ""}
-                  onChange={function (e) { update("base_url", e.target.value); }}>
-            <option value="">{t("settings.api.region.bj")}</option>
-            <option value="https://dashscope-intl.aliyuncs.com">{t("settings.api.region.sg")}</option>
-          </select>
+          <div className="flex gap-2">
+            <select className="input select flex-1" value={draft.base_url || ""}
+                    onChange={function (e) {
+                      update("base_url", e.target.value);
+                      save({ base_url: e.target.value });
+                    }}>
+              <option value="">{t("settings.api.region.bj")}</option>
+              <option value="https://dashscope-intl.aliyuncs.com">{t("settings.api.region.sg")}</option>
+            </select>
+            <button className="btn btn-sm" disabled={testBusy} onClick={testConn}>
+              {testBusy && <span className="spinner-sm"/>} {t("settings.api.test")}
+            </button>
+          </div>
         </div>
-        <button className="btn" disabled={testBusy} onClick={testConn}>
-          {testBusy && <span className="spinner-sm"/>} {t("settings.api.test")}
-        </button>
       </div>
 
-      <div className="setting-section">
-        <h3>{t("settings.section.defaults")}</h3>
+      {/* ── 默认偏好 ─────────────────────────────────────────── */}
+      <div className="setting-section oa-settings-section">
+        <h3 className="oa-settings-section__title">
+          <span className="oa-icon"><Ico name="cog"/></span>
+          {t("settings.section.defaults")}
+        </h3>
         <div className="grid-2">
-          <div>
-            <div className="text-xs text-muted" style={{marginBottom: 4}}>{t("settings.defaults.resolution")}</div>
+          <div className="form-row">
+            <div className="label">{t("settings.defaults.resolution")}</div>
             <select className="input select" value={draft.default_resolution || "480P"}
-                    onChange={function (e) { update("default_resolution", e.target.value); }}>
+                    onChange={function (e) {
+                      update("default_resolution", e.target.value);
+                      save({ default_resolution: e.target.value });
+                    }}>
               {RESOLUTIONS.map(function (r) { return <option key={r} value={r}>{r}</option>; })}
             </select>
           </div>
-          <div>
-            <div className="text-xs text-muted" style={{marginBottom: 4}}>{t("settings.defaults.voice")}</div>
-            <select className="input select" value={draft.default_voice || ""}
-                    onChange={function (e) { update("default_voice", e.target.value); }}>
-              {voices.map(function (v) {
-                return <option key={v.id} value={v.dashscope_voice_id || v.id}>{v.label}</option>;
+          <div className="form-row">
+            <div className="label">{t("settings.defaults.voice")}</div>
+            <select className="input select" value={draft.default_voice || "longxiaochun_v2"}
+                    onChange={function (e) {
+                      update("default_voice", e.target.value);
+                      save({ default_voice: e.target.value });
+                    }}>
+              {voiceOptions.map(function (v) {
+                return <option key={v.id} value={v.id}>{v.label}{v.system ? "" : " · 自定义"}</option>;
               })}
             </select>
           </div>
         </div>
-        <div className="form-row" style={{marginTop: 10}}>
-          <div className="text-xs text-muted" style={{marginBottom: 4}}>{t("settings.defaults.threshold")}</div>
+        <div className="form-row">
+          <div className="label">{t("settings.defaults.threshold")}</div>
           <input type="number" className="input" min="0" step="0.5"
                  value={draft.cost_threshold_cny != null ? draft.cost_threshold_cny : 5}
-                 onChange={function (e) { update("cost_threshold_cny", Number(e.target.value)); }} />
+                 onChange={function (e) { update("cost_threshold_cny", Number(e.target.value)); }}
+                 onBlur={function () { save({ cost_threshold_cny: Number(draft.cost_threshold_cny || 5) }); }} />
           <div className="text-xs text-dim" style={{marginTop: 2}}>{t("settings.defaults.thresholdHint")}</div>
         </div>
       </div>
 
-      <div className="setting-section">
-        <h3>{t("settings.section.storage")}</h3>
+      {/* ── 存储与清理 ──────────────────────────────────────── */}
+      <div className="setting-section oa-settings-section">
+        <h3 className="oa-settings-section__title">
+          <span className="oa-icon"><Ico name="layers"/></span>
+          {t("settings.section.storage")}
+        </h3>
         {storage && (
-          <div className="text-xs text-muted" style={{marginBottom: 6}}>
-            {t("settings.storage.usage", { n: formatBytes(storage.bytes_used || 0) })}
-            {storage.dir && <span> · <code className="inline">{storage.dir}</code></span>}
+          <div className="flex items-center justify-between"
+               style={{padding: "8px 0", borderBottom: "1px solid var(--border)"}}>
+            <div style={{minWidth: 0}}>
+              <div className="text-sm">数据目录</div>
+              <div className="text-xs text-dim truncate" title={storage.dir}>
+                <code className="inline">{storage.dir || "—"}</code>
+              </div>
+            </div>
+            <div className="text-sm" style={{whiteSpace: "nowrap"}}>
+              {formatBytes(storage.bytes_used || 0)}
+            </div>
           </div>
         )}
-        <div className="flex items-center gap-2">
-          <input type="number" className="input" style={{width: 100}}
-                 value={draft.retention_days != null ? draft.retention_days : 30}
-                 onChange={function (e) { update("retention_days", Number(e.target.value)); }} />
-          <span className="text-xs text-muted flex-1">{t("settings.storage.cleanup", { n: draft.retention_days != null ? draft.retention_days : 30 })}</span>
-          <button className="btn btn-sm" onClick={cleanup}>{t("settings.storage.cleanup.btn")}</button>
+        <div className="form-row" style={{marginTop: 10}}>
+          <div className="label">保留天数</div>
+          <div className="flex items-center gap-2">
+            <input type="number" className="input" style={{width: 110}} min="1"
+                   value={draft.retention_days != null ? draft.retention_days : 30}
+                   onChange={function (e) { update("retention_days", Number(e.target.value)); }} />
+            <span className="text-xs text-muted flex-1">
+              {t("settings.storage.cleanup", { n: draft.retention_days != null ? draft.retention_days : 30 })}
+            </span>
+            <button className="btn btn-sm" onClick={cleanup}>{t("settings.storage.cleanup.btn")}</button>
+          </div>
         </div>
       </div>
 
-      <div className="setting-section">
-        <h3>{t("settings.section.advanced")}</h3>
+      {/* ── 高级 ────────────────────────────────────────────── */}
+      <div className="setting-section oa-settings-section">
+        <h3 className="oa-settings-section__title">
+          <span className="oa-icon"><Ico name="info"/></span>
+          {t("settings.section.advanced")}
+        </h3>
         <div className="grid-2">
-          <div>
-            <div className="text-xs text-muted" style={{marginBottom: 4}}>{t("settings.advanced.timeout")}</div>
+          <div className="form-row">
+            <div className="label">{t("settings.advanced.timeout")}</div>
             <input type="number" className="input" min="10" max="600"
                    value={draft.timeout_sec != null ? draft.timeout_sec : 60}
-                   onChange={function (e) { update("timeout_sec", Number(e.target.value)); }} />
+                   onChange={function (e) { update("timeout_sec", Number(e.target.value)); }}
+                   onBlur={function () { save({ timeout_sec: Number(draft.timeout_sec || 60) }); }} />
           </div>
-          <div>
-            <div className="text-xs text-muted" style={{marginBottom: 4}}>{t("settings.advanced.maxRetry")}</div>
+          <div className="form-row">
+            <div className="label">{t("settings.advanced.maxRetry")}</div>
             <input type="number" className="input" min="0" max="5"
                    value={draft.max_retries != null ? draft.max_retries : 2}
-                   onChange={function (e) { update("max_retries", Number(e.target.value)); }} />
+                   onChange={function (e) { update("max_retries", Number(e.target.value)); }}
+                   onBlur={function () { save({ max_retries: Number(draft.max_retries || 2) }); }} />
           </div>
         </div>
       </div>
 
-      <div className="setting-section">
-        <h3>{t("settings.section.about")}</h3>
-        <div className="text-sm text-muted">
-          {t("settings.about.version")}: <code className="inline">1.0.0</code>
+      {/* ── 关于 ────────────────────────────────────────────── */}
+      <div className="setting-section oa-settings-section">
+        <h3 className="oa-settings-section__title">
+          <span className="oa-icon"><Ico name="info"/></span>
+          {t("settings.section.about")}
+        </h3>
+        <div className="flex items-center justify-between"
+             style={{padding: "6px 0", borderBottom: "1px solid var(--border)"}}>
+          <div className="text-sm text-muted">{t("settings.about.version")}</div>
+          <div className="text-sm"><code className="inline">1.0.0</code></div>
+        </div>
+        <div className="flex items-center justify-between" style={{padding: "6px 0"}}>
+          <div className="text-sm text-muted">DashScope 模型矩阵</div>
+          <div className="text-xs text-dim">
+            wan2.2-s2v · videoretalk · animate-mix · cosyvoice-v2
+          </div>
         </div>
       </div>
 
-      <button className="btn btn-primary btn-block" onClick={save} style={{marginTop: 14}}>
+      <button className="btn btn-primary btn-block" onClick={saveAll} style={{marginTop: 14}}>
         <Ico name="check"/> {t("settings.save")}
       </button>
     </div>
   );
 }
 
+/* ─── PromptGuideTab ──────────────────────────────────────────────
+ * Static knowledge base served by GET /prompt-guide. Renders 6
+ * <Collapsible> chapters: 配方 / 最佳实践 / 音色 / 视频换人 / 融合 / FAQ.
+ * Falls back to a friendly "请在 Settings 配置 API Key" panel if the
+ * fetch fails — the route itself doesn't need an API key, but the
+ * banner overlay above already handles the unconfigured case. */
+
+function PromptGuideTab() {
+  const t = useT();
+  const [guide, setGuide] = useState(null);
+  const [err, setErr] = useState("");
+  useEffect(function () {
+    pluginApi("GET", "/prompt-guide?locale=zh").then(function (r) {
+      if (r.ok && r.body && r.body.guide) setGuide(r.body.guide);
+      else setErr((r.body && r.body.message) || "fetch failed");
+    }).catch(function (e) { setErr(String(e)); });
+  }, []);
+
+  if (err) return <EmptyState icon="warn" title="加载失败" hint={err} />;
+  if (!guide) return <EmptyState icon="loader" title="加载中..." />;
+
+  const Section = function ({ title, children }) {
+    return (
+      <Collapsible title={<span style={{display: "inline-flex", alignItems: "center", gap: 6}}>
+        <Ico name="info"/>{title}
+      </span>}>
+        {children}
+      </Collapsible>
+    );
+  };
+
+  return (
+    <div style={{maxWidth: 800, margin: "0 auto"}}>
+      <div className="text-xs text-dim" style={{marginBottom: 10}}>{guide.intro}</div>
+
+      <Section title={t("guide.section.formulas")}>
+        {Object.entries(guide.mode_formulas || {}).map(function (entry) {
+          const k = entry[0]; const v = entry[1];
+          return (
+            <div key={k} style={{marginBottom: 10}}>
+              <div className="text-sm" style={{fontWeight: 600, marginBottom: 4}}>
+                {t("create.mode." + k) + " · " + k}
+              </div>
+              <div className="text-sm text-muted" style={{lineHeight: 1.7}}>{v}</div>
+            </div>
+          );
+        })}
+      </Section>
+
+      <Section title={t("guide.section.bestPractices")}>
+        <ul style={{paddingLeft: 20, margin: 0, lineHeight: 1.8, fontSize: 13, color: "var(--text)"}}>
+          {(guide.best_practices || []).map(function (l, i) {
+            return <li key={i}>{l}</li>;
+          })}
+        </ul>
+      </Section>
+
+      <Section title={t("guide.section.voice")}>
+        <ul style={{paddingLeft: 20, margin: 0, lineHeight: 1.8, fontSize: 13, color: "var(--text)"}}>
+          {(guide.voice_tips || []).map(function (l, i) {
+            return <li key={i}>{l}</li>;
+          })}
+        </ul>
+      </Section>
+
+      <Section title={t("guide.section.reface")}>
+        <ul style={{paddingLeft: 20, margin: 0, lineHeight: 1.8, fontSize: 13, color: "var(--text)"}}>
+          {(guide.video_reface_tips || []).map(function (l, i) {
+            return <li key={i}>{l}</li>;
+          })}
+        </ul>
+      </Section>
+
+      <Section title={t("guide.section.compose")}>
+        <ul style={{paddingLeft: 20, margin: 0, lineHeight: 1.8, fontSize: 13, color: "var(--text)"}}>
+          {(guide.compose_examples || []).map(function (l, i) {
+            return <li key={i}><code className="inline">{l}</code></li>;
+          })}
+        </ul>
+      </Section>
+
+      <Section title={t("guide.section.faq")}>
+        {(guide.faq || []).map(function (pair, i) {
+          return (
+            <div key={i} style={{marginBottom: 10}}>
+              <div className="text-sm" style={{fontWeight: 600, marginBottom: 4}}>Q · {pair[0]}</div>
+              <div className="text-sm text-muted" style={{lineHeight: 1.7}}>A · {pair[1]}</div>
+            </div>
+          );
+        })}
+      </Section>
+    </div>
+  );
+}
+
+
 /* ─── Top-level App ──────────────────────────────────────────────── */
-const TAB_IDS = ["create", "tasks", "voices", "figures", "settings"];
-const TAB_ICONS = { create: "video", tasks: "list", voices: "mic", figures: "user", settings: "cog" };
+// Order matches App's switch on `activeTab` (0..5). The "guide" tab sits
+// just before "settings" for parity with tongyi-image.
+const TAB_IDS = ["create", "tasks", "voices", "figures", "guide", "settings"];
+const TAB_ICONS = {
+  create: "video", tasks: "list", voices: "mic",
+  figures: "user", guide: "info", settings: "cog",
+};
 
 function App() {
   const t = useT();
@@ -2267,22 +2999,18 @@ function App() {
   return (
     <div className="app">
       <div className="header">
-        <h1>
-          <span className="ak-logo"><Ico name="video"/></span>
-          {t("app.title")}
-          <span className="ak-sub">{t("app.subtitle")}</span>
+        {/* Hero title — same visual treatment as tongyi-image / seedance-video.
+            The right slot is intentionally empty: the long yellow banner below
+            already announces "missing API key", a duplicate pill on the right
+            would be visual noise (matches tongyi-image's design). */}
+        <h1 className="oa-hero-title">
+          <span className="oa-hero-title__icon"><Ico name="video"/></span>
+          <span className="oa-hero-title__text">
+            {t("app.title")}
+            <span className="oa-hero-title__sub">{t("app.subtitle")}</span>
+          </span>
         </h1>
-        <div className="header-right">
-          {apiKeyDisplay
-            ? <span className="api-pill" title={settings.api_key}>
-                <Ico name="check"/> {t("app.api.label")}: {apiKeyDisplay}
-              </span>
-            : <span className="api-pill api-pill--missing"
-                    onClick={function () { setActiveTab(settingsIdx); }}
-                    title={t("app.api.tooltip")}>
-                <Ico name="warn"/> {t("app.api.missing")}
-              </span>}
-        </div>
+        <div className="header-right" />
       </div>
       <div className="tabs">
         {TAB_IDS.map(function (id, i) {
@@ -2295,17 +3023,20 @@ function App() {
         })}
       </div>
       {showKeyBanner && (
-        <div style={{padding: "12px 16px 0"}}>
-          <div className="err-panel" style={{borderColor: "rgba(245,158,11,.3)", background: "rgba(245,158,11,.06)"}}>
-            <div className="err-panel__title" style={{color: "var(--warning)"}}>
-              <Ico name="warn"/> {t("banner.noKey.title")}
+        <div className="oa-config-banner" role="alert"
+             style={{margin: "12px 20px 0", flexShrink: 0}}>
+          <span className="oa-icon oa-config-banner__icon"><Ico name="warn"/></span>
+          <div className="oa-config-banner__text">
+            <strong>{t("banner.noKey.title")}</strong>
+            <div style={{fontSize: 12, color: "var(--text-muted)", marginTop: 2}}>
+              {t("banner.noKey.desc")}
             </div>
-            <div className="err-panel__msg">{t("banner.noKey.desc")}</div>
-            <button className="btn btn-sm" style={{marginTop: 6}}
-                    onClick={function () { setActiveTab(settingsIdx); }}>
-              {t("banner.noKey.cta")}
-            </button>
           </div>
+          <button className="oa-config-banner__action" type="button"
+                  onClick={function () { setActiveTab(settingsIdx); }}>
+            {t("banner.noKey.cta")}
+            <span className="oa-icon"><Ico name="play"/></span>
+          </button>
         </div>
       )}
       <div className="content">
@@ -2314,7 +3045,8 @@ function App() {
         {activeTab === 1 && <TasksTab/>}
         {activeTab === 2 && <VoicesTab/>}
         {activeTab === 3 && <FiguresTab/>}
-        {activeTab === 4 && <SettingsTab settings={settings} voices={voices}
+        {activeTab === 4 && <PromptGuideTab/>}
+        {activeTab === 5 && <SettingsTab settings={settings} voices={voices}
                                           onSaved={function () { refreshSettings(); }} />}
       </div>
     </div>

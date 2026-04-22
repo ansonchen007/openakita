@@ -124,14 +124,25 @@ class VoiceSpec:
     is_system: bool = True
 
     def to_dict(self) -> dict[str, object]:
+        # ``dashscope_voice_id`` is the value passed to cosyvoice-v2 SDK
+        # ``model="cosyvoice-v2", voice=…``. The DashScope public catalog
+        # lists every system timbre with a ``_v2`` suffix (e.g.
+        # ``longxiaochun_v2``); we keep ``id`` as the bare key so existing
+        # records remain stable, then expose the v2-suffixed string as the
+        # canonical identifier the UI sends back. ``label`` is a flat alias
+        # the React layer can render without needing the locale dict.
         return {
             "id": self.id,
+            "label": self.label_zh,
             "label_zh": self.label_zh,
             "label_en": self.label_en,
             "gender": self.gender,
+            "style": self.style_zh,
             "style_zh": self.style_zh,
             "style_en": self.style_en,
             "is_system": self.is_system,
+            "dashscope_voice_id": f"{self.id}_v2",
+            "language": "zh",
         }
 
 
