@@ -27,6 +27,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `update_task(**fields)` 上 `_UPDATABLE_COLS` 白名单，未知列丢警告
     而不是拼进 SQL。
 - **manifest**：`plugin_api ~1 → ~2`，`version 0.2.0 → 0.2.1`。
+- **v0.2.2 UI realignment**：header 升级 `oa-hero-title`（渐变 chip +
+  大写副标题）；"设置"从右侧抽屉改为顶级 tab；表单面板标题 / DynamicForm /
+  ExampleGallery / 主按钮合到 1 张 card；`mock-banner` 升级
+  `oa-config-banner`（warning 图标 + "前往设置" CTA）；OA CSS 变量别名让
+  `_assets/styles.css` 的 `oa-*` 组件吃到 ecommerce 紫色主题色。
 
 ### Changed — SDK 主动收缩，回归"最小插件壳子"定位
 
