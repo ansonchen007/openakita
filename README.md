@@ -363,7 +363,7 @@ You: "Create a competitive analysis report"
 
 <p align="center">
   <a href="https://b23.tv/dkKTjO5">
-    <img src="docs/assets/im_qrcode.jpg" alt="▶ Watch Scan-to-Bind Tutorial" width="720" />
+    <img src="docs/assets/en/im_qrcode.jpg" alt="▶ Watch Scan-to-Bind Tutorial" width="720" />
   </a>
   <br/>
   <sub>▶ Click to watch: OpenAkita scan-to-bind for WeChat, Feishu, WeCom (Bilibili)</sub>
