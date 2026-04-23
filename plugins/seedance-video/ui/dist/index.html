@@ -343,15 +343,17 @@
     .inline-warn__text small { display: block; color: var(--text-muted); font-size: 11px; margin-top: 2px; }
 
     /* ── In-plugin folder picker modal ── */
-    .folder-picker { width: min(640px, 100%); max-height: 80vh; display: flex; flex-direction: column; padding: 0; overflow: hidden; }
+    /* Override .modal-card's 420px cap — picker needs the room for
+       breadcrumb + sidebar + listing + footer to all sit comfortably. */
+    .folder-picker { width: min(820px, 96vw); max-width: min(820px, 96vw); max-height: 82vh; display: flex; flex-direction: column; padding: 0; overflow: hidden; }
     .folder-picker__head { padding: 16px 20px 12px; border-bottom: 1px solid var(--border); }
     .folder-picker__title { font-size: 15px; font-weight: 600; margin-bottom: 8px; color: var(--text); }
     .folder-picker__crumbs { display: flex; align-items: center; gap: 4px; font-size: 12px; color: var(--text-muted); flex-wrap: wrap; min-height: 22px; }
     .folder-picker__crumb { padding: 2px 8px; border-radius: 4px; cursor: pointer; transition: background .12s; user-select: none; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .folder-picker__crumb:hover { background: var(--bg-hover); color: var(--text); }
     .folder-picker__crumb-sep { color: var(--text-muted); opacity: .5; }
-    .folder-picker__body { display: flex; flex: 1; min-height: 280px; max-height: 50vh; overflow: hidden; }
-    .folder-picker__sidebar { width: 140px; border-right: 1px solid var(--border); padding: 8px 0; overflow-y: auto; background: var(--bg-hover); flex-shrink: 0; }
+    .folder-picker__body { display: flex; flex: 1; min-height: 360px; max-height: 60vh; overflow: hidden; }
+    .folder-picker__sidebar { width: 160px; border-right: 1px solid var(--border); padding: 8px 0; overflow-y: auto; background: var(--bg-hover); flex-shrink: 0; }
     .folder-picker__shortcut { display: flex; align-items: center; gap: 8px; padding: 7px 14px; font-size: 12px; color: var(--text); cursor: pointer; transition: background .12s; }
     .folder-picker__shortcut:hover { background: var(--bg-card); }
     .folder-picker__shortcut.active { background: var(--bg-card); color: var(--primary); font-weight: 500; }
