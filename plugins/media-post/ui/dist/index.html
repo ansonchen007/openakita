@@ -126,12 +126,14 @@
     .oa-pill.red { background: rgba(239,68,68,.15); color: #dc2626; }
     .oa-pill.orange { background: rgba(245,158,11,.15); color: #d97706; }
     .oa-pill.gray { background: var(--bg-hover); color: var(--text-dim); }
-    .oa-config-banner { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-radius: var(--radius); border: 1px solid rgba(245,158,11,.4); background: rgba(245,158,11,.08); color: var(--text); font-size: 13px; margin-bottom: 12px; }
-    .oa-config-banner.info { border-color: rgba(99,102,241,.4); background: rgba(99,102,241,.08); }
+    /* .oa-config-banner / __icon / __text / __action all come from
+     * _assets/styles.css §1 (orange filled CTA). DO NOT override here —
+     * the previous overrides shrunk the CTA to a dull gray-on-white pill
+     * and broke the visual contract with seedance-video / tongyi-image.
+     * If you need a danger variant, prefer the kit's `--info` modifier or
+     * scope a new modifier class instead of redefining the base. */
     .oa-config-banner.danger { border-color: rgba(239,68,68,.4); background: rgba(239,68,68,.08); }
-    .oa-config-banner__icon { font-size: 18px; }
-    .oa-config-banner__text { flex: 1; }
-    .oa-config-banner__action { padding: 4px 10px; font-size: 12px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg-card); color: var(--text); cursor: pointer; }
+    .oa-config-banner.danger .oa-config-banner__action { background: var(--danger); border-color: var(--danger); }
     .oa-cost { display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; border-radius: 6px; background: rgba(34,197,94,.08); border: 1px solid rgba(34,197,94,.3); font-size: 12px; color: var(--text); margin: 12px 0; }
     .oa-cost.warn { background: rgba(245,158,11,.08); border-color: rgba(245,158,11,.3); }
     .oa-cost.danger { background: rgba(239,68,68,.08); border-color: rgba(239,68,68,.3); }
@@ -140,12 +142,12 @@
     .oa-error-coach__title { font-size: 13px; font-weight: 600; color: var(--danger); margin-bottom: 6px; }
     .oa-error-coach__list { list-style: disc; margin-left: 20px; font-size: 12px; color: var(--text); }
     .oa-error-coach__actions { margin-top: 10px; display: flex; gap: 8px; }
-    .oa-settings-section { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius); padding: 18px; margin-bottom: 16px; }
-    .oa-settings-section__title { font-size: 14px; font-weight: 600; margin-bottom: 14px; padding-bottom: 8px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 8px; }
+    /* .oa-settings-section / __title come from _assets/styles.css §6
+     * (with shadow + matching border + standardized padding). Only the
+     * `.disabled` modifier needs a local rule. Same for .oa-list-panel —
+     * the kit owns the full card-style frame; do NOT shrink padding here
+     * or the list panel collapses to a borderless 4px box. */
     .oa-settings-section__title.disabled { color: var(--text-dim); }
-    .oa-filter-group { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; align-items: center; }
-    .oa-filter-group .input { width: auto; flex: 1; min-width: 100px; }
-    .oa-list-panel { padding: 4px; }
     .oa-collapse { border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 8px; background: var(--bg-card); }
     .oa-collapse__header { display: flex; align-items: center; justify-content: space-between; padding: 10px 14px; cursor: pointer; font-size: 13px; font-weight: 500; }
     .oa-collapse__header:hover { background: var(--bg-hover); }
@@ -322,7 +324,18 @@ const I18N_DICT = {
     // Global API-key banner (shown above the tab content when key missing)
     "mediaPost.banner.noKey.title": "尚未配置 DashScope API Key",
     "mediaPost.banner.noKey.desc": "所有创建任务都会失败。请前往设置页填入阿里云百炼 DashScope API Key。",
-    "mediaPost.banner.noKey.cta": "前往配置 →",
+    "mediaPost.banner.noKey.cta": "前往配置",
+    // Empty-state titles/hints for the right preview pane and list panes.
+    "mediaPost.preview.empty.title": "等待运行任务",
+    "mediaPost.preview.empty.hint": "选择模式 → 上传视频 → 调参 → 一键运行",
+    "mediaPost.tasks.empty.title": "尚无任务",
+    "mediaPost.tasks.empty.hint": "去『创建』页跑第一个任务",
+    "mediaPost.tasks.detail.empty.title": "未选择任务",
+    "mediaPost.tasks.detail.empty.hint": "从左侧列表点击一个任务查看详情",
+    "mediaPost.tasks.total": "共 {n} 个任务",
+    "mediaPost.library.count": "共 {n} 个素材",
+    "mediaPost.library.empty.title": "暂无素材",
+    "mediaPost.library.empty.hint": "在创建页跑一个任务，产出物会自动出现在这里",
     // Modes
     "mediaPost.modes.cover_pick.title": "智能选封面",
     "mediaPost.modes.cover_pick.desc": "VLM 6 维评分排序 top 8",
@@ -503,7 +516,17 @@ const I18N_DICT = {
     "mediaPost.tabs.settings.sub": "API Key / VLM / Chapters / Cost / Cross-plugin",
     "mediaPost.banner.noKey.title": "DashScope API Key not configured",
     "mediaPost.banner.noKey.desc": "All create tasks will fail. Open Settings and paste your Aliyun Bailian DashScope API key.",
-    "mediaPost.banner.noKey.cta": "Open Settings →",
+    "mediaPost.banner.noKey.cta": "Open Settings",
+    "mediaPost.preview.empty.title": "Waiting for a task",
+    "mediaPost.preview.empty.hint": "Pick a mode → upload video → tune params → run",
+    "mediaPost.tasks.empty.title": "No tasks yet",
+    "mediaPost.tasks.empty.hint": "Open the Create tab and run your first task.",
+    "mediaPost.tasks.detail.empty.title": "No task selected",
+    "mediaPost.tasks.detail.empty.hint": "Pick a task from the list to see its details.",
+    "mediaPost.tasks.total": "{n} task(s) total",
+    "mediaPost.library.count": "{n} asset(s)",
+    "mediaPost.library.empty.title": "No assets yet",
+    "mediaPost.library.empty.hint": "Run a task on the Create tab — outputs will land here automatically.",
     "mediaPost.modes.cover_pick.title": "Smart Cover Pick",
     "mediaPost.modes.cover_pick.desc": "Qwen-VL 6-axis aesthetic scoring",
     "mediaPost.modes.multi_aspect.title": "Smart Recompose",
@@ -1019,6 +1042,7 @@ function CreateTab({ t, settings, onTaskCreated, gotoSettings }) {
     <div>
       <div className="split-layout">
         <div className="split-left">
+         <div className="card">
           <div className="form-row">
             <div className="oa-section-label">{t("mediaPost.tabs.create")}</div>
             <div className="grid-2" style={{gap: 8}}>
@@ -1080,12 +1104,15 @@ function CreateTab({ t, settings, onTaskCreated, gotoSettings }) {
               {t("mediaPost.common.start")}
             </button>
           )}
+         </div>
         </div>
-        <div className="split-right">
+        <div className={"split-right oa-preview-area" + (!startedTask ? " oa-preview-area--centered" : "")}>
           {!startedTask && (
-            <div className="empty-state">
-              <div style={{fontSize:48}}>🎬</div>
-              <p>{t("mediaPost.tabs.create.sub")}</p>
+            <div className="oa-preview-empty">
+              <span className="oa-preview-empty__icon"
+                    dangerouslySetInnerHTML={{__html: window.OpenAkitaIcons && window.OpenAkitaIcons.film ? window.OpenAkitaIcons.film() : ""}} />
+              <div className="oa-preview-empty__title">{t("mediaPost.preview.empty.title")}</div>
+              <div className="oa-preview-empty__hint">{t("mediaPost.preview.empty.hint")}</div>
             </div>
           )}
           {startedTask && (
@@ -1348,35 +1375,63 @@ function TasksTab({ t, refreshTrigger }) {
   return (
     <div>
       <div className="split-layout">
-        <div className="split-left">
-          <div className="oa-section-label">
-            {t("mediaPost.tasks.all")} <span className="oa-pill">{tasks.length}</span>
+        <div className="split-left oa-list-panel" style={{width:"50%"}}>
+          <div className="oa-list-panel__filters">
+            <div>
+              <div className="oa-section-label">{t("mediaPost.tasks.all")} <span className="oa-pill">{tasks.length}</span></div>
+              <div className="flex gap-2 flex-wrap">
+                <select className="input select" value={filterMode}
+                        onChange={e => setFilterMode(e.target.value)}
+                        style={{flex:1, minWidth:120}}>
+                  <option value="">{t("mediaPost.tasks.filter.all")} · {t("mediaPost.tasks.filter.mode")}</option>
+                  {["cover_pick","multi_aspect","seo_pack","chapter_cards"].map(m => (
+                    <option key={m} value={m}>{t(`mediaPost.modes.${m}.title`)}</option>
+                  ))}
+                </select>
+                <select className="input select" value={filterStatus}
+                        onChange={e => setFilterStatus(e.target.value)}
+                        style={{flex:1, minWidth:120}}>
+                  <option value="">{t("mediaPost.tasks.filter.all")} · {t("mediaPost.tasks.filter.status")}</option>
+                  {["pending","running","completed","failed","cancelled","approval_required"].map(s => (
+                    <option key={s} value={s}>{t(`mediaPost.common.status.${s}`)}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+            <div className="flex gap-2">
+              <input className="input flex-1" placeholder={t("mediaPost.tasks.filter.search")}
+                     value={search} onChange={e => setSearch(e.target.value)} />
+              <button className="btn btn-sm" onClick={refresh}>{t("mediaPost.common.refresh")}</button>
+            </div>
           </div>
-          <div className="oa-filter-group">
-            <select className="input select" value={filterMode} onChange={e => setFilterMode(e.target.value)}>
-              <option value="">{t("mediaPost.tasks.filter.all")} · {t("mediaPost.tasks.filter.mode")}</option>
-              {["cover_pick","multi_aspect","seo_pack","chapter_cards"].map(m => (
-                <option key={m} value={m}>{t(`mediaPost.modes.${m}.title`)}</option>
-              ))}
-            </select>
-            <select className="input select" value={filterStatus} onChange={e => setFilterStatus(e.target.value)}>
-              <option value="">{t("mediaPost.tasks.filter.all")} · {t("mediaPost.tasks.filter.status")}</option>
-              {["pending","running","completed","failed","cancelled","approval_required"].map(s => (
-                <option key={s} value={s}>{t(`mediaPost.common.status.${s}`)}</option>
-              ))}
-            </select>
-            <input className="input" placeholder={t("mediaPost.tasks.filter.search")} value={search} onChange={e => setSearch(e.target.value)} />
-            <button className="btn btn-sm" onClick={refresh}>{t("mediaPost.common.refresh")}</button>
-          </div>
-          <div className="oa-list-panel">
-            {filtered.length === 0 && <div className="empty-state">{t("mediaPost.tasks.empty")}</div>}
-            {filtered.map(tk => (
+          <hr className="oa-list-panel__divider" />
+          <div className="oa-list-panel__items">
+            {filtered.length === 0 ? (
+              <div className="oa-preview-empty" style={{minHeight:160, padding:"24px 16px"}}>
+                <span className="oa-preview-empty__icon"
+                      dangerouslySetInnerHTML={{__html: window.OpenAkitaIcons && window.OpenAkitaIcons.listTask ? window.OpenAkitaIcons.listTask() : ""}} />
+                <div className="oa-preview-empty__title">{t("mediaPost.tasks.empty.title")}</div>
+                <div className="oa-preview-empty__hint">{t("mediaPost.tasks.empty.hint")}</div>
+              </div>
+            ) : filtered.map(tk => (
               <TaskCard key={tk.id} task={tk} selected={tk.id === selectedId}
                         onClick={() => setSelectedId(tk.id)} t={t} />
             ))}
           </div>
+          <div className="oa-list-panel__footer">
+            <span className="text-xs text-dim">{t("mediaPost.tasks.total", { n: filtered.length })}</span>
+          </div>
         </div>
-        <div className="split-right">{detail}</div>
+        <div className={"split-right oa-preview-area" + (!selectedId ? " oa-preview-area--centered" : "")}>
+          {selectedId ? detail : (
+            <div className="oa-preview-empty">
+              <span className="oa-preview-empty__icon"
+                    dangerouslySetInnerHTML={{__html: window.OpenAkitaIcons && window.OpenAkitaIcons.pin ? window.OpenAkitaIcons.pin() : ""}} />
+              <div className="oa-preview-empty__title">{t("mediaPost.tasks.detail.empty.title")}</div>
+              <div className="oa-preview-empty__hint">{t("mediaPost.tasks.detail.empty.hint")}</div>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -1385,16 +1440,27 @@ function TasksTab({ t, refreshTrigger }) {
 // ─── Library tab ────────────────────────────────────────────────────────
 function LibraryTab({ t }) {
   const [sub, setSub] = useState("covers");
+  const SUBS = ["covers", "aspects", "seo", "chapters"];
   return (
-    <div style={{maxWidth: 960, margin: "0 auto"}}>
-      <div className="tabs" style={{padding:0, marginBottom:12, background:"transparent"}}>
-        {["covers","aspects","seo","chapters"].map(s => (
-          <div key={s} className={`tab ${sub === s ? "active" : ""}`} onClick={() => setSub(s)}>
+    <div>
+      <div className="flex gap-2 items-center" style={{marginBottom: 16}}>
+        {SUBS.map(s => (
+          <button key={s} type="button"
+                  className={`mode-btn ${sub === s ? "active" : ""}`}
+                  onClick={() => setSub(s)}>
             {t(`mediaPost.library.${s}`)}
-          </div>
+          </button>
         ))}
+        <span className="text-xs text-dim" style={{marginLeft:"auto"}}>
+          {t("mediaPost.library.count", { n: 0 })}
+        </span>
       </div>
-      <div className="empty-state">{t("mediaPost.library.empty")}</div>
+      <div className="oa-preview-empty" style={{minHeight: 320}}>
+        <span className="oa-preview-empty__icon"
+              dangerouslySetInnerHTML={{__html: window.OpenAkitaIcons && window.OpenAkitaIcons.folder ? window.OpenAkitaIcons.folder() : ""}} />
+        <div className="oa-preview-empty__title">{t("mediaPost.library.empty.title")}</div>
+        <div className="oa-preview-empty__hint">{t("mediaPost.library.empty.hint")}</div>
+      </div>
     </div>
   );
 }
@@ -1412,8 +1478,8 @@ function SettingsTab({ t, settings, onSaved }) {
   const apiOk = !!draft.dashscope_api_key;
 
   return (
-    <div style={{maxWidth: 720, margin: "0 auto"}}>
-      <div className="oa-settings-section">
+    <div style={{maxWidth: 640}}>
+      <div className="setting-section oa-settings-section">
         <div className="oa-settings-section__title">{t("mediaPost.settings.api.title")}</div>
         <div className="form-row">
           <div className="label">{t("mediaPost.settings.api.label")}</div>
@@ -1560,6 +1626,8 @@ function App() {
           <button className="oa-config-banner__action" type="button"
                   onClick={() => setTab("settings")}>
             {t("mediaPost.banner.noKey.cta")}
+            <span className="oa-icon"
+                  dangerouslySetInnerHTML={{__html: window.OpenAkitaIcons && window.OpenAkitaIcons.arrowRight ? window.OpenAkitaIcons.arrowRight() : ""}} />
           </button>
         </div>
       )}
