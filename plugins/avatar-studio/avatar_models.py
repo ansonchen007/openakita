@@ -27,7 +27,7 @@ from typing import Literal, TypedDict
 
 # ─── Mode catalog ────────────────────────────────────────────────────────
 
-ModeId = Literal["photo_speak", "video_relip", "video_reface", "avatar_compose"]
+ModeId = Literal["photo_speak", "video_relip", "video_reface", "avatar_compose", "pose_drive"]
 
 
 @dataclass(frozen=True)
@@ -68,7 +68,7 @@ MODES: tuple[ModeSpec, ...] = (
         dashscope_endpoint="submit_s2v",
         description_zh="一张正面人像照 + 一段语音/文本，输出会说话的视频",
         description_en="One frontal portrait + speech/text → talking-head video",
-        cost_strategy="detect 0.004元/张 + s2v 0.10/0.20元/秒（按音频时长）+ TTS 0.20元/万字",
+        cost_strategy="detect 0.004元/张 + s2v 0.50/0.90元/秒（按音频时长）+ TTS 0.20元/万字",
     ),
     ModeSpec(
         id="video_relip",
@@ -101,7 +101,18 @@ MODES: tuple[ModeSpec, ...] = (
         dashscope_endpoint="submit_image_edit",  # then chains into submit_s2v
         description_zh="多图融合（人 + 场景）后，生成会说话的数字人视频",
         description_en="Blend portrait + scene, then turn it into a talking video",
-        cost_strategy="i2i 0.20元/张 + (可选 qwen-vl 写 prompt) + s2v + TTS",
+        cost_strategy="i2i 0.20元/张 + (可选 qwen-vl 写 prompt) + s2v 0.50/0.90元/秒 + TTS",
+    ),
+    ModeSpec(
+        id="pose_drive",
+        label_zh="图生动作",
+        label_en="Pose Drive",
+        icon="walk",
+        required_assets=("image", "video"),
+        dashscope_endpoint="submit_animate_move",
+        description_zh="将参考视频的动作/表情迁移到人像照片上，生成动作视频",
+        description_en="Transfer motion/expression from reference video to a portrait photo",
+        cost_strategy="wan-std 0.40元/秒 或 wan-pro 0.60元/秒（按视频时长）",
     ),
 )
 
@@ -170,6 +181,7 @@ RESOLUTIONS: tuple[str, ...] = ("480P", "720P")
 ASPECTS: tuple[str, ...] = ("1:1", "9:16", "16:9", "3:4", "4:3")
 DURATIONS_S2V: tuple[int, ...] = tuple(range(3, 16))  # 3..15 s, only used when no audio
 ANIMATE_MIX_MODES: tuple[str, ...] = ("wan-std", "wan-pro")
+ANIMATE_MOVE_MODES: tuple[str, ...] = ("wan-std", "wan-pro")
 DEFAULT_COST_THRESHOLD_CNY: float = 5.00  # exceedance triggers user confirmation
 
 
@@ -179,9 +191,10 @@ DEFAULT_COST_THRESHOLD_CNY: float = 5.00  # exceedance triggers user confirmatio
 # Tests freeze a copy so a remote price drift never silently changes UI numbers.
 PRICE_TABLE: dict[str, dict[str, float]] = {
     "wan2.2-s2v-detect": {"per_image": 0.004},
-    "wan2.2-s2v": {"480P_per_sec": 0.10, "720P_per_sec": 0.20},
+    "wan2.2-s2v": {"480P_per_sec": 0.50, "720P_per_sec": 0.90},
     "videoretalk": {"per_sec": 0.30},
     "wan2.2-animate-mix": {"wan-std_per_sec": 0.60, "wan-pro_per_sec": 1.20},
+    "wan2.2-animate-move": {"wan-std_per_sec": 0.40, "wan-pro_per_sec": 0.60},
     "wan2.5-i2i-preview": {"per_image": 0.20},
     "qwen-vl-max": {"per_1k_input_token": 0.02, "per_1k_output_token": 0.06},
     "cosyvoice-v2": {"per_10k_chars": 0.20},
@@ -309,6 +322,23 @@ def estimate_cost(
         items.append(_item_s2v(params, audio_duration_sec))
         if text_chars:
             items.append(_item_tts(text_chars))
+
+    elif mode == "pose_drive":
+        sec = float(params.get("video_duration_sec") or 5.0)
+        is_pro = bool(params.get("mode_pro"))
+        per_sec = PRICE_TABLE["wan2.2-animate-move"][
+            "wan-pro_per_sec" if is_pro else "wan-std_per_sec"
+        ]
+        items.append(
+            CostItem(
+                name=f"wan2.2-animate-move ({'wan-pro' if is_pro else 'wan-std'})",
+                units=sec,
+                unit_label="秒",
+                unit_price=per_sec,
+                subtotal=_round(sec * per_sec),
+                note="按参考视频时长计费",
+            )
+        )
 
     else:
         raise ValueError(f"unknown mode: {mode!r}")

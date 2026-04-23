@@ -112,6 +112,7 @@ MODEL_S2V_DETECT = "wan2.2-s2v-detect"
 MODEL_S2V = "wan2.2-s2v"
 MODEL_VIDEORETALK = "videoretalk"
 MODEL_ANIMATE_MIX = "wan2.2-animate-mix"
+MODEL_ANIMATE_MOVE = "wan2.2-animate-move"
 MODEL_I2I = "wan2.5-i2i-preview"
 MODEL_QWEN_VL = "qwen-vl-max"
 MODEL_COSYVOICE_V2 = "cosyvoice-v2"
@@ -159,6 +160,16 @@ def _classify_dashscope_body(body: Any, fallback_kind: str) -> str:
         or "duration" in msg
         and ("exceed" in msg or "too long" in msg)
         or "dependency" in code
+        # DashScope's content/format moderation gate. Triggers when:
+        #   - the URL is unreachable or returns wrong Content-Type
+        #     (most common cause for our OSS uploads — usually a
+        #     missing extension that defaulted to octet-stream),
+        #   - the file is HEIC / AVIF / a too-large still,
+        #   - or the content failed safety review.
+        # Either way the user can't fix it by retrying — promote to
+        # 「dependency」 so the UI surfaces a "fix the input" hint
+        # instead of a generic 「服务器错误」.
+        or "datainspection" in code.replace(".", "").replace("_", "")
     ):
         return ERROR_KIND_DEPENDENCY
     return fallback_kind
@@ -242,7 +253,6 @@ class AvatarDashScopeClient(BaseVendorClient):
         api_key = str(s.get("api_key") or "").strip()
         return {
             "Authorization": f"Bearer {api_key}" if api_key else "",
-            "X-DashScope-Async": "enable",
             "Content-Type": "application/json",
         }
 
@@ -615,6 +625,27 @@ class AvatarDashScopeClient(BaseVendorClient):
         }
         return await self._submit_async(PATH_ANIMATE_MIX_SUBMIT, body)
 
+    async def submit_animate_move(
+        self,
+        *,
+        image_url: str,
+        video_url: str,
+        mode_pro: bool = False,
+        watermark: bool = False,
+    ) -> str:
+        body = {
+            "model": MODEL_ANIMATE_MOVE,
+            "input": {
+                "image_url": image_url,
+                "video_url": video_url,
+                "watermark": bool(watermark),
+            },
+            "parameters": {
+                "mode": "wan-pro" if mode_pro else "wan-std",
+            },
+        }
+        return await self._submit_async(PATH_ANIMATE_MIX_SUBMIT, body)
+
     async def submit_image_edit(
         self,
         *,
@@ -981,11 +1012,16 @@ class AvatarDashScopeClient(BaseVendorClient):
 
     # ── internals ─────────────────────────────────────────────────────
 
+    _ASYNC_HEADER: dict[str, str] = {"X-DashScope-Async": "enable"}
+
     async def _submit_async(self, path: str, body: dict[str, Any]) -> str:
         """Serialise submissions and return the DashScope ``task_id``."""
         async with self._submit_lock:
             try:
-                resp = await self.post_json(path, json_body=body, timeout=60.0)
+                resp = await self.post_json(
+                    path, json_body=body, timeout=60.0,
+                    extra_headers=self._ASYNC_HEADER,
+                )
             except VendorError as e:
                 e.kind = _classify_dashscope_body(e.body, e.kind)
                 raise
