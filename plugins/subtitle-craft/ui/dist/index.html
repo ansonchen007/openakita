@@ -170,8 +170,42 @@
   </style>
 </head>
 <body>
-<div id="root"></div>
-
+<div id="root"><div style="display:flex;align-items:center;justify-content:center;height:100vh;color:var(--text-muted,#64748b);font-size:13px" id="__sc_loading">正在加载插件...</div></div>
+<script>
+/* =================================================================
+ * In-page diagnostics — mirrors the clip-sense fix
+ *   (commit 1cadcacd: "unblock UI rendering blocked by ... Babel
+ *    cross-origin Script error swallow").
+ *
+ * Why every line matters:
+ *  - <script type="text/babel"> + Babel-standalone from unpkg.com is
+ *    cross-origin; ANY syntax/runtime error inside it is reported by
+ *    window.onerror as the opaque "Script error. at :0:0" with no
+ *    stack. Combined with React mount happening only at the end of
+ *    that block, a single typo blanks the whole UI silently.
+ *  - We therefore (a) capture window.onerror into a visible panel,
+ *    (b) start a 10s watchdog that flips the loading text to a
+ *    diagnostic when React never mounts, and (c) below we abandon
+ *    <script type="text/babel"> entirely in favor of a manual
+ *    Babel.transform() + eval() pipeline wrapped in try/catch so the
+ *    real compile / runtime stack is shown in the page itself.
+ * ================================================================= */
+window.onerror = function(msg, src, line, col, err) {
+  var el = document.getElementById("root");
+  if (el) el.innerHTML = '<div style="padding:24px;color:#ef4444;font-size:13px;word-break:break-word"><b>[subtitle-craft error]</b><br/>' + String(msg) + '<br/>at ' + String(src) + ':' + line + ':' + col + (err && err.stack ? '<pre style="margin-top:8px;white-space:pre-wrap;font-size:11px;background:#f1f5f9;padding:12px;border-radius:6px;overflow:auto;max-height:300px">' + err.stack + '</pre>' : '') + '</div>';
+};
+window.__scRendered = false;
+setTimeout(function() {
+  if (window.__scRendered) return;
+  var el = document.getElementById("__sc_loading");
+  if (!el) return;
+  el.style.color = "#ef4444";
+  el.style.flexDirection = "column";
+  el.style.textAlign = "center";
+  el.style.lineHeight = "1.8";
+  el.innerHTML = '<b>插件初始化超时</b><br/>可能原因：<br/>1. CDN 脚本加载失败 (unpkg.com)<br/>2. Babel 编译错误<br/>3. React 渲染失败<br/><br/><span style="font-size:11px;color:#94a3b8">请按 F12 打开开发者工具查看控制台错误</span>';
+}, 10000);
+</script>
 <script>
 /* =================================================================
  * Bridge SDK — verbatim from tongyi-image (only pluginId fallback
@@ -333,11 +367,18 @@ function showToast(body, type) {
 }
 </script>
 
-<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"
+        onerror="document.getElementById('root').innerHTML='<div style=padding:24px;color:#ef4444>[CDN Error] React failed to load. Check network.</div>'"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"
+        onerror="document.getElementById('root').innerHTML='<div style=padding:24px;color:#ef4444>[CDN Error] ReactDOM failed to load. Check network.</div>'"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"
+        onerror="document.getElementById('root').innerHTML='<div style=padding:24px;color:#ef4444>[CDN Error] Babel failed to load. Check network.</div>'"></script>
+<script>
+console.log("[subtitle-craft] CDN loaded: React=" + typeof React + ", ReactDOM=" + typeof ReactDOM + ", Babel=" + (typeof Babel !== "undefined"));
+</script>
 
-<script type="text/babel" data-type="module">
+<script type="text/plain" id="sc-jsx-source">
+console.log("[subtitle-craft] Babel script executing...");
 const { useState, useEffect, useRef, useCallback, useMemo } = React;
 
 /* =================================================================
@@ -932,7 +973,7 @@ function App() {
       <div className="header">
         <h1 className="oa-hero-title">
           <span className="oa-hero-title__icon"
-                dangerouslySetInnerHTML={{__html: window.OpenAkitaIcons ? window.OpenAkitaIcons.subtitles ? window.OpenAkitaIcons.subtitles() : window.OpenAkitaIcons.text() : ""}} />
+                dangerouslySetInnerHTML={{__html: window.OpenAkitaIcons && window.OpenAkitaIcons.mic ? window.OpenAkitaIcons.mic() : ""}} />
           <span className="oa-hero-title__text">
             {t("app.title")}
             <span className="oa-hero-title__sub">{t("app.subtitle")}</span>
@@ -2060,9 +2101,55 @@ function HealthRow({ label, ok, t }) {
   );
 }
 
-const root = ReactDOM.createRoot(document.getElementById("root"));
-root.render(<App />);
+console.log("[subtitle-craft] Mounting React app...");
+try {
+  window.__scRendered = true;
+  ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+  console.log("[subtitle-craft] Mount OK");
+} catch (mountErr) {
+  document.getElementById("root").innerHTML =
+    '<div style="padding:24px;color:#ef4444"><b>[subtitle-craft mount error]</b><pre style="margin-top:8px;white-space:pre-wrap;font-size:11px">' +
+    (mountErr && mountErr.stack ? mountErr.stack : String(mountErr)) + '</pre></div>';
+}
+if (window.OpenAkita && typeof window.OpenAkita.ready === "function") {
+  window.OpenAkita.ready();
+}
 </script>
 
+<script>
+/* =================================================================
+ * Manual compile-and-execute (mirror of clip-sense fix 1cadcacd).
+ *
+ * Reads the JSX source from <script type="text/plain" id="sc-jsx-source">,
+ * runs Babel.transform({ presets: ["react"] }) inside try/catch, then
+ * eval()s the compiled code inside another try/catch. Both failures
+ * surface as in-page panels with full stacks instead of the opaque
+ * cross-origin "Script error." that <script type="text/babel"> swallows.
+ * ================================================================= */
+(function() {
+  console.log("[subtitle-craft] Manual compile+execute starting...");
+  var srcEl = document.getElementById("sc-jsx-source");
+  if (!srcEl) { document.getElementById("root").innerHTML = '<div style="padding:24px;color:#ef4444"><b>Source element not found</b></div>'; return; }
+  if (typeof Babel === "undefined") { document.getElementById("root").innerHTML = '<div style="padding:24px;color:#ef4444"><b>Babel not loaded (CDN issue?)</b></div>'; return; }
+  if (typeof React === "undefined") { document.getElementById("root").innerHTML = '<div style="padding:24px;color:#ef4444"><b>React not loaded (CDN issue?)</b></div>'; return; }
+  var code;
+  try {
+    var result = Babel.transform(srcEl.textContent, { presets: ["react"], filename: "subtitle-craft.jsx" });
+    code = result.code;
+    console.log("[subtitle-craft] Compilation OK (" + code.length + " chars)");
+  } catch (compileErr) {
+    console.error("[subtitle-craft] COMPILE ERROR:", compileErr);
+    document.getElementById("root").innerHTML = '<div style="padding:24px;color:#ef4444;font-size:13px"><b>Babel Compilation Error</b><pre style="margin-top:12px;white-space:pre-wrap;font-size:12px;background:#fef2f2;padding:16px;border:1px solid #fecaca;border-radius:8px;overflow:auto;max-height:500px">' + (compileErr.stack || String(compileErr)) + '</pre></div>';
+    return;
+  }
+  try {
+    (0, eval)(code);
+    console.log("[subtitle-craft] Execution OK");
+  } catch (runErr) {
+    console.error("[subtitle-craft] RUNTIME ERROR:", runErr);
+    document.getElementById("root").innerHTML = '<div style="padding:24px;color:#ef4444;font-size:13px"><b>Runtime Error</b><pre style="margin-top:12px;white-space:pre-wrap;font-size:12px;background:#fef2f2;padding:16px;border:1px solid #fecaca;border-radius:8px;overflow:auto;max-height:500px">' + (runErr.stack || String(runErr)) + '</pre></div>';
+  }
+})();
+</script>
 </body>
 </html>
