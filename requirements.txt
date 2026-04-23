@@ -1,104 +1,104 @@
 # =====================================================
-# OpenAkita - 依赖列表
-# Python 版本要求: >= 3.11
+# OpenAkita - Dependencies
+# Python version required: >= 3.11
 #
-# 权威来源: pyproject.toml
-# 本文件供 pip install -r 快速安装，与 pyproject.toml 保持一致。
+# Authoritative source: pyproject.toml
+# This file is for `pip install -r` quick install, kept in sync with pyproject.toml.
 # =====================================================
 
-# === 核心 LLM 依赖 ===
-anthropic>=0.40.0          # Claude API 官方客户端
-openai>=1.0.0              # OpenAI 兼容 API (备用端点支持)
+# === Core LLM ===
+anthropic>=0.40.0          # Claude API official client
+openai>=1.0.0              # OpenAI-compatible API (backup endpoint support)
 
 # === MCP (Model Context Protocol) ===
-mcp>=1.0.0                 # MCP 协议支持
+mcp>=1.0.0                 # MCP protocol support
 
 # === Web Search ===
-ddgs>=8.0.0                # 多引擎聚合搜索 (无需 API Key)
+ddgs>=8.0.0                # Multi-engine aggregated search (no API key required)
 
-# === CLI 和用户界面 ===
-rich>=13.7.0               # 终端富文本输出
-prompt-toolkit>=3.0.43     # 交互式命令行
-typer>=0.12.0              # CLI 框架
+# === CLI and User Interface ===
+rich>=13.7.0               # Rich terminal output
+prompt-toolkit>=3.0.43     # Interactive command line
+typer>=0.12.0              # CLI framework
 
-# === 异步和 HTTP ===
-httpx[socks]>=0.27.0       # 异步 HTTP 客户端 (含 SOCKS 代理支持)
-aiofiles>=24.1.0           # 异步文件操作
-nest-asyncio>=1.5.0        # 嵌套事件循环支持
+# === Async and HTTP ===
+httpx[socks]>=0.27.0       # Async HTTP client (with SOCKS proxy support)
+aiofiles>=24.1.0           # Async file operations
+nest-asyncio>=1.5.0        # Nested event loop support
 
-# === 数据库 ===
-aiosqlite>=0.20.0          # 异步 SQLite
+# === Database ===
+aiosqlite>=0.20.0          # Async SQLite
 
-# === 数据验证 ===
-pydantic>=2.5.0            # 数据模型验证
-pydantic-settings>=2.1.0   # 配置管理
+# === Data Validation ===
+pydantic>=2.5.0            # Data model validation
+pydantic-settings>=2.1.0   # Configuration management
 
-# === Git 操作 ===
-gitpython>=3.1.40          # Git 操作库
+# === Git Operations ===
+gitpython>=3.1.40          # Git operations library
 
-# === 浏览器自动化 ===
-browser-use>=0.11.8        # AI 浏览器代理
-langchain-openai>=1.0.0    # LangChain OpenAI 接口 (browser-use 依赖)
-playwright>=1.40.0         # 浏览器自动化引擎
+# === Browser Automation ===
+browser-use>=0.11.8        # AI browser agent
+langchain-openai>=1.0.0    # LangChain OpenAI adapter (browser-use dependency)
+playwright>=1.40.0         # Browser automation engine
 
-# === 配置文件 ===
-pyyaml>=6.0.1              # YAML 解析
-python-dotenv>=1.0.0       # 环境变量加载
+# === Configuration ===
+pyyaml>=6.0.1              # YAML parsing
+python-dotenv>=1.0.0       # Environment variable loading
 
-# === 工具库 ===
-tenacity>=8.2.3            # 重试机制
-simplejson>=3.19.2         # JSON 序列化
+# === Utilities ===
+tenacity>=8.2.3            # Retry mechanism
+simplejson>=3.19.2         # JSON serialization
 
-# === 图像处理 ===
-Pillow>=10.0.0             # 图片格式转换/处理
+# === Image Processing ===
+Pillow>=10.0.0             # Image format conversion/processing
 
 # === HTTP API ===
-fastapi>=0.110.0           # HTTP API 框架
-uvicorn>=0.27.0            # ASGI 服务器
+fastapi>=0.110.0           # HTTP API framework
+uvicorn>=0.27.0            # ASGI server
 
-# === IM 通道 - Telegram (默认) ===
+# === IM Channel - Telegram (default) ===
 python-telegram-bot>=22.7  # Telegram Bot API
 
 # =====================================================
-# 可选依赖 - IM 通道 (pip install openakita[all] 全装)
-# 按需取消注释，或使用 pip install openakita[feishu] 等
+# Optional Dependencies - IM Channels (pip install openakita[all] for all)
+# Uncomment as needed, or use pip install openakita[feishu] etc.
 # =====================================================
 
-# 飞书
-lark-oapi>=1.5.5           # 飞书官方 SDK (WebSocket 长连接 + 卡片回调) - 5 个月 bug fix
+# Lark / Feishu
+lark-oapi>=1.5.5           # Lark official SDK (WebSocket + card callback)
 
-# 企业微信
-aiohttp>=3.13.0            # 企业微信 HTTP 回调服务器（含 CVE 修复）
-pycryptodome>=3.23.0       # 企业微信消息加解密 (AES-256-CBC) + ARM64 wheel
-cryptography>=46.0.7       # 企业微信 WS 长连接加密（补丁级安全更新）
+# WeCom (WeChat Work)
+aiohttp>=3.13.0            # WeCom HTTP callback server (with CVE fixes)
+pycryptodome>=3.23.0       # WeCom message encryption/decryption (AES-256-CBC) + ARM64 wheel
+cryptography>=46.0.7       # WeCom WS encryption (patch-level security update)
 
-# 钉钉 (Stream 模式)
-dingtalk-stream>=0.24.3    # 钉钉 Stream SDK
+# DingTalk (Stream mode)
+dingtalk-stream>=0.24.3    # DingTalk Stream SDK
 
-# OneBot 协议 (NapCat/Lagrange 等)
-websockets>=16.0           # OneBot WebSocket 支持（2026-01 主版本）
+# OneBot protocol (NapCat/Lagrange etc.)
+websockets>=16.0           # OneBot WebSocket support (2026-01 major release)
 
-# QQ 官方机器人
-# websockets>=16.0         # QQ Gateway WebSocket（已在 OneBot 行列出）
-# aiohttp>=3.13.0          # QQ Webhook 模式（已在企业微信行列出）
-# 注：QQ 官方 API 已支持 silk/wav/mp3/flac 直传，发送语音不再需要 pilk。
-# pilk 仅用于接收侧 SILK→WAV 解码（语音转写），见下方"语音接收/转写"。
+# QQ Official Bot
+# websockets>=16.0         # QQ Gateway WebSocket (listed in OneBot above)
+# aiohttp>=3.13.0          # QQ Webhook mode (listed in WeCom above)
+# Note: QQ official API supports silk/wav/mp3/flac direct upload; pilk is no longer needed for sending.
+# pilk is only needed for receiving SILK→WAV decoding (speech-to-text), see below.
 
-# 语音接收/转写（QQ + 微信用户发来的 SILK v3 → WAV）
-pilk>=0.2.1                # SILK 解码：仅接收侧需要
+# Voice receiving/transcription (QQ + WeChat users sending SILK v3 → WAV)
+pilk>=0.2.1                # SILK decoding: only needed on receive side
 
 # =====================================================
-# 可选依赖 - Windows 桌面自动化
+# Optional Dependencies - Windows Desktop Automation
 # =====================================================
 
-mss>=9.0.0                 # 高性能截图
-pyautogui>=0.9.54          # 鼠标键盘控制
+mss>=9.0.0                 # High-performance screenshots
+pyautogui>=0.9.54          # Mouse and keyboard control
 pywinauto>=0.6.8; platform_system == "Windows"  # Windows UIAutomation
-pyperclip>=1.8.2           # 剪贴板操作
-psutil>=5.9.0              # 进程信息
+pyperclip>=1.8.2           # Clipboard operations
+psutil>=5.9.0              # Process information
 
 # =====================================================
-# 开发依赖 (可选)
+# Development Dependencies (optional)
 # =====================================================
 
 # pytest>=8.0.0
