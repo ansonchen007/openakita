@@ -92,3 +92,15 @@ project, licensed under the same [Apache License 2.0](LICENSE) as the main proje
 - `github-automation` — GitHub automation via Composio MCP
 - `gmail-automation` — Gmail automation via Composio MCP
 - `google-calendar-automation` — Google Calendar automation via Composio MCP
+
+---
+
+## HTTP Framework
+
+### FastAPI / Uvicorn
+
+**Source:** https://github.com/tiangolo/fastapi / https://github.com/encode/uvicorn
+**License:** MIT License
+**Copyright:** © Sebastián Ramírez (FastAPI), © Encode OSS (Uvicorn)
+
+FastAPI is used as the HTTP API framework, served by Uvicorn as the ASGI server.
