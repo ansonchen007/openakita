@@ -149,6 +149,42 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .lightbox img, .lightbox video { max-width: 90%; max-height: 90%; object-fit: contain; border-radius: 8px; }
 .setting-section { margin-bottom: 24px; }
 .setting-section h3 { font-size: 14px; font-weight: 600; margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+.switch { position: relative; width: 36px; height: 20px; border-radius: 10px; background: var(--border); cursor: pointer; transition: .2s; flex-shrink: 0; }
+.switch.on { background: var(--primary); }
+.switch::after { content: ''; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: #fff; transition: .2s; }
+.switch.on::after { left: 18px; }
+.folder-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.folder-row .input { flex: 1; }
+.modal-mask { position: fixed; inset: 0; background: rgba(0,0,0,.5); display: flex; align-items: center; justify-content: center; z-index: 2000; animation: ak-fade-in .15s ease-out; padding: 20px; }
+.modal-card { background: var(--bg-card); border-radius: 12px; padding: 22px 24px; max-width: 420px; width: 100%; box-shadow: 0 20px 50px rgba(0,0,0,.25); animation: ak-scale-in .15s ease-out; }
+@keyframes ak-fade-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes ak-scale-in { from { transform: scale(.94); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+.folder-picker { width: min(820px, 96vw); max-width: min(820px, 96vw); max-height: 82vh; display: flex; flex-direction: column; padding: 0; overflow: hidden; }
+.folder-picker__head { padding: 16px 20px 12px; border-bottom: 1px solid var(--border); }
+.folder-picker__title { font-size: 15px; font-weight: 600; margin-bottom: 8px; color: var(--text); }
+.folder-picker__crumbs { display: flex; align-items: center; gap: 4px; font-size: 12px; color: var(--text-muted); flex-wrap: wrap; min-height: 22px; }
+.folder-picker__crumb { padding: 2px 8px; border-radius: 4px; cursor: pointer; transition: background .12s; user-select: none; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.folder-picker__crumb:hover { background: var(--bg-hover); color: var(--text); }
+.folder-picker__crumb-sep { color: var(--text-muted); opacity: .5; }
+.folder-picker__body { display: flex; flex: 1; min-height: 360px; max-height: 60vh; overflow: hidden; }
+.folder-picker__sidebar { width: 160px; border-right: 1px solid var(--border); padding: 8px 0; overflow-y: auto; background: var(--bg-hover); flex-shrink: 0; }
+.folder-picker__shortcut { display: flex; align-items: center; gap: 8px; padding: 7px 14px; font-size: 12px; color: var(--text); cursor: pointer; transition: background .12s; }
+.folder-picker__shortcut:hover { background: var(--bg-card); }
+.folder-picker__shortcut.active { background: var(--bg-card); color: var(--primary); font-weight: 500; }
+.folder-picker__list { flex: 1; overflow-y: auto; padding: 4px 0; }
+.folder-picker__item { display: flex; align-items: center; gap: 8px; padding: 8px 16px; font-size: 13px; color: var(--text); cursor: pointer; transition: background .1s; user-select: none; }
+.folder-picker__item:hover { background: var(--bg-hover); }
+.folder-picker__empty { padding: 40px 20px; text-align: center; color: var(--text-dim); font-size: 13px; }
+.folder-picker__foot { display: flex; align-items: center; gap: 8px; padding: 12px 20px; border-top: 1px solid var(--border); background: var(--bg); }
+.folder-picker__current { flex: 1; font-size: 12px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.folder-picker__newinput { flex: 1; font-size: 13px; padding: 4px 8px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg-card); color: var(--text); }
+.folder-picker__error { padding: 8px 20px; font-size: 12px; color: var(--danger); background: rgba(239,68,68,.06); }
+.filter-group { display: flex; flex-direction: column; gap: 6px; }
+.filter-group + .filter-group { margin-top: 8px; }
+.filter-group__label { font-size: 11px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: .04em; }
+.filter-group__buttons { display: flex; gap: 6px; flex-wrap: wrap; }
+.filter-group__buttons .mode-btn { padding: 5px 12px; font-size: 12px; }
+.grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
 .param-group-title { font-size: 12px; font-weight: 600; color: var(--text-dim); text-transform: uppercase; letter-spacing: .05em; margin: 14px 0 8px; padding-bottom: 4px; border-bottom: 1px solid var(--border); }
 .collapsible { border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 8px; }
 .collapsible-header { display: flex; align-items: center; justify-content: space-between; padding: 10px 14px; cursor: pointer; font-size: 13px; font-weight: 500; }
@@ -1200,12 +1236,183 @@ function TaskDetail({ task }) {
   );
 }
 
-// ── SettingsPage ──
+// ── FolderPickerModal (ported from seedance-video) ──
+function FolderPickerModal({ open, title, initialPath, onCancel, onSelect }) {
+  const [path, setPath] = useState("");
+  const [items, setItems] = useState([]);
+  const [parent, setParent] = useState(null);
+  const [isAnchor, setIsAnchor] = useState(true);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const [newFolderMode, setNewFolderMode] = useState(false);
+  const [newFolderName, setNewFolderName] = useState("");
+  const newFolderInputRef = useRef(null);
+
+  const load = useCallback(async (p) => {
+    setLoading(true);
+    setError(null);
+    try {
+      const qs = p ? `?path=${encodeURIComponent(p)}` : "";
+      const r = await pluginApi("GET", `/storage/list-dir${qs}`);
+      if (r.ok && r.body?.ok) {
+        setPath(r.body.path || "");
+        setParent(r.body.parent || null);
+        setItems(r.body.items || []);
+        setIsAnchor(!!r.body.is_anchor);
+      } else {
+        setError(r.body?.detail || `HTTP ${r.status || "?"}`);
+        if (p) {
+          const r2 = await pluginApi("GET", `/storage/list-dir`);
+          if (r2.ok && r2.body?.ok) {
+            setPath("");
+            setParent(null);
+            setItems(r2.body.items || []);
+            setIsAnchor(true);
+          }
+        }
+      }
+    } catch (e) {
+      setError(String(e && e.message || e));
+    }
+    setLoading(false);
+  }, []);
+
+  useEffect(() => {
+    if (!open) return;
+    setNewFolderMode(false);
+    setNewFolderName("");
+    load(initialPath || "");
+  }, [open, initialPath, load]);
+
+  useEffect(() => {
+    if (newFolderMode && newFolderInputRef.current) newFolderInputRef.current.focus();
+  }, [newFolderMode]);
+
+  const handleNavigate = (p) => { setNewFolderMode(false); load(p); };
+
+  const handleCreate = async () => {
+    const name = (newFolderName || "").trim();
+    if (!name || !path) return;
+    try {
+      const r = await pluginApi("POST", "/storage/mkdir", { parent: path, name });
+      if (r.ok && r.body?.ok) {
+        showToast("文件夹已创建: " + name);
+        setNewFolderMode(false);
+        setNewFolderName("");
+        await load(path);
+      } else {
+        showToast("创建失败: " + (r.body?.detail || ""), "error");
+      }
+    } catch (e) {
+      showToast("创建失败: " + String(e && e.message || e), "error");
+    }
+  };
+
+  const crumbs = (() => {
+    if (!path) return [];
+    const norm = path.replace(/\\/g, "/");
+    const parts = norm.split("/").filter(Boolean);
+    const out = [];
+    if (norm.startsWith("/")) {
+      out.push({ name: "/", path: "/" });
+      let acc = "";
+      for (const seg of parts) { acc += "/" + seg; out.push({ name: seg, path: acc }); }
+    } else if (parts[0] && /^[A-Za-z]:$/.test(parts[0])) {
+      out.push({ name: parts[0], path: parts[0] + "/" });
+      let acc = parts[0];
+      for (let i = 1; i < parts.length; i++) { acc += "/" + parts[i]; out.push({ name: parts[i], path: acc }); }
+    } else {
+      out.push({ name: path, path });
+    }
+    return out;
+  })();
+
+  if (!open) return null;
+
+  const anchors = items.filter(it => it.kind === "shortcut" || it.kind === "home");
+  const folders = isAnchor ? items.filter(it => it.kind === "drive") : items;
+
+  return (
+    <div className="modal-mask" onClick={onCancel}>
+      <div className="modal-card folder-picker" onClick={e => e.stopPropagation()}>
+        <div className="folder-picker__head">
+          <div className="folder-picker__title">{title || "选择文件夹"}</div>
+          <div className="folder-picker__crumbs">
+            <span className="folder-picker__crumb" onClick={() => handleNavigate("")}>
+              <Ic name="folder" />
+            </span>
+            {crumbs.map((c, i) => (
+              <React.Fragment key={i}>
+                <span className="folder-picker__crumb-sep">/</span>
+                <span className="folder-picker__crumb" onClick={() => handleNavigate(c.path)} title={c.path}>{c.name}</span>
+              </React.Fragment>
+            ))}
+          </div>
+        </div>
+
+        {error && <div className="folder-picker__error">加载出错: {error}</div>}
+
+        <div className="folder-picker__body">
+          {isAnchor && anchors.length > 0 && (
+            <div className="folder-picker__sidebar">
+              {anchors.map((a, i) => (
+                <div key={i} className={"folder-picker__shortcut" + (path === a.path ? " active" : "")} onClick={() => handleNavigate(a.path)}>
+                  <Ic name="folder" style={{width:14,height:14}} /> {a.name}
+                </div>
+              ))}
+            </div>
+          )}
+          <div className="folder-picker__list">
+            {loading ? (
+              <div className="folder-picker__empty"><div className="spinner" style={{margin:"0 auto 8px"}}></div>加载中...</div>
+            ) : folders.length === 0 ? (
+              <div className="folder-picker__empty">（空目录）</div>
+            ) : folders.map((it, i) => (
+              <div key={i} className="folder-picker__item" onClick={() => handleNavigate(it.path)}>
+                <Ic name="folder" style={{width:16,height:16,color:"var(--primary)"}} /> {it.name}
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="folder-picker__foot">
+          {newFolderMode ? (
+            <>
+              <input ref={newFolderInputRef} className="folder-picker__newinput" value={newFolderName}
+                onChange={e => setNewFolderName(e.target.value)}
+                onKeyDown={e => { if (e.key === "Enter") handleCreate(); if (e.key === "Escape") { setNewFolderMode(false); setNewFolderName(""); } }}
+                placeholder="新建文件夹名" />
+              <button className="btn btn-sm" onClick={() => { setNewFolderMode(false); setNewFolderName(""); }}>取消</button>
+              <button className="btn btn-sm btn-primary" disabled={!newFolderName.trim()} onClick={handleCreate}>创建</button>
+            </>
+          ) : (
+            <>
+              <span className="folder-picker__current" title={path}>{path || ""}</span>
+              <button className="btn btn-sm" disabled={!path || isAnchor} onClick={() => setNewFolderMode(true)}>新建文件夹</button>
+              <button className="btn btn-sm" onClick={onCancel}>取消</button>
+              <button className="btn btn-sm btn-primary" disabled={!path || isAnchor} onClick={() => onSelect(path)}>选择此目录</button>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── SettingsPage (aligned with seedance-video) ──
 function SettingsPage({ onPurge }) {
   const [config, setConfig] = useState({});
   const [meta, setMeta] = useState(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [dk, setDk] = useState("");
+  const [ak, setAk] = useState("");
+  const [showDk, setShowDk] = useState(false);
+  const [showAk, setShowAk] = useState(false);
+  const [imgDir, setImgDir] = useState("");
+  const [vidDir, setVidDir] = useState("");
+  const [stats, setStats] = useState(null);
+  const [folderPicker, setFolderPicker] = useState(null);
 
   const reload = () => {
     pluginApi("GET", "/config").then((resp) => {
@@ -1224,25 +1431,48 @@ function SettingsPage({ onPurge }) {
       }
       setLoading(false);
     });
+    pluginApi("GET", "/storage/stats").then(r => r.body?.stats && setStats(r.body.stats)).catch(() => {});
   }, []);
-
-  const save = async (updates) => {
-    setSaving(true);
-    await pluginApi("PUT", "/config", { updates });
-    showToast("配置已保存");
-    reload();
-    setSaving(false);
-  };
-
-  const [dk, setDk] = useState("");
-  const [ak, setAk] = useState("");
-  const [imgDir, setImgDir] = useState("");
-  const [vidDir, setVidDir] = useState("");
 
   useEffect(() => {
     setImgDir(config.image_output_dir || "");
     setVidDir(config.video_output_dir || "");
   }, [config.image_output_dir, config.video_output_dir]);
+
+  const save = async (updates) => {
+    setSaving(true);
+    try {
+      await pluginApi("PUT", "/config", { updates });
+      showToast("配置已保存");
+      reload();
+    } catch (e) {
+      showToast("保存失败: " + (e.message || ""), "error");
+    }
+    setSaving(false);
+  };
+
+  const openFolderByKey = async (key) => {
+    try {
+      const r = await pluginApi("POST", "/storage/open-folder", { key });
+      if (!r.body?.ok) showToast("打开文件夹失败: " + (r.body?.detail || ""), "error");
+    } catch (e) {
+      showToast("打开文件夹失败: " + (e.message || ""), "error");
+    }
+  };
+
+  const openFolderPicker = (configKey, title) => {
+    setFolderPicker({ key: configKey, title, initialPath: (config[configKey] || "").trim() });
+  };
+  const handleFolderPickerSelect = (path) => {
+    if (!folderPicker) return;
+    const k = folderPicker.key;
+    setFolderPicker(null);
+    if (path) {
+      setConfig({...config, [k]: path});
+      save({[k]: path});
+      showToast("已设置路径: " + path);
+    }
+  };
 
   const purgeMock = async () => {
     if (!window.confirm("确定删除所有演示任务？（api_task_id 以 mock- 开头）")) return;
@@ -1258,219 +1488,174 @@ function SettingsPage({ onPurge }) {
   if (loading) return <div className="empty-state"><div className="spinner"></div></div>;
 
   const mockMode = (config.mock_mode != null && config.mock_mode !== "") ? config.mock_mode : (meta && meta.mock_mode) || "auto";
+  const statKeyMap = {image_output_dir: "图片输出", video_output_dir: "视频输出", assets: "素材资源"};
 
   return (
     <div style={{maxWidth:640}}>
+      {/* ── API 配置 ── */}
       <div className="setting-section oa-settings-section">
-        <h3 className="oa-settings-section__title">
-          <span className="oa-icon" style={{color:"var(--primary)"}}
-            dangerouslySetInnerHTML={{__html: window.OpenAkitaIcons ? window.OpenAkitaIcons.settings() : ""}} />
-          演示 / 模拟数据
-        </h3>
-        <p className="text-sm text-muted" style={{marginBottom:12}}>
-          未配置对应 API Key 时，默认会用占位图（picsum）与示例视频（W3C）走完整流程，便于验收表单与任务列表。
-          配置真实 Key 后可将此项设为「关闭演示」；「始终演示」即使有 Key 也不会调用外网生图/视频 API。
-        </p>
-        <div className="form-row">
-          <label className="label">演示模式</label>
-          <select className="input select" value={mockMode}
-            onChange={(e) => { const v = e.target.value; setConfig({...config, mock_mode: v}); save({ mock_mode: v }); }}>
-            <option value="auto">自动（未配 Key 时用演示数据）</option>
-            <option value="0">关闭（必须配置真实 Key）</option>
-            <option value="1">始终演示（不调用外网 API）</option>
-          </select>
-        </div>
-        <div className="form-row">
-          <div className="flex items-center gap-2 flex-wrap">
-            <button type="button" className="btn btn-danger btn-sm" onClick={purgeMock}>清除全部演示任务</button>
-            <span className="text-xs text-dim">仅删除 api_task_id 为 mock- 开头的记录，可随时再生成</span>
-          </div>
-        </div>
-      </div>
-      <div className="setting-section oa-settings-section">
-        <h3 className="oa-settings-section__title">
-          <span className="oa-icon" style={{color:"var(--primary)"}}
-            dangerouslySetInnerHTML={{__html: window.OpenAkitaIcons ? window.OpenAkitaIcons.key ? window.OpenAkitaIcons.key() : (window.OpenAkitaIcons.settings ? window.OpenAkitaIcons.settings() : "") : ""}} />
-          API 配置
-        </h3>
-        <div className={"form-row" + (config.dashscope_api_key ? "" : " oa-config-field-callout")}>
+        <h3 className="oa-settings-section__title"><Ic name="key"/> API 配置</h3>
+        <div className={"form-row" + (config.dashscope_api_key ? "" : " oa-config-field-callout")}
+             data-callout={config.dashscope_api_key ? undefined : "需要配置才能使用通义万相"}>
           <label className="label">DashScope API Key (通义万相)</label>
           <div className="flex gap-2">
-            <input className="input flex-1" type="password" placeholder={config.dashscope_api_key ? "已配置 (***)" : "输入 API Key"}
-              value={dk} onChange={(e) => setDk(e.target.value)} />
-            <button className="btn btn-primary btn-sm" disabled={!dk || saving}
+            <input className="input flex-1" type={showDk?"text":"password"}
+              value={dk !== "" ? dk : (config.dashscope_api_key || "")}
+              onChange={e => setDk(e.target.value)}
+              placeholder="输入 API Key" />
+            <button className="btn btn-sm" onClick={() => setShowDk(!showDk)}>{showDk ? "隐藏" : "显示"}</button>
+            <button className="btn btn-sm btn-primary" disabled={!dk || saving}
               onClick={() => { save({ dashscope_api_key: dk }); setDk(""); }}>保存</button>
           </div>
-          <div className="text-xs text-dim" style={{marginTop:4}}>
+          <p className="text-xs text-dim" style={{marginTop:4}}>
             获取地址：<a href="https://bailian.console.aliyun.com/?tab=model#/api-key" target="_blank" rel="noopener noreferrer" style={{color:"var(--primary)"}}>阿里云百炼控制台</a>
-          </div>
+          </p>
         </div>
-        <div className={"form-row" + (config.ark_api_key ? "" : " oa-config-field-callout")}>
+        <div className={"form-row" + (config.ark_api_key ? "" : " oa-config-field-callout")}
+             data-callout={config.ark_api_key ? undefined : "需要配置才能使用火山视频"}>
           <label className="label">Ark API Key (火山引擎视频)</label>
           <div className="flex gap-2">
-            <input className="input flex-1" type="password" placeholder={config.ark_api_key ? "已配置 (***)" : "输入 API Key"}
-              value={ak} onChange={(e) => setAk(e.target.value)} />
-            <button className="btn btn-primary btn-sm" disabled={!ak || saving}
+            <input className="input flex-1" type={showAk?"text":"password"}
+              value={ak !== "" ? ak : (config.ark_api_key || "")}
+              onChange={e => setAk(e.target.value)}
+              placeholder="输入 API Key" />
+            <button className="btn btn-sm" onClick={() => setShowAk(!showAk)}>{showAk ? "隐藏" : "显示"}</button>
+            <button className="btn btn-sm btn-primary" disabled={!ak || saving}
               onClick={() => { save({ ark_api_key: ak }); setAk(""); }}>保存</button>
           </div>
-          <div className="text-xs text-dim" style={{marginTop:4}}>
+          <p className="text-xs text-dim" style={{marginTop:4}}>
             获取地址：<a href="https://console.volcengine.com/ark/region:ark+cn-beijing/apiKey" target="_blank" rel="noopener noreferrer" style={{color:"var(--primary)"}}>火山方舟控制台</a>
-          </div>
+          </p>
         </div>
       </div>
+
+      {/* ── 默认参数 ── */}
       <div className="setting-section oa-settings-section">
-        <h3 className="oa-settings-section__title">
-          <span className="oa-icon" style={{color:"var(--primary)"}}
-            dangerouslySetInnerHTML={{__html: window.OpenAkitaIcons ? window.OpenAkitaIcons.folder ? window.OpenAkitaIcons.folder() : (window.OpenAkitaIcons.settings ? window.OpenAkitaIcons.settings() : "") : ""}} />
-          输出目录
-        </h3>
-        <div className="form-row">
-          <label className="label">自动下载</label>
-          <div className="flex items-center gap-2">
-            {(() => {
-              const on = String(config.auto_download ?? (meta && meta.auto_download) ?? "true").toLowerCase() !== "false";
-              const toggle = () => {
-                const next = on ? "false" : "true";
-                setConfig({...config, auto_download: next});
-                save({ auto_download: next });
-              };
-              return (
-                <div onClick={toggle}
-                  style={{width:36,height:20,borderRadius:10,background:on?"var(--primary)":"var(--border)",cursor:"pointer",position:"relative",transition:".2s"}}>
-                  <div style={{position:"absolute",top:2,left:on?18:2,width:16,height:16,borderRadius:"50%",background:"#fff",transition:".2s"}} />
-                </div>
-              );
-            })()}
-            <span className="text-sm text-muted">生成完成后自动把图片/视频下载到本地目录</span>
-          </div>
-        </div>
-        <div className="form-row">
-          <label className="label">图片输出目录</label>
-          <div className="flex gap-2">
-            <input className="input flex-1" type="text"
-              placeholder={(meta && meta.default_image_dir) || ""}
-              value={imgDir} onChange={(e) => setImgDir(e.target.value)} />
-            <button className="btn btn-primary btn-sm" disabled={saving}
-              onClick={() => save({ image_output_dir: imgDir.trim() })}>保存</button>
-          </div>
-        </div>
-        <div className="form-row">
-          <label className="label">视频输出目录</label>
-          <div className="flex gap-2">
-            <input className="input flex-1" type="text"
-              placeholder={(meta && meta.default_video_dir) || ""}
-              value={vidDir} onChange={(e) => setVidDir(e.target.value)} />
-            <button className="btn btn-primary btn-sm" disabled={saving}
-              onClick={() => save({ video_output_dir: vidDir.trim() })}>保存</button>
-          </div>
-        </div>
-        <div className="form-row">
-          <div className="flex items-center gap-2 flex-wrap">
-          <button type="button" className="btn btn-sm"
-            onClick={() => { setImgDir(""); setVidDir(""); save({ image_output_dir: "", video_output_dir: "" }); }}>
-            重置为默认
-          </button>
-          <span className="text-xs text-dim">留空即使用插件默认目录</span>
-          </div>
-        </div>
-        <p className="text-xs text-dim" style={{marginTop:8,lineHeight:1.6}}>
-          {meta && meta.default_image_dir ? (
-            <>
-              默认图片目录：<code style={{wordBreak:"break-all"}}>{meta.default_image_dir}</code><br/>
-              默认视频目录：<code style={{wordBreak:"break-all"}}>{meta.default_video_dir}</code><br/>
-              OpenAkita 数据根目录：<code style={{wordBreak:"break-all"}}>{meta.data_dir || ""}</code>。可改为任意绝对路径。
-            </>
-          ) : (
-            <span style={{color:"#f59e0b"}}>未获取到默认路径信息，请重启后端（openakita serve）后刷新本页。</span>
-          )}
-        </p>
-      </div>
-      <div className="setting-section oa-settings-section">
-        <h3 className="oa-settings-section__title">
-          <span className="oa-icon" style={{color:"var(--primary)"}}
-            dangerouslySetInnerHTML={{__html: window.OpenAkitaIcons ? window.OpenAkitaIcons.settings() : ""}} />
-          默认参数
-        </h3>
-        <p className="text-sm text-muted" style={{marginBottom:12}}>
-          当具体功能未指定时使用的全局默认值。优先级：表单输入 &gt; 功能预设 &gt; 全局默认。
-        </p>
+        <h3 className="oa-settings-section__title"><Ic name="settings"/> 默认参数</h3>
         <div className="grid-2">
           <div className="form-row">
             <label className="label">默认图像模型</label>
             <select className="input select"
               value={config.default_image_model || ""}
-              onChange={(e) => { const v = e.target.value; setConfig({...config, default_image_model: v}); save({ default_image_model: v }); }}>
+              onChange={e => { const v = e.target.value; setConfig({...config, default_image_model: v}); save({ default_image_model: v }); }}>
               <option value="">（使用功能预设）</option>
-              {(meta && meta.image_models || []).map((m) => (
-                <option key={m.id} value={m.id}>{m.name}</option>
-              ))}
+              {(meta && meta.image_models || []).map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
             </select>
           </div>
           <div className="form-row">
             <label className="label">默认视频模型</label>
             <select className="input select"
               value={config.default_video_model || ""}
-              onChange={(e) => { const v = e.target.value; setConfig({...config, default_video_model: v}); save({ default_video_model: v }); }}>
+              onChange={e => { const v = e.target.value; setConfig({...config, default_video_model: v}); save({ default_video_model: v }); }}>
               <option value="">（使用功能预设）</option>
-              {(meta && meta.video_models || []).map((m) => (
-                <option key={m.id} value={m.id}>{m.name}</option>
-              ))}
+              {(meta && meta.video_models || []).map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
             </select>
           </div>
-        </div>
-        <div className="grid-2">
           <div className="form-row">
             <label className="label">默认图像尺寸</label>
             <select className="input select"
               value={config.default_image_size || ""}
-              onChange={(e) => { const v = e.target.value; setConfig({...config, default_image_size: v}); save({ default_image_size: v }); }}>
+              onChange={e => { const v = e.target.value; setConfig({...config, default_image_size: v}); save({ default_image_size: v }); }}>
               <option value="">（使用功能预设）</option>
-              {(meta && meta.image_sizes || ["1024*1024","1280*720","720*1280"]).map((s) => (
-                <option key={s} value={s}>{s}</option>
-              ))}
+              {(meta && meta.image_sizes || ["1024*1024","1280*720","720*1280"]).map(s => <option key={s} value={s}>{s}</option>)}
             </select>
           </div>
           <div className="form-row">
-            <label className="label">水印</label>
-            <div className="flex items-center gap-2" style={{height:36}}>
-              {(() => {
-                const on = String(config.watermark ?? (meta && meta.watermark) ?? "false").toLowerCase() === "true";
-                const toggle = () => {
-                  const next = on ? "false" : "true";
-                  setConfig({...config, watermark: next});
-                  save({ watermark: next });
-                };
-                return (
-                  <div onClick={toggle}
-                    style={{width:36,height:20,borderRadius:10,background:on?"var(--primary)":"var(--border)",cursor:"pointer",position:"relative",transition:".2s"}}>
-                    <div style={{position:"absolute",top:2,left:on?18:2,width:16,height:16,borderRadius:"50%",background:"#fff",transition:".2s"}} />
-                  </div>
-                );
-              })()}
-              <span className="text-sm text-muted">视频生成添加水印（图像端取决于模型支持）</span>
-            </div>
+            <label className="label">轮询间隔</label>
+            <select className="input select"
+              value={config.poll_interval_image || "10"}
+              onChange={e => save({poll_interval_image: e.target.value})}>
+              <option value="5">5秒</option>
+              <option value="10">10秒</option>
+              <option value="15">15秒</option>
+              <option value="30">30秒</option>
+            </select>
           </div>
         </div>
+        <div className="flex items-center justify-between" style={{marginTop:8}}>
+          <span className="text-sm">水印</span>
+          {(() => {
+            const on = String(config.watermark ?? (meta && meta.watermark) ?? "false").toLowerCase() === "true";
+            return <div className={`switch ${on?"on":""}`} onClick={() => save({watermark: on?"false":"true"})} />;
+          })()}
+        </div>
       </div>
+
+      {/* ── 输出目录 ── */}
       <div className="setting-section oa-settings-section">
-        <h3 className="oa-settings-section__title">
-          <span className="oa-icon" style={{color:"var(--primary)"}}
-            dangerouslySetInnerHTML={{__html: window.OpenAkitaIcons ? window.OpenAkitaIcons.refresh ? window.OpenAkitaIcons.refresh() : (window.OpenAkitaIcons.settings ? window.OpenAkitaIcons.settings() : "") : ""}} />
-          轮询配置
-        </h3>
-        <div className="grid-2">
-          <div className="form-row">
-            <label className="label">图像轮询间隔(秒)</label>
-            <input className="input" type="number" value={config.poll_interval_image || 10}
-              onChange={(e) => { const v = e.target.value; setConfig({...config, poll_interval_image: v}); save({poll_interval_image: v}); }} />
-          </div>
-          <div className="form-row">
-            <label className="label">视频轮询间隔(秒)</label>
-            <input className="input" type="number" value={config.poll_interval_video || 15}
-              onChange={(e) => { const v = e.target.value; setConfig({...config, poll_interval_video: v}); save({poll_interval_video: v}); }} />
+        <h3 className="oa-settings-section__title"><Ic name="folder"/> 输出目录</h3>
+        <div className="form-row">
+          <label className="label">图片输出目录</label>
+          <div className="folder-row">
+            <input className="input" value={imgDir}
+              placeholder={(meta && meta.default_image_dir) || "默认: ~/ecommerce-images/"}
+              onChange={e => setImgDir(e.target.value)}
+              onBlur={e => save({image_output_dir: e.target.value.trim()})} />
+            <button className="btn btn-sm" onClick={() => openFolderPicker("image_output_dir", "选择图片输出目录")}>浏览</button>
+            <button className="btn btn-sm" onClick={() => openFolderByKey("image_output_dir")}>打开</button>
           </div>
         </div>
+        <div className="form-row">
+          <label className="label">视频输出目录</label>
+          <div className="folder-row">
+            <input className="input" value={vidDir}
+              placeholder={(meta && meta.default_video_dir) || "默认: ~/ecommerce-videos/"}
+              onChange={e => setVidDir(e.target.value)}
+              onBlur={e => save({video_output_dir: e.target.value.trim()})} />
+            <button className="btn btn-sm" onClick={() => openFolderPicker("video_output_dir", "选择视频输出目录")}>浏览</button>
+            <button className="btn btn-sm" onClick={() => openFolderByKey("video_output_dir")}>打开</button>
+          </div>
+        </div>
+        <div className="flex items-center justify-between" style={{marginTop:8}}>
+          <span className="text-sm">自动下载</span>
+          {(() => {
+            const on = String(config.auto_download ?? (meta && meta.auto_download) ?? "true").toLowerCase() !== "false";
+            return <div className={`switch ${on?"on":""}`} onClick={() => save({auto_download: on?"false":"true"})} />;
+          })()}
+        </div>
+
+        {stats && (
+          <div className="grid-3" style={{marginTop:12}}>
+            {Object.entries(stats).map(([k, s]) => (
+              <div key={k} className="card" style={{padding:10,textAlign:"center"}}>
+                <div className="text-xs text-dim">{statKeyMap[k] || k}</div>
+                <div style={{fontSize:18,fontWeight:600,color:"var(--primary)",margin:"4px 0"}}>{s.size_mb} MB</div>
+                <div className="text-xs text-dim">{s.file_count} 个文件</div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
+
+      {/* ── 演示 / 模拟数据 ── */}
+      <div className="setting-section oa-settings-section">
+        <h3 className="oa-settings-section__title"><Ic name="refresh"/> 演示模式</h3>
+        <p className="text-sm text-muted" style={{marginBottom:12}}>
+          未配置对应 API Key 时，默认会用占位图（picsum）与示例视频（W3C）走完整流程，便于验收表单与任务列表。
+          配置真实 Key 后可将此项设为「关闭演示」；「始终演示」即使有 Key 也不会调用外网 API。
+        </p>
+        <div className="form-row">
+          <label className="label">演示模式</label>
+          <select className="input select" value={mockMode}
+            onChange={e => { const v = e.target.value; setConfig({...config, mock_mode: v}); save({ mock_mode: v }); }}>
+            <option value="auto">自动（未配 Key 时用演示数据）</option>
+            <option value="0">关闭（必须配置真实 Key）</option>
+            <option value="1">始终演示（不调用外网 API）</option>
+          </select>
+        </div>
+        <div className="form-row">
+          <button type="button" className="btn btn-danger btn-sm" onClick={purgeMock}>清除全部演示任务</button>
+          <p className="text-xs text-dim" style={{marginTop:4}}>仅删除 api_task_id 为 mock- 开头的记录，可随时再生成</p>
+        </div>
+      </div>
+
+      <FolderPickerModal
+        open={!!folderPicker}
+        title={folderPicker?.title}
+        initialPath={folderPicker?.initialPath}
+        onCancel={() => setFolderPicker(null)}
+        onSelect={handleFolderPickerSelect}
+      />
     </div>
   );
 }
@@ -1818,18 +2003,18 @@ function TasksTab({ pluginApi }) {
   return (
     <div className="split-layout">
       <div className="split-left" style={{width:"38%",minWidth:320}}>
-        <div style={{marginBottom:12}}>
-          <div className="label">状态</div>
-          <div className="flex gap-2 flex-wrap">
+        <div className="filter-group">
+          <div className="filter-group__label">状态</div>
+          <div className="filter-group__buttons">
             {[{v:"",l:"全部"},{v:"running",l:"生成中"},{v:"succeeded",l:"完成"},{v:"failed",l:"失败"}].map(f => (
               <button key={f.v} className={"mode-btn" + (statusFilter===f.v?" active":"")}
                 onClick={() => setStatusFilter(f.v)}>{f.l}</button>
             ))}
           </div>
         </div>
-        <div style={{marginBottom:12}}>
-          <div className="label">模块</div>
-          <div className="flex gap-2 flex-wrap">
+        <div className="filter-group">
+          <div className="filter-group__label">模块</div>
+          <div className="filter-group__buttons">
             <button className={"mode-btn" + (moduleFilter===""?" active":"")}
               onClick={() => setModuleFilter("")}>全部</button>
             {MODULES.map(m => (
@@ -1927,7 +2112,8 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if (!selectedFeature) return;
+    if (!selectedFeature) { setFeatureDetail(null); return; }
+    setFeatureDetail(null);
     pluginApi("GET", "/features/" + selectedFeature).then((resp) => {
       if (resp.body && resp.body.ok) {
         setFeatureDetail(resp.body.feature);
@@ -1937,7 +2123,7 @@ function App() {
         });
         setParams(defaults);
       }
-    }).catch(() => {});
+    }).catch(() => { setFeatureDetail(null); });
   }, [selectedFeature]);
 
   useEffect(() => {
@@ -2025,8 +2211,10 @@ function App() {
     const list = features[activeModule] || [];
     if (list.length > 0) {
       setSelectedFeature(list[0].id);
-      setSelectedTask(null);
+    } else {
+      setSelectedFeature(null);
     }
+    setSelectedTask(null);
   }, [activeModule, features]);
 
   return (

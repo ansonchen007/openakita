@@ -1018,6 +1018,146 @@ class Plugin(PluginBase):
                     self._ark = EcomVideoClient(body.updates["ark_api_key"])
             return {"ok": True}
 
+        # --- Storage management (mirrors seedance-video for UI parity) ---
+
+        @router.get("/storage/stats")
+        async def storage_stats() -> dict:
+            cfg = await self._tm.get_all_config()
+            stats: dict[str, dict] = {}
+            for key, default in [
+                ("image_output_dir", str(self._data_dir / "images")),
+                ("video_output_dir", str(self._data_dir / "videos")),
+                ("assets", str(self._data_dir / "assets")),
+            ]:
+                d = Path(cfg.get(key) or default)
+                total_bytes = 0
+                file_count = 0
+                try:
+                    if d.is_dir():
+                        for f in d.rglob("*"):
+                            if file_count > 20000:
+                                break
+                            if f.is_file():
+                                try:
+                                    total_bytes += f.stat().st_size
+                                    file_count += 1
+                                except OSError:
+                                    continue
+                except OSError:
+                    pass
+                stats[key] = {
+                    "path": str(d),
+                    "size_bytes": total_bytes,
+                    "size_mb": round(total_bytes / 1048576, 1),
+                    "file_count": file_count,
+                }
+            return {"ok": True, "stats": stats}
+
+        @router.post("/storage/open-folder")
+        async def open_folder(body: dict) -> dict:
+            raw_path = (body.get("path") or "").strip()
+            key = (body.get("key") or "").strip()
+            if not raw_path and not key:
+                raise HTTPException(status_code=400, detail="Missing path or key")
+            if raw_path:
+                target = Path(raw_path).expanduser()
+            else:
+                defaults = {
+                    "image_output_dir": self._data_dir / "images",
+                    "video_output_dir": self._data_dir / "videos",
+                    "assets": self._data_dir / "assets",
+                }
+                if key not in defaults:
+                    raise HTTPException(status_code=400, detail=f"Unknown key: {key}")
+                cfg = await self._tm.get_all_config()
+                cfg_val = (cfg.get(key) or "").strip()
+                target = Path(cfg_val).expanduser() if cfg_val else defaults[key]
+            try:
+                target.mkdir(parents=True, exist_ok=True)
+            except OSError as exc:
+                raise HTTPException(status_code=500, detail=f"Cannot create folder: {exc}") from exc
+            import subprocess, sys
+            try:
+                if sys.platform == "win32":
+                    subprocess.Popen(["explorer", str(target)])
+                elif sys.platform == "darwin":
+                    subprocess.Popen(["open", str(target)])
+                else:
+                    subprocess.Popen(["xdg-open", str(target)])
+            except (OSError, FileNotFoundError) as exc:
+                raise HTTPException(status_code=500, detail=f"Cannot open folder: {exc}") from exc
+            return {"ok": True, "path": str(target)}
+
+        @router.get("/storage/list-dir")
+        async def list_dir(path: str = "") -> dict:
+            import sys as _sys
+            raw = (path or "").strip()
+            if not raw:
+                anchors: list[dict] = []
+                home = Path.home()
+                anchors.append({"name": "Home", "path": str(home), "is_dir": True, "kind": "home"})
+                for sub in ("Desktop", "Documents", "Downloads", "Pictures", "Videos"):
+                    p = home / sub
+                    if p.is_dir():
+                        anchors.append({"name": sub, "path": str(p), "is_dir": True, "kind": "shortcut"})
+                if _sys.platform == "win32":
+                    import string
+                    for letter in string.ascii_uppercase:
+                        drv = Path(f"{letter}:/")
+                        try:
+                            if drv.exists():
+                                anchors.append({"name": f"{letter}:", "path": str(drv), "is_dir": True, "kind": "drive"})
+                        except OSError:
+                            continue
+                else:
+                    anchors.append({"name": "/", "path": "/", "is_dir": True, "kind": "drive"})
+                return {"ok": True, "path": "", "parent": None, "items": anchors, "is_anchor": True}
+            try:
+                target = Path(raw).expanduser().resolve(strict=False)
+            except (OSError, RuntimeError) as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            if not target.is_dir():
+                raise HTTPException(status_code=400, detail="Not a directory")
+            items: list[dict] = []
+            try:
+                for entry in target.iterdir():
+                    name = entry.name
+                    if name.startswith("."):
+                        continue
+                    try:
+                        if entry.is_dir():
+                            items.append({"name": name, "path": str(entry), "is_dir": True})
+                    except (PermissionError, OSError):
+                        continue
+            except PermissionError as exc:
+                raise HTTPException(status_code=403, detail=str(exc)) from exc
+            except OSError as exc:
+                raise HTTPException(status_code=500, detail=str(exc)) from exc
+            items.sort(key=lambda it: it["name"].lower())
+            parent_path = str(target.parent) if target.parent != target else None
+            return {"ok": True, "path": str(target), "parent": parent_path, "items": items, "is_anchor": False}
+
+        @router.post("/storage/mkdir")
+        async def make_dir(body: dict) -> dict:
+            parent = (body.get("parent") or "").strip()
+            name = (body.get("name") or "").strip()
+            if not parent or not name:
+                raise HTTPException(status_code=400, detail="Missing parent or name")
+            if "/" in name or "\\" in name or name in (".", ".."):
+                raise HTTPException(status_code=400, detail="Invalid folder name")
+            try:
+                parent_path = Path(parent).expanduser().resolve(strict=False)
+            except (OSError, RuntimeError) as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            if not parent_path.is_dir():
+                raise HTTPException(status_code=400, detail="Parent is not a directory")
+            new_dir = parent_path / name
+            try:
+                new_dir.mkdir(parents=False, exist_ok=True)
+            except OSError as exc:
+                raise HTTPException(status_code=500, detail=str(exc)) from exc
+            return {"ok": True, "path": str(new_dir)}
+
         @router.post("/prompt-optimize")
         async def optimize_prompt(body: PromptOptimizeBody) -> dict:
             brain = self._get_brain()
