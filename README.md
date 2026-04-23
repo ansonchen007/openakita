@@ -283,7 +283,7 @@ Dark/light theme · Onboarding wizard · Auto-update · Bilingual (EN/CN) · Sta
 
 <p align="center">
   <a href="https://b23.tv/jvoWpgj">
-    <img src="docs/assets/org.jpg" alt="▶ Watch Organization Orchestration Demo" width="720" />
+    <img src="docs/assets/en/org.jpg" alt="▶ Watch Organization Orchestration Demo" width="720" />
   </a>
   <br/>
   <sub>▶ Click to watch: Built a company on OpenAkita, and it runs autonomously (Bilibili)</sub>
@@ -324,7 +324,7 @@ Beyond multi-Agent collaboration — build an entire **AI company**. OpenAkita i
 
 <p align="center">
   <a href="https://www.bilibili.com/video/BV1psP5zTEE7">
-    <img src="docs/assets/multi_agent_demo_cover.png" alt="▶ Watch Multi-Agent Collaboration Demo" width="720" />
+    <img src="docs/assets/en/multi_agent_demo_cover.png" alt="▶ Watch Multi-Agent Collaboration Demo" width="720" />
   </a>
   <br/>
   <sub>▶ Click to watch the Multi-Agent collaboration demo on Bilibili</sub>
