@@ -563,6 +563,14 @@ class SubtitleTaskManager:
                 d[key] = json.loads(val) if val else None
             except (json.JSONDecodeError, TypeError):
                 d[key] = None
+        # UI-friendly aliases. The transcripts table column is named
+        # `language` (matches Paraformer's `language` field) but the UI's
+        # TranscriptsList expects `source_lang` for parity with the tasks
+        # table. Compute both rather than break either consumer.
+        d["source_lang"] = d.get("language") or ""
+        words = d.get("words")
+        d["word_count"] = len(words) if isinstance(words, list) else 0
+        d["engine"] = "paraformer-v2"
         return d
 
     @staticmethod
