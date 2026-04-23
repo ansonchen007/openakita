@@ -863,6 +863,8 @@ const I18N_DICT = {
     "create.mode.video_reface.desc": "保留场景与动作，把视频里的主角换成新人物",
     "create.mode.avatar_compose": "数字人合成",
     "create.mode.avatar_compose.desc": "多图融合生成新形象，再生成口播视频",
+    "create.mode.pose_drive": "图生动作",
+    "create.mode.pose_drive.desc": "将视频动作迁移到静态人像",
     "create.section.image": "人像 / 主体图",
     "create.section.video": "参考视频",
     "create.section.refImage": "参考人物图",
@@ -1147,6 +1149,8 @@ const I18N_DICT = {
     "create.mode.video_reface.desc": "Replace the actor while preserving scene & action",
     "create.mode.avatar_compose": "Avatar Compose",
     "create.mode.avatar_compose.desc": "Blend multiple references into a new figure, then synthesise speech",
+    "create.mode.pose_drive": "Pose Drive",
+    "create.mode.pose_drive.desc": "Transfer motion from video to a portrait photo",
     "create.section.image": "Portrait / subject image",
     "create.section.video": "Reference video",
     "create.section.refImage": "Character image",
@@ -1507,6 +1511,10 @@ const ICONS = {
   sparkles: '<path d="M12 3l1.6 4.4L18 9l-4.4 1.6L12 15l-1.6-4.4L6 9l4.4-1.6L12 3z"/><path d="M19 14l.8 2.2L22 17l-2.2.8L19 20l-.8-2.2L16 17l2.2-.8L19 14z"/><path d="M5 15l.6 1.4L7 17l-1.4.6L5 19l-.6-1.4L3 17l1.4-.6L5 15z"/>',
   down: '<polyline points="6 9 12 15 18 9"/>',
   external: '<path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/>',
+  walk: '<path d="M13 4a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3z"/><path d="M7 21l3-4"/><path d="M16 21l-2-4-3-3 1-6"/><path d="M6 12l2-3 4-1 3 3 3 1"/>',
+  cloud: '<path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"/>',
+  server: '<rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/>',
+  cpu: '<rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><line x1="9" y1="1" x2="9" y2="4"/><line x1="15" y1="1" x2="15" y2="4"/><line x1="9" y1="20" x2="9" y2="23"/><line x1="15" y1="20" x2="15" y2="23"/><line x1="20" y1="9" x2="23" y2="9"/><line x1="20" y1="14" x2="23" y2="14"/><line x1="1" y1="9" x2="4" y2="9"/><line x1="1" y1="14" x2="4" y2="14"/>',
 };
 function Ico(props) {
   const svg = ICONS[props.name] || "";
@@ -2144,12 +2152,23 @@ const MODE_DEFS = [
     id: "avatar_compose", icon: "layers",
     needsImage: false, needsVideo: false, needsTts: true,
     needsRefImage: false, needsCompose: true,
-    model: "wan2.5-i2i-preview → wan2.2-s2v",
+    model: "wan2.7-image → wan2.2-s2v",
     price: "¥0.20/张（合成） + ¥0.60/s（口播）",
     resolutions: ["480P", "720P"],
     maxDuration: "≤ 60s",
     inputs: "1-3 张参考图 + 中文融合 prompt + 文本/音频",
     notes: "qwen-vl-max 可代写 prompt；融合后才进入口播管线。",
+  },
+  {
+    id: "pose_drive", icon: "walk",
+    needsImage: true, needsVideo: true, needsTts: false,
+    needsRefImage: false, needsCompose: false,
+    model: "wan2.2-animate-move（std / pro 双档）",
+    price: "¥0.40/s（std） · ¥0.60/s（pro）",
+    resolutions: ["720P", "1080P"],
+    maxDuration: "≤ 30s",
+    inputs: "1 张正面人像照 + ≤ 30s 参考动作视频",
+    notes: "将视频中的动作/表情迁移到图片人物上；支持北京+新加坡地域。",
   },
 ];
 
@@ -2174,16 +2193,43 @@ function ModeChips({ active, onChange }) {
   );
 }
 
-function ModelInfoCard({ mode }) {
-  // Read-only summary card. Surfaces the underlying DashScope model
-  // name + pricing + hard limits for the currently picked mode so the
-  // user is never confused about why e.g. a 1080P option is missing
-  // (because the s2v model doesn't support it). Mirrors the "模型/比例/
-  // 分辨率" disclosure pattern from tongyi-image / seedance-video.
-  const t = useT();
-  const md = MODE_DEFS.find(function (x) { return x.id === mode; });
+function BackendSelector({ active, onChange, settings }) {
+  var backends = [
+    { id: "dashscope", label: "阿里云 DashScope",
+      configured: !!(settings.api_key || settings.has_api_key), icon: "cloud" },
+    { id: "runninghub", label: "RunningHub",
+      configured: !!settings.rh_configured, icon: "server" },
+    { id: "comfyui_local", label: "本地 ComfyUI",
+      configured: !!settings.comfyui_configured, icon: "cpu" },
+  ];
+  return (
+    <div style={{marginBottom: 8}}>
+      <div className="label" style={{marginBottom: 4}}>选择后端</div>
+      <div className="mode-group">
+        {backends.map(function (b) {
+          return (
+            <button key={b.id} type="button"
+              className={"mode-chip " + (active === b.id ? "active" : "")}
+              onClick={function () { onChange(b.id); }}
+              style={{opacity: b.configured ? 1 : 0.5}}>
+              <span className="mode-chip__title">
+                <Ico name={b.icon}/>
+                {b.label}
+                {b.configured ? " \u2713" : ""}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function ModelInfoCard({ mode, backend, settings }) {
+  var t = useT();
+  var md = MODE_DEFS.find(function (x) { return x.id === mode; });
   if (!md) return null;
-  const Row = function (props) {
+  var Row = function (props) {
     return (
       <div style={{display: "flex", gap: 10, fontSize: 12, padding: "4px 0", lineHeight: 1.5}}>
         <div style={{width: 76, color: "var(--text-muted)", flexShrink: 0}}>{props.label}</div>
@@ -2191,6 +2237,37 @@ function ModelInfoCard({ mode }) {
       </div>
     );
   };
+  var bk = backend || "dashscope";
+  if (bk === "runninghub") {
+    var wfKey = "rh_wf_" + mode;
+    var presetId = (settings && settings[wfKey]) || "";
+    return (
+      <div className="card" style={{background: "rgba(99,102,241,.04)", borderColor: "rgba(99,102,241,.25)"}}>
+        <div className="label" style={{marginBottom: 6}}>
+          <Ico name="info"/>RunningHub 信息
+        </div>
+        <Row label="后端" value="RunningHub" />
+        <Row label="Workflow ID" value={presetId || "未预设 — 请在设置中配置"} />
+        <Row label="计费" value="按 RunningHub 实际用量扣费" />
+        <Row label="输入" value={md.inputs} />
+      </div>
+    );
+  }
+  if (bk === "comfyui_local") {
+    var wfKey2 = "comfyui_wf_" + mode;
+    var presetId2 = (settings && settings[wfKey2]) || "";
+    return (
+      <div className="card" style={{background: "rgba(99,102,241,.04)", borderColor: "rgba(99,102,241,.25)"}}>
+        <div className="label" style={{marginBottom: 6}}>
+          <Ico name="info"/>本地 ComfyUI 信息
+        </div>
+        <Row label="后端" value="本地 ComfyUI" />
+        <Row label="Workflow" value={presetId2 || "未预设 — 请在设置中配置"} />
+        <Row label="计费" value="本地推理，无云端费用" />
+        <Row label="输入" value={md.inputs} />
+      </div>
+    );
+  }
   return (
     <div className="card" style={{background: "rgba(99,102,241,.04)", borderColor: "rgba(99,102,241,.25)"}}>
       <div className="label" style={{marginBottom: 6}}>
@@ -2229,23 +2306,35 @@ function ModelInfoCard({ mode }) {
   );
 }
 
-function VoicePicker({ voices, value, onChange }) {
-  // Voice list is always non-empty (server seeds 9 system voices on
-  // startup). The previous "音色…" placeholder was selectable and would
-  // submit an empty voice_id — we now drop the placeholder entirely
-  // and auto-resolve `value` to the first system voice if it's empty
-  // or no longer in the list.
-  const t = useT();
-  const systemVoices = voices.filter(function (v) { return v.is_system; });
-  const customVoices = voices.filter(function (v) { return !v.is_system; });
-  const allIds = voices.map(function (v) { return v.dashscope_voice_id || v.id; });
-  const fallback = (systemVoices[0] && (systemVoices[0].dashscope_voice_id || systemVoices[0].id))
+function VoicePicker({ voices, edgeVoices, ttsEngine, value, onChange }) {
+  var t = useT();
+  if (ttsEngine === "edge" && edgeVoices && edgeVoices.length > 0) {
+    var eIds = edgeVoices.map(function (v) { return v.id; });
+    var eFallback = edgeVoices[0].id;
+    var eEff = (value && eIds.indexOf(value) >= 0) ? value : eFallback;
+    useEffect(function () {
+      if (eEff !== value) onChange(eEff);
+    }, [edgeVoices.length, value]);
+    return (
+      <select className="input select" value={eEff}
+              onChange={function (e) { onChange(e.target.value); }}>
+        <optgroup label="Edge-TTS 音色">
+          {edgeVoices.map(function (v) {
+            return <option key={v.id} value={v.id}>{v.label}</option>;
+          })}
+        </optgroup>
+      </select>
+    );
+  }
+  var systemVoices = voices.filter(function (v) { return v.is_system; });
+  var customVoices = voices.filter(function (v) { return !v.is_system; });
+  var allIds = voices.map(function (v) { return v.dashscope_voice_id || v.id; });
+  var fallback = (systemVoices[0] && (systemVoices[0].dashscope_voice_id || systemVoices[0].id))
                 || (voices[0] && (voices[0].dashscope_voice_id || voices[0].id))
                 || "longxiaochun_v2";
-  const effective = (value && allIds.indexOf(value) >= 0) ? value : fallback;
+  var effective = (value && allIds.indexOf(value) >= 0) ? value : fallback;
   useEffect(function () {
     if (voices.length > 0 && effective !== value) onChange(effective);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [voices.length, value]);
   return (
     <select className="input select" value={effective}
@@ -2306,6 +2395,9 @@ function CreateTab({ onGoToTasks, settings, voices, figures }) {
   const setMode = function (m) { setModeRaw(m); saveDraft("mode", m); };
   const md = MODE_DEFS.find(function (x) { return x.id === mode; }) || MODE_DEFS[0];
 
+  const [backend, setBackendRaw] = useState(function () { return loadDraft("backend") || "dashscope"; });
+  const setBackend = function (b) { setBackendRaw(b); saveDraft("backend", b); };
+
   // Per-mode draft form, isolated per mode so switching does not lose state.
   const [form, setForm, resetForm] = useDraft("form:" + mode, {
     image: null, video: null, refImage: null, composeImages: [],
@@ -2313,6 +2405,7 @@ function CreateTab({ onGoToTasks, settings, voices, figures }) {
     audio: null, resolution: settings.default_resolution || "480P",
     aspect: "16:9", duration: 5, mode_pro: false, watermark: false,
     seed: -1, compose_prompt: "", compose_size: "",
+    workflow_id: "", custom_workflow_id: "",
   });
   // When mode flips, reload the draft for that mode.
   useEffect(function () {
@@ -2322,6 +2415,7 @@ function CreateTab({ onGoToTasks, settings, voices, figures }) {
       audio: null, resolution: settings.default_resolution || "480P",
       aspect: "16:9", duration: 5, mode_pro: false, watermark: false,
       seed: -1, compose_prompt: "", compose_size: "",
+      workflow_id: "", custom_workflow_id: "",
     };
     setForm(fresh);
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -2364,8 +2458,18 @@ function CreateTab({ onGoToTasks, settings, voices, figures }) {
     const figureId = (form.image && form.image.figure_id)
                    || (form.refImage && form.refImage.figure_id)
                    || "";
+    var resolvedWfId = "";
+    if (backend !== "dashscope") {
+      if (form.workflow_id === "__custom__") {
+        resolvedWfId = (form.custom_workflow_id || "").trim();
+      } else {
+        resolvedWfId = form.workflow_id || "";
+      }
+    }
     return {
       mode,
+      backend: backend,
+      workflow_id: resolvedWfId || undefined,
       prompt: "",
       text: form.text || "",
       voice_id: form.voice_id || "",
@@ -2384,8 +2488,22 @@ function CreateTab({ onGoToTasks, settings, voices, figures }) {
   };
 
   const submit = useCallback(async function () {
+    if (backend === "dashscope" && !(settings.api_key || settings.has_api_key)) {
+      showToast("请先配置 DashScope API Key", "error"); return;
+    }
+    if (backend === "runninghub" && !settings.rh_configured) {
+      showToast("请先配置 RunningHub API Key", "error"); return;
+    }
+    if (backend === "comfyui_local" && !settings.comfyui_configured) {
+      showToast("请先配置 ComfyUI 地址", "error"); return;
+    }
     const payload = buildPayload(false);
-    // Pre-flight cost preview
+    if (backend !== "dashscope" && !payload.workflow_id) {
+      var presetKey = (backend === "runninghub" ? "rh_wf_" : "comfyui_wf_") + mode;
+      if (!(settings && settings[presetKey])) {
+        showToast("请在设置中预设或手动填写 workflow_id", "error"); return;
+      }
+    }
     setSubmitting(true);
     try {
       const cp = await pluginApi("POST", "/cost-preview", payload);
@@ -2450,7 +2568,36 @@ function CreateTab({ onGoToTasks, settings, voices, figures }) {
     <div className="split-layout">
       <div className="split-left">
         <ModeChips active={mode} onChange={setMode} />
-        <ModelInfoCard mode={mode} />
+        <BackendSelector active={backend} onChange={setBackend} settings={settings} />
+        <ModelInfoCard mode={mode} backend={backend} settings={settings} />
+
+        {backend !== "dashscope" && (
+          <div className="card" style={{marginBottom: 8}}>
+            <div className="label">Workflow ID</div>
+            {(function () {
+              var presetKey = (backend === "runninghub" ? "rh_wf_" : "comfyui_wf_") + mode;
+              var presetWfId = (settings && settings[presetKey]) || "";
+              return (
+                <div className="flex gap-2">
+                  <select className="input select flex-1"
+                    value={form.workflow_id || ""}
+                    onChange={function (e) { update("workflow_id", e.target.value); }}>
+                    {presetWfId
+                      ? <option value={presetWfId}>{presetWfId}</option>
+                      : <option value="">{"未预设 \u2014 请在设置中配置"}</option>
+                    }
+                    <option value="__custom__">{"自定义填写..."}</option>
+                  </select>
+                  {form.workflow_id === "__custom__" && (
+                    <input className="input flex-1" placeholder={"粘贴 workflow_id"}
+                      value={form.custom_workflow_id || ""}
+                      onChange={function (e) { update("custom_workflow_id", e.target.value); }} />
+                  )}
+                </div>
+              );
+            })()}
+          </div>
+        )}
 
         {/* ── Asset uploads ──────────────────────────────────── */}
         {md.needsImage && (
@@ -2545,7 +2692,10 @@ function CreateTab({ onGoToTasks, settings, voices, figures }) {
               {t("create.text.charCount", { n: (form.text || "").length })}
             </div>
             <div className="form-row" style={{marginTop: 8}}>
-              <VoicePicker voices={voices} value={form.voice_id}
+              <VoicePicker voices={voices}
+                           edgeVoices={settings.edge_voices || []}
+                           ttsEngine={settings.tts_engine || "cosyvoice"}
+                           value={form.voice_id}
                            onChange={function (v) { update("voice_id", v); }} />
             </div>
             <div className="form-row">
@@ -4587,8 +4737,16 @@ function App() {
   useEffect(function () { return _i18n.subscribe(function () { force(function (n) { return n + 1; }); }); }, []);
   const [activeTab, setActiveTab] = useState(0);
   const { settings, loaded: settingsLoaded, save: saveSettings, refresh: refreshSettings } = useSettings();
+  const catalog = useCatalog();
   const { voices } = useVoices();
   const { figures } = useFigures();
+  var mergedSettings = useMemo(function () {
+    var s = Object.assign({}, settings);
+    if (catalog && catalog.catalog && catalog.catalog.edge_voices) {
+      s.edge_voices = catalog.catalog.edge_voices;
+    }
+    return s;
+  }, [settings, catalog]);
 
   // Truthy whenever the backend has a key on disk — regardless of whether
   // ``settings.api_key`` was echoed back as the real value (current
@@ -4669,7 +4827,7 @@ function App() {
       )}
       <div className="content">
         {activeTab === 0 && <CreateTab onGoToTasks={function () { setActiveTab(1); }}
-                                       settings={settings} voices={voices} figures={figures} />}
+                                       settings={mergedSettings} voices={voices} figures={figures} />}
         {activeTab === 1 && <TasksTab/>}
         {activeTab === 2 && <VoicesTab hasApiKey={!!(settings.api_key || settings.has_api_key)}
                                         onGoSettings={function () { setActiveTab(settingsIdx); }} />}
