@@ -1,7 +1,7 @@
 """
-会话数据恢复工具
+Session data recovery tool.
 
-从 conversation_history JSONL 文件中恢复丢失的会话到 sessions.json。
+Recovers lost sessions from conversation_history JSONL files into sessions.json.
 """
 
 import json
