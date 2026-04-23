@@ -24,14 +24,15 @@ Steps
 Mode short-circuit table
 ------------------------
 
-============  =====  =====  =====  =====  =====  =====  =====
-mode          1 env  2 cost 3 prep 4 tts  5 i2i  6 vid  7 fin
-============  =====  =====  =====  =====  =====  =====  =====
-photo_speak    ✓      ✓      ✓      ✓*     ✗      ✓      ✓
-video_relip    ✓      ✓      ✓      ✓*     ✗      ✓      ✓
-video_reface   ✓      ✓      ✓      ✓*     ✗      ✓      ✓
-avatar_compose ✓      ✓      ✓      ✓*     ✓      ✓      ✓
-============  =====  =====  =====  =====  =====  =====  =====
+==============  =====  =====  =====  =====  =====  =====  =====
+mode            1 env  2 cost 3 prep 4 tts  5 i2i  6 vid  7 fin
+==============  =====  =====  =====  =====  =====  =====  =====
+photo_speak      ✓      ✓      ✓      ✓*     ✗      ✓      ✓
+video_relip      ✓      ✓      ✓      ✓*     ✗      ✓      ✓
+video_reface     ✓      ✓      ✓      ✗      ✗      ✓      ✓
+avatar_compose   ✓      ✓      ✓      ✓*     ✓      ✓      ✓
+pose_drive       ✓      ✓      ✓      ✗      ✗      ✓      ✓
+==============  =====  =====  =====  =====  =====  =====  =====
 
 \* Step 4 is skipped when the user uploaded their own audio (no text in
    ``ctx.params``); ``ctx.tts_audio_duration_sec`` is then sourced from
@@ -55,11 +56,13 @@ import logging
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from avatar_dashscope_client import (
     MODEL_ANIMATE_MIX,
+    MODEL_ANIMATE_MOVE,
     MODEL_S2V,
     MODEL_VIDEORETALK,
     AvatarDashScopeClient,
@@ -184,6 +187,8 @@ async def run_pipeline(
     base_data_dir: Path,
     get_audio_duration: GetAudioDurationFn | None = None,
     poll: PollSchedule = DEFAULT_POLL,
+    output_subdir_mode: str = "task",
+    output_naming_rule: str = "{filename}",
 ) -> AvatarPipelineContext:
     """Run all 8 steps. Never raises — any failure is captured into ``ctx``.
 
@@ -211,7 +216,12 @@ async def run_pipeline(
         await _step_tts_synth(ctx, plugin_id, client, tm, emit, get_audio_duration)
         await _step_image_compose(ctx, plugin_id, client, tm, emit, poll)
         await _step_video_synth(ctx, client, tm, emit, poll)
-        await _step_finalize(ctx, plugin_id, tm, emit)
+        await _step_finalize(
+            ctx, plugin_id, tm, emit,
+            base_data_dir=base_data_dir,
+            output_subdir_mode=output_subdir_mode,
+            output_naming_rule=output_naming_rule,
+        )
     except ApprovalRequired as ar:
         # Non-terminal: surface as a soft pause; the UI re-submits with
         # ``cost_approved=true`` after the user clicks confirm.
@@ -620,6 +630,14 @@ async def _step_video_synth(
             resolution=str(ctx.params.get("resolution") or "480P"),
             duration=ctx.tts_audio_duration_sec,
         )
+    elif ctx.mode == "pose_drive":
+        ctx.dashscope_endpoint = MODEL_ANIMATE_MOVE
+        ctx.dashscope_id = await client.submit_animate_move(
+            image_url=image_url,
+            video_url=video_url,
+            mode_pro=bool(ctx.params.get("mode_pro")),
+            watermark=bool(ctx.params.get("watermark")),
+        )
     else:
         raise ValueError(f"unknown mode {ctx.mode!r}")
 
@@ -654,6 +672,10 @@ async def _step_finalize(
     plugin_id: str,  # noqa: ARG001 - kept for symmetry with other steps
     tm: AvatarTaskManager,
     emit: EmitFn,
+    *,
+    base_data_dir: Path | None = None,
+    output_subdir_mode: str = "task",
+    output_naming_rule: str = "{filename}",
 ) -> None:
     # DashScope CDN URLs expire after ~24 hours. The earlier version of
     # this step only persisted ``output_url``, which made every task
@@ -679,6 +701,26 @@ async def _step_finalize(
             )
     if output_local is not None:
         ctx.output_path = output_local
+        # Apply the user's chosen subdir-mode + naming-rule and move
+        # the file out of ``task_dir`` into ``<data_dir>/outputs/...``
+        # so finished media is easy to browse / sync. Defaults preserve
+        # the legacy "stays under tasks/{task_id}/" layout.
+        if base_data_dir is not None:
+            try:
+                relocated = _relocate_output(
+                    output_local,
+                    ctx=ctx,
+                    base_data_dir=Path(base_data_dir),
+                    subdir_mode=output_subdir_mode,
+                    naming_rule=output_naming_rule,
+                )
+                if relocated is not None and relocated != output_local:
+                    ctx.output_path = relocated
+            except Exception as e:  # noqa: BLE001 - never fail a task on rename
+                logger.warning(
+                    "avatar-studio: output relocation failed for task %s: %s",
+                    ctx.task_id, e,
+                )
 
     # ``ctx.params`` may contain non-serialisable runtime hooks (e.g.
     # the ``_oss_upload_audio`` callable injected by the plugin layer).
@@ -754,6 +796,117 @@ async def _download_output(ctx: AvatarPipelineContext) -> Path:
                 kind="server",
             )
         target.write_bytes(resp.content)
+    return target
+
+
+# ─── Output organisation (subdir + naming rule) ───────────────────────
+
+
+_OUTPUT_SUBDIR_MODES = {"task", "date", "mode", "date_mode", "flat"}
+
+
+def _safe_path_segment(s: str) -> str:
+    """Strip filesystem-hostile chars so a user-supplied template can't
+    accidentally write into a sibling directory or break on Windows."""
+    bad = '<>:"/\\|?*'
+    cleaned = "".join("_" if ch in bad or ord(ch) < 32 else ch for ch in s)
+    cleaned = cleaned.strip(" .") or "output"
+    return cleaned[:120]
+
+
+def _relocate_output(
+    src: Path,
+    *,
+    ctx: AvatarPipelineContext,
+    base_data_dir: Path,
+    subdir_mode: str,
+    naming_rule: str,
+) -> Path | None:
+    """Move the downloaded output into ``<data_dir>/outputs/<subdir>/<name>``
+    according to the user's settings.
+
+    Returns the new path on success, ``None`` on no-op (e.g. defaults
+    that map to the existing ``tasks/{task_id}/`` location). Caller
+    treats any exception as "stay where you are".
+    """
+    if subdir_mode not in _OUTPUT_SUBDIR_MODES:
+        subdir_mode = "task"
+    template = (naming_rule or "{filename}").strip() or "{filename}"
+
+    now = datetime.fromtimestamp(ctx.started_at, tz=timezone.utc).astimezone()
+    date = now.strftime("%Y-%m-%d")
+    timestr = now.strftime("%H%M%S")
+    datetime_str = f"{date}_{timestr}"
+    short_id = ctx.task_id[:8]
+    mode = _safe_path_segment(ctx.mode)
+    src_stem = src.stem
+    src_ext = src.suffix.lstrip(".") or "mp4"
+
+    placeholders = {
+        "task_id": ctx.task_id,
+        "short_id": short_id,
+        "date": date,
+        "time": timestr,
+        "datetime": datetime_str,
+        "mode": mode,
+        "filename": src_stem,
+        "ext": src_ext,
+    }
+
+    # Build subdir path under ``outputs/``. ``"task"`` keeps the legacy
+    # layout (``tasks/{task_id}/``) so existing users see no change
+    # when they upgrade the plugin without touching settings.
+    if subdir_mode == "task":
+        # No-op: src already lives in tasks/{task_id}/. Honour any
+        # naming_rule by renaming in place, but skip the move.
+        sub_dir: Path | None = None
+    elif subdir_mode == "date":
+        sub_dir = base_data_dir / "outputs" / date
+    elif subdir_mode == "mode":
+        sub_dir = base_data_dir / "outputs" / mode
+    elif subdir_mode == "date_mode":
+        sub_dir = base_data_dir / "outputs" / date / mode
+    else:  # "flat"
+        sub_dir = base_data_dir / "outputs"
+
+    # Render filename. ``str.format_map`` with a defaultdict swallows
+    # unknown placeholders so a typo like ``{taks_id}`` becomes the
+    # literal text rather than blowing up the entire pipeline.
+    class _Defaults(dict):
+        def __missing__(self, key: str) -> str:  # pragma: no cover - trivial
+            return "{" + key + "}"
+
+    name_no_ext = template.format_map(_Defaults(placeholders))
+    name_no_ext = _safe_path_segment(name_no_ext)
+    # Guarantee an extension — strip one if the template embedded ``{ext}``
+    # so we don't produce ``foo.mp4.mp4``.
+    if name_no_ext.lower().endswith("." + src_ext.lower()):
+        name_no_ext = name_no_ext[: -(len(src_ext) + 1)]
+    final_name = f"{name_no_ext}.{src_ext}"
+
+    if sub_dir is None:
+        # Subdir-mode == "task": just rename inside src.parent.
+        target = src.parent / final_name
+    else:
+        sub_dir.mkdir(parents=True, exist_ok=True)
+        target = sub_dir / final_name
+
+    if target.resolve() == src.resolve():
+        return None
+
+    # Avoid clobbering an existing file from a re-run / template
+    # collision. Append ``-2``, ``-3``, ... until we find a free slot.
+    if target.exists():
+        stem, dot, ext = final_name.rpartition(".")
+        n = 2
+        while True:
+            cand = target.parent / f"{stem}-{n}.{ext}" if dot else target.parent / f"{final_name}-{n}"
+            if not cand.exists():
+                target = cand
+                break
+            n += 1
+
+    src.replace(target)  # atomic on the same filesystem
     return target
 
 
