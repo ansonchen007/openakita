@@ -365,3 +365,7 @@ docs/prompts/
 # 后期类插件路线图（本地规划草稿，不入库）
 docs/post-production-plugins-roadmap.md
 docs/subtitle-craft-plan.md
+
+# subtitle-craft 本地验证脚本（含 API 调用 + 临时音视频，不入库；
+# 验证结论统一记入 plugins/subtitle-craft/VALIDATION.md 后提交）
+plugins/subtitle-craft/validation_scripts/
