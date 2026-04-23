@@ -121,26 +121,44 @@
   </style>
 </head>
 <body>
-<div id="root"></div>
+<div id="root"><div style="display:flex;align-items:center;justify-content:center;height:100vh;color:var(--text-muted,#64748b);font-size:13px" id="__cs_loading">正在加载插件...</div></div>
 <script>
-// ── Bridge SDK (same pattern as tongyi-image) ──
-var BRIDGE_VER = 1;
-var _ctx = null, _caps = [], _pending = {}, _handlers = {};
-var _bridgeConnected = false;
-var _inIframe = window.parent !== window;
+window.onerror = function(msg, src, line, col, err) {
+  var el = document.getElementById("root");
+  if (el) el.innerHTML = '<div style="padding:24px;color:#ef4444;font-size:13px;word-break:break-word"><b>[clip-sense error]</b><br/>' + String(msg) + '<br/>at ' + String(src) + ':' + line + ':' + col + (err && err.stack ? '<pre style="margin-top:8px;white-space:pre-wrap;font-size:11px;background:#f1f5f9;padding:12px;border-radius:6px;overflow:auto;max-height:300px">' + err.stack + '</pre>' : '') + '</div>';
+};
+window.__csRendered = false;
+setTimeout(function() {
+  if (window.__csRendered) return;
+  var el = document.getElementById("__cs_loading");
+  if (!el) return;
+  el.style.color = "#ef4444";
+  el.style.flexDirection = "column";
+  el.style.textAlign = "center";
+  el.style.lineHeight = "1.8";
+  el.innerHTML = '<b>插件初始化超时</b><br/>可能原因：<br/>1. CDN 脚本加载失败 (unpkg.com)<br/>2. Babel 编译错误<br/>3. React 渲染失败<br/><br/><span style="font-size:11px;color:#94a3b8">请按 F12 打开开发者工具查看控制台错误</span>';
+}, 10000);
+</script>
+<script>
+// ── Bridge SDK ──
+console.log("[clip-sense] Bridge SDK loading...");
+const BRIDGE_VER = 1;
+let _ctx = null, _caps = [], _pending = {}, _handlers = {};
+let _bridgeConnected = false;
+const _inIframe = window.parent !== window;
 function uid() { return Math.random().toString(36).slice(2,10) + Date.now().toString(36); }
 function post(msg) { if (_inIframe) window.parent.postMessage({ __akita_bridge: true, version: BRIDGE_VER, ...msg }, "*"); }
 
 function _detectApiBase() {
   if (_ctx && _ctx.apiBase) return _ctx.apiBase;
-  var loc = window.location;
+  const loc = window.location;
   if (loc.port === "5173" || loc.port === "1420") return "http://127.0.0.1:18900";
   return loc.origin;
 }
 
 function directFetch(method, path, body) {
-  var url = path.startsWith("http") ? path : _detectApiBase() + path;
-  var opts = { method: method, headers: { "Content-Type": "application/json" } };
+  const url = path.startsWith("http") ? path : _detectApiBase() + path;
+  const opts = { method: method, headers: { "Content-Type": "application/json" } };
   if (body && method !== "GET" && method !== "HEAD") {
     if (body instanceof FormData) { opts.body = body; delete opts.headers["Content-Type"]; }
     else { opts.body = JSON.stringify(body); }
@@ -153,7 +171,7 @@ function directFetch(method, path, body) {
 function apiCall(method, path, body) {
   if (!_inIframe || !_bridgeConnected) return directFetch(method, path, body);
   return new Promise(function(resolve, reject) {
-    var id = uid();
+    const id = uid();
     _pending[id] = { resolve: resolve, reject: reject };
     post({ type: "bridge:api-request", requestId: id, payload: { method: method, path: path, body: body } });
     setTimeout(function() {
@@ -163,14 +181,14 @@ function apiCall(method, path, body) {
 }
 
 function pluginApi(method, path, body) {
-  var base = _ctx ? "/api/plugins/" + _ctx.pluginId : "/api/plugins/clip-sense";
+  const base = _ctx ? "/api/plugins/" + _ctx.pluginId : "/api/plugins/clip-sense";
   return apiCall(method, base + path, body);
 }
 
 function bridgeDownload(url, fname) {
   return new Promise(function(resolve) {
     if (!_inIframe || !_bridgeConnected) { resolve({ ok: false, error: "no-bridge" }); return; }
-    var id = uid();
+    const id = uid();
     _pending[id] = { resolve: resolve, reject: function(e) { resolve({ ok: false, error: String(e) }); } };
     post({ type: "bridge:download", requestId: id, payload: { url: url, filename: fname } });
     setTimeout(function() {
@@ -182,21 +200,21 @@ function bridgeDownload(url, fname) {
 function bridgeShowInFolder(path) {
   if (!_inIframe || !_bridgeConnected || !path) return;
   if (_caps.length && _caps.indexOf("show-in-folder") === -1) return;
-  var id = uid();
+  const id = uid();
   _pending[id] = { resolve: function() {}, reject: function() {} };
   post({ type: "bridge:show-in-folder", requestId: id, payload: { path: path } });
   setTimeout(function() { if (_pending[id]) delete _pending[id]; }, 10000);
 }
 
 window.addEventListener("message", function(e) {
-  var d = e.data;
+  const d = e.data;
   if (!d || !d.__akita_bridge) return;
   if (d.type === "bridge:init" && d.payload) {
     _ctx = d.payload; _bridgeConnected = true;
     if (_ctx.theme) document.documentElement.setAttribute("data-theme", _ctx.theme.includes("dark") ? "dark" : "light");
   }
   if (d.type === "bridge:handshake-ack" && d.payload) { _caps = d.payload.capabilities || []; _bridgeConnected = true; }
-  var acks = ["bridge:api-response","bridge:clipboard-ack","bridge:download-ack","bridge:show-in-folder-ack","bridge:pick-folder-ack"];
+  const acks = ["bridge:api-response","bridge:clipboard-ack","bridge:download-ack","bridge:show-in-folder-ack","bridge:pick-folder-ack"];
   if (acks.indexOf(d.type) !== -1 && d.requestId && _pending[d.requestId]) {
     _pending[d.requestId].resolve(d.payload); delete _pending[d.requestId];
   }
@@ -204,11 +222,11 @@ window.addEventListener("message", function(e) {
     document.documentElement.setAttribute("data-theme", (d.payload.theme || "").includes("dark") ? "dark" : "light");
   }
   if (d.type === "bridge:event" && d.payload) {
-    var h = _handlers[d.payload.eventType];
+    const h = _handlers[d.payload.eventType];
     if (h) h.forEach(function(fn) { fn(d.payload.data); });
   }
 });
-var _readyInterval = null;
+let _readyInterval = null;
 function _sendReady() { post({ type: "bridge:ready" }); post({ type: "bridge:handshake", payload: { sdkVersion: "1.0.0" } }); }
 _sendReady();
 if (_inIframe) {
@@ -218,14 +236,14 @@ if (_inIframe) {
 function onEvent(type, fn) { (_handlers[type] = _handlers[type] || []).push(fn); }
 
 function uploadFile(file) {
-  var base = _detectApiBase() + (_ctx ? "/api/plugins/" + _ctx.pluginId : "/api/plugins/clip-sense");
-  var fd = new FormData(); fd.append("file", file);
+  const base = _detectApiBase() + (_ctx ? "/api/plugins/" + _ctx.pluginId : "/api/plugins/clip-sense");
+  const fd = new FormData(); fd.append("file", file);
   return fetch(base + "/upload", { method: "POST", body: fd }).then(function(r) { return r.json(); });
 }
 
 function _tr(key, vars, fallback) {
   if (window.OpenAkitaI18n && window.OpenAkitaI18n.t) {
-    var v = window.OpenAkitaI18n.t(key, vars);
+    const v = window.OpenAkitaI18n.t(key, vars);
     if (v && v !== key) return v;
   }
   if (fallback) return fallback;
@@ -235,21 +253,21 @@ function _tr(key, vars, fallback) {
 async function downloadOutput(taskId, fname) {
   try {
     showToast(_tr("toast.downloading", null, "下载中..."));
-    var base = _detectApiBase() + (_ctx ? "/api/plugins/" + _ctx.pluginId : "/api/plugins/clip-sense");
-    var url = base + "/tasks/" + taskId + "/download";
+    const base = _detectApiBase() + (_ctx ? "/api/plugins/" + _ctx.pluginId : "/api/plugins/clip-sense");
+    const url = base + "/tasks/" + taskId + "/download";
     if (_inIframe && _bridgeConnected) {
-      var native = await bridgeDownload(url, fname || "clip_sense_output.mp4");
+      const native = await bridgeDownload(url, fname || "clip_sense_output.mp4");
       if (native && native.ok && native.path && /[\\/]/.test(String(native.path))) {
         showToast("已保存到: " + native.path);
         bridgeShowInFolder(native.path);
         return;
       }
     }
-    var resp = await fetch(url);
+    const resp = await fetch(url);
     if (!resp.ok) throw new Error("Server returned " + resp.status);
-    var blob = await resp.blob();
-    var objUrl = URL.createObjectURL(blob);
-    var a = document.createElement("a");
+    const blob = await resp.blob();
+    const objUrl = URL.createObjectURL(blob);
+    const a = document.createElement("a");
     a.href = objUrl; a.download = fname || "output.mp4";
     document.body.appendChild(a); a.click(); document.body.removeChild(a);
     setTimeout(function() { URL.revokeObjectURL(objUrl); }, 3000);
@@ -266,11 +284,18 @@ function showToast(body, type) {
 }
 </script>
 
-<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"
+        onerror="document.getElementById('root').innerHTML='<div style=padding:24px;color:#ef4444>[CDN Error] React failed to load. Check network.</div>'"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"
+        onerror="document.getElementById('root').innerHTML='<div style=padding:24px;color:#ef4444>[CDN Error] ReactDOM failed to load. Check network.</div>'"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"
+        onerror="document.getElementById('root').innerHTML='<div style=padding:24px;color:#ef4444>[CDN Error] Babel failed to load. Check network.</div>'"></script>
+<script>
+console.log("[clip-sense] CDN loaded: React=" + typeof React + ", ReactDOM=" + typeof ReactDOM + ", Babel=" + (typeof Babel !== "undefined"));
+</script>
 
-<script type="text/babel" data-type="module">
+<script type="text/plain" id="cs-jsx-source">
+console.log("[clip-sense] Babel script executing...");
 const { useState, useEffect, useRef, useCallback } = React;
 
 // ─── i18n dictionary ────────────────────────────────────────────────────
@@ -344,7 +369,7 @@ const I18N_DICT = {
     "tasks.filter.all": "全部",
     "tasks.filter.allModes": "全部模式",
     "tasks.empty.title": "暂无任务",
-    "tasks.empty.hint": "在"创建"页发起一次剪辑后，任务会出现在这里",
+    "tasks.empty.hint": "在「创建」页发起一次剪辑后，任务会出现在这里",
     "tasks.untitled": "无标题",
     "tasks.totalCount": "共 {n} 个任务",
     "tasks.detail.title": "任务详情",
@@ -1505,14 +1530,49 @@ class PluginErrorBoundary extends React.Component {
 }
 
 // ─── Mount ───
-ReactDOM.createRoot(document.getElementById("root")).render(
-  <PluginErrorBoundary>
-    <App />
-  </PluginErrorBoundary>
-);
+console.log("[clip-sense] Mounting React app...");
+try {
+  window.__csRendered = true;
+  ReactDOM.createRoot(document.getElementById("root")).render(
+    <PluginErrorBoundary>
+      <App />
+    </PluginErrorBoundary>
+  );
+} catch (mountErr) {
+  document.getElementById("root").innerHTML =
+    '<div style="padding:24px;color:#ef4444"><b>[clip-sense mount error]</b><pre style="margin-top:8px;white-space:pre-wrap;font-size:11px">' +
+    (mountErr && mountErr.stack ? mountErr.stack : String(mountErr)) + '</pre></div>';
+}
 if (window.OpenAkita && typeof window.OpenAkita.ready === "function") {
   window.OpenAkita.ready();
 }
+</script>
+
+<script>
+(function() {
+  console.log("[clip-sense] Manual compile+execute starting...");
+  var srcEl = document.getElementById("cs-jsx-source");
+  if (!srcEl) { document.getElementById("root").innerHTML = '<div style="padding:24px;color:#ef4444"><b>Source element not found</b></div>'; return; }
+  if (typeof Babel === "undefined") { document.getElementById("root").innerHTML = '<div style="padding:24px;color:#ef4444"><b>Babel not loaded (CDN issue?)</b></div>'; return; }
+  if (typeof React === "undefined") { document.getElementById("root").innerHTML = '<div style="padding:24px;color:#ef4444"><b>React not loaded (CDN issue?)</b></div>'; return; }
+  var code;
+  try {
+    var result = Babel.transform(srcEl.textContent, { presets: ["react"], filename: "clip-sense.jsx" });
+    code = result.code;
+    console.log("[clip-sense] Compilation OK (" + code.length + " chars)");
+  } catch (compileErr) {
+    console.error("[clip-sense] COMPILE ERROR:", compileErr);
+    document.getElementById("root").innerHTML = '<div style="padding:24px;color:#ef4444;font-size:13px"><b>Babel Compilation Error</b><pre style="margin-top:12px;white-space:pre-wrap;font-size:12px;background:#fef2f2;padding:16px;border:1px solid #fecaca;border-radius:8px;overflow:auto;max-height:500px">' + (compileErr.stack || String(compileErr)) + '</pre></div>';
+    return;
+  }
+  try {
+    (0, eval)(code);
+    console.log("[clip-sense] Execution OK");
+  } catch (runErr) {
+    console.error("[clip-sense] RUNTIME ERROR:", runErr);
+    document.getElementById("root").innerHTML = '<div style="padding:24px;color:#ef4444;font-size:13px"><b>Runtime Error</b><pre style="margin-top:12px;white-space:pre-wrap;font-size:12px;background:#fef2f2;padding:16px;border:1px solid #fecaca;border-radius:8px;overflow:auto;max-height:500px">' + (runErr.stack || String(runErr)) + '</pre></div>';
+  }
+})();
 </script>
 </body>
 </html>
