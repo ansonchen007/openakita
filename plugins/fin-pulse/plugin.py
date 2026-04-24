@@ -83,6 +83,7 @@ class Plugin(PluginBase):
         # degraded-but-loadable plugin.
         self._tm: Any | None = None
         self._pipeline: Any | None = None
+        self._dispatch: Any | None = None
         self._init_task: asyncio.Task | None = None
         if self._data_dir is not None:
             try:
@@ -108,6 +109,20 @@ class Plugin(PluginBase):
                         "debug",
                     )
                     self._pipeline = None
+        # Dispatch service (Phase 4b) — pure over-the-gateway wrapper,
+        # works even when the task manager is None so /dispatch/send can
+        # still probe an IM adapter from the plugin UI for smoke tests.
+        try:
+            from finpulse_dispatch import DispatchService  # type: ignore
+
+            self._dispatch = DispatchService(api)
+        except ImportError:
+            api.log(
+                "finpulse_dispatch not yet available — hot_radar push "
+                "routes will return 503 until Phase 4b lands.",
+                "debug",
+            )
+            self._dispatch = None
 
         # Step 3 — FastAPI router (21 routes eventually; the skeleton
         # registers the read-only /health, /modes and /config endpoints
@@ -553,6 +568,161 @@ class Plugin(PluginBase):
                 raise HTTPException(status_code=404, detail="not_found")
             html_blob = row.get("html_blob") or ""
             return HTMLResponse(content=html_blob, media_type="text/html")
+
+        # ── Hot radar ───────────────────────────────────────────────
+
+        @router.post("/radar/evaluate")
+        async def radar_evaluate(
+            payload: dict[str, Any] = Body(default={}),
+        ) -> dict[str, Any]:
+            if self._tm is None or self._pipeline is None:
+                raise HTTPException(status_code=503, detail="pipeline_unavailable")
+            rules_text = payload.get("rules_text") if isinstance(payload, dict) else None
+            if not isinstance(rules_text, str):
+                raise HTTPException(status_code=400, detail="rules_text must be a string")
+            since_hours = int(payload.get("since_hours", 24) or 24)
+            limit = int(payload.get("limit", 100) or 100)
+            min_score = payload.get("min_score")
+            min_score_f = float(min_score) if min_score is not None else None
+            return await self._pipeline.evaluate_radar(
+                rules_text=rules_text,
+                since_hours=max(1, min(since_hours, 168)),
+                limit=max(1, min(limit, 500)),
+                min_score=min_score_f,
+            )
+
+        @router.post("/hot_radar/run")
+        async def hot_radar_run(
+            payload: dict[str, Any] = Body(default={}),
+        ) -> dict[str, Any]:
+            if self._tm is None or self._pipeline is None:
+                raise HTTPException(status_code=503, detail="pipeline_unavailable")
+            if self._dispatch is None:
+                raise HTTPException(status_code=503, detail="dispatch_unavailable")
+            rules_text = payload.get("rules_text") if isinstance(payload, dict) else None
+            if not isinstance(rules_text, str) or not rules_text.strip():
+                raise HTTPException(status_code=400, detail="rules_text must be non-empty")
+            targets = payload.get("targets") or []
+            if not isinstance(targets, list) or not targets:
+                raise HTTPException(status_code=400, detail="targets must be a non-empty list")
+            clean_targets: list[dict[str, str]] = []
+            for t in targets:
+                if not isinstance(t, dict):
+                    continue
+                ch = str(t.get("channel") or "").strip()
+                ci = str(t.get("chat_id") or "").strip()
+                if ch and ci:
+                    clean_targets.append({"channel": ch, "chat_id": ci})
+            if not clean_targets:
+                raise HTTPException(status_code=400, detail="no usable targets (channel/chat_id)")
+            since_hours = max(1, min(int(payload.get("since_hours", 24) or 24), 168))
+            limit = max(1, min(int(payload.get("limit", 100) or 100), 500))
+            min_score = payload.get("min_score")
+            min_score_f = float(min_score) if min_score is not None else None
+            cooldown_s = float(payload.get("cooldown_s", 600) or 600)
+            title = payload.get("title")
+            task = await self._tm.create_task(
+                mode="hot_radar",
+                params={
+                    "targets": clean_targets,
+                    "since_hours": since_hours,
+                    "limit": limit,
+                    "min_score": min_score_f,
+                    "cooldown_s": cooldown_s,
+                    "title": title,
+                },
+                status="running",
+            )
+            try:
+                result = await self._pipeline.run_hot_radar(
+                    self._dispatch,
+                    rules_text=rules_text,
+                    targets=clean_targets,
+                    since_hours=since_hours,
+                    limit=limit,
+                    min_score=min_score_f,
+                    title=title if isinstance(title, str) else None,
+                    cooldown_s=cooldown_s,
+                    task_id=task["id"],
+                )
+                return {"ok": True, "task_id": task["id"], "result": result}
+            except Exception as exc:  # noqa: BLE001
+                from finpulse_errors import map_exception
+
+                kind, msg, hints = map_exception(exc)
+                await self._tm.update_task_safe(
+                    task["id"],
+                    status="failed",
+                    error_kind=kind,
+                    error_message=msg,
+                    error_hints=hints,
+                )
+                raise HTTPException(status_code=500, detail=msg) from exc
+
+        @router.post("/dispatch/send")
+        async def dispatch_send(
+            payload: dict[str, Any] = Body(default={}),
+        ) -> dict[str, Any]:
+            if self._dispatch is None:
+                raise HTTPException(status_code=503, detail="dispatch_unavailable")
+            channel = str(payload.get("channel") or "").strip()
+            chat_id = str(payload.get("chat_id") or "").strip()
+            content = payload.get("content")
+            if not channel or not chat_id:
+                raise HTTPException(status_code=400, detail="channel and chat_id are required")
+            if not isinstance(content, str):
+                raise HTTPException(status_code=400, detail="content must be a string")
+            cooldown_key = payload.get("cooldown_key")
+            cooldown_s = float(payload.get("cooldown_s", 0) or 0)
+            dedupe = bool(payload.get("dedupe_by_content"))
+            header = str(payload.get("header") or "")
+            result = await self._dispatch.send(
+                channel=channel,
+                chat_id=chat_id,
+                content=content,
+                cooldown_key=cooldown_key if isinstance(cooldown_key, str) else None,
+                cooldown_s=cooldown_s,
+                dedupe_by_content=dedupe,
+                header=header,
+            )
+            return {"ok": result.ok, "dispatch": result.as_dict()}
+
+        @router.get("/available-channels")
+        async def available_channels() -> dict[str, Any]:
+            """Expose the list of adapter names the host gateway
+            currently carries so the Settings UI can render a channel
+            picker without hard-coding the 7-strong roster. Falls back
+            to a probe list when the gateway hides ``_adapters``.
+            """
+            host = getattr(self._api, "_host", None) or {}
+            gateway = host.get("gateway") if isinstance(host, dict) else None
+            if gateway is None:
+                return {"ok": True, "channels": []}
+            names: list[str] = []
+            adapters = getattr(gateway, "_adapters", None)
+            if isinstance(adapters, dict):
+                names = [str(k) for k in adapters.keys()]
+            else:
+                probe = [
+                    "feishu",
+                    "wework",
+                    "wework_ws",
+                    "dingtalk",
+                    "telegram",
+                    "onebot",
+                    "qqbot",
+                    "wechat",
+                    "email",
+                ]
+                get = getattr(gateway, "get_adapter", None)
+                if callable(get):
+                    for name in probe:
+                        try:
+                            if get(name) is not None:
+                                names.append(name)
+                        except Exception:  # noqa: BLE001 — probe only
+                            continue
+            return {"ok": True, "channels": names}
 
 
 # ── Utilities ────────────────────────────────────────────────────────
