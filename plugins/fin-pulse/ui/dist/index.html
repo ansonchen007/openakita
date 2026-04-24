@@ -157,6 +157,85 @@
     .filter-bar__item { display: inline-flex; align-items: center; gap: 6px; }
     .filter-bar__label { font-size: 12px; color: var(--text); font-weight: 500; }
     .filter-bar__sep { width: 1px; height: 20px; background: var(--border); margin: 0 2px; }
+    /* ── Ingest split-button (main action + dropdown for single-source) ── */
+    .ingest-split { display: inline-flex; align-items: stretch; position: relative; }
+    .ingest-split .btn { border-radius: 0; }
+    .ingest-split .btn:first-child { border-top-left-radius: 6px; border-bottom-left-radius: 6px; }
+    .ingest-split .btn--caret {
+      padding: 0 8px; min-width: 28px; border-left: 1px solid rgba(255,255,255,.32);
+      border-top-right-radius: 6px; border-bottom-right-radius: 6px;
+    }
+    .ingest-split__menu {
+      position: absolute; top: calc(100% + 4px); right: 0; z-index: 20;
+      min-width: 200px; padding: 6px;
+      background: var(--bg-card); border: 1px solid var(--border);
+      border-radius: 8px; box-shadow: 0 4px 16px rgba(0,0,0,.12);
+    }
+    .ingest-split__menu button {
+      display: block; width: 100%; text-align: left;
+      padding: 8px 10px; border: none; border-radius: 6px;
+      background: transparent; color: var(--text); cursor: pointer; font-size: 13px;
+    }
+    .ingest-split__menu button:hover { background: rgba(232,106,123,.12); color: var(--primary); }
+    .ingest-split__menu button[disabled] { opacity: .5; cursor: not-allowed; }
+    /* ── Spinner icon ── */
+    @keyframes fp-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+    .fp-spin { animation: fp-spin 1s linear infinite; transform-origin: 50% 50%; display: inline-block; }
+    /* ── Indeterminate progress bar ── */
+    @keyframes fp-shimmer {
+      0%   { background-position: -200px 0; }
+      100% { background-position: 400px 0; }
+    }
+    .fp-progress {
+      height: 3px; border-radius: 2px; overflow: hidden;
+      background: linear-gradient(90deg,
+        rgba(232,106,123,.08) 0%,
+        rgba(232,106,123,.32) 50%,
+        rgba(232,106,123,.08) 100%);
+      background-size: 400px 100%;
+      animation: fp-shimmer 1.4s linear infinite;
+    }
+    /* ── Ingest result drawer ── */
+    .fp-drawer {
+      display: flex; flex-direction: column; gap: 10px;
+      padding: 12px 14px; border-radius: var(--radius);
+      background: var(--bg-card); border: 1px solid var(--border);
+    }
+    .fp-drawer__head { display: flex; align-items: center; gap: 8px; }
+    .fp-drawer__title { font-weight: 600; font-size: 13px; color: var(--text);
+                        display: inline-flex; align-items: center; gap: 6px; }
+    .fp-drawer__title::before {
+      content: ""; width: 3px; height: 14px; background: var(--primary);
+      border-radius: 1px; display: inline-block;
+    }
+    .fp-drawer__spacer { flex: 1; }
+    .fp-drawer__summary { font-size: 12px; color: var(--text-muted); }
+    .fp-drawer__summary strong { color: var(--text); }
+    .fp-drawer__body { display: flex; flex-wrap: wrap; gap: 8px; }
+    .fp-pill {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 4px 10px; border-radius: 999px;
+      font-size: 12px; line-height: 1.4;
+      border: 1px solid var(--border); background: var(--bg);
+      color: var(--text);
+    }
+    .fp-pill--ok    { background: rgba(34,197,94,.10);  color: #15803D;
+                       border-color: rgba(34,197,94,.28); }
+    .fp-pill--empty { background: rgba(245,158,11,.10); color: #B45309;
+                       border-color: rgba(245,158,11,.30); }
+    .fp-pill--error { background: rgba(239,68,68,.10);  color: #B91C1C;
+                       border-color: rgba(239,68,68,.32); }
+    .fp-pill__via   { font-size: 10px; padding: 1px 6px; border-radius: 6px;
+                       background: rgba(0,0,0,.06); color: inherit; font-weight: 500; }
+    .fp-pill__sep   { opacity: .5; }
+    .fp-pill__btn   { font-size: 11px; cursor: pointer; background: transparent;
+                       border: none; color: inherit; text-decoration: underline;
+                       padding: 0; margin-left: 2px; }
+    .fp-drawer__error {
+      width: 100%; font-size: 11.5px; color: var(--danger);
+      background: rgba(239,68,68,.06); border: 1px dashed rgba(239,68,68,.28);
+      border-radius: 6px; padding: 6px 10px; word-break: break-word;
+    }
     /* ── Config banner (oa-config-banner) ── */
     .oa-config-banner {
       display: flex; align-items: center; gap: 10px;
@@ -322,6 +401,25 @@ const I18N_DICT = {
     "today.list.copy": "复制",
     "today.list.copied": "已复制到剪贴板",
     "today.list.score": "AI {score}",
+    "today.list.ingest.current": "只抓取当前源",
+    "today.list.ingest.more": "更多抓取操作",
+    "today.ingest.busy": "抓取中…",
+    "today.ingest.done.green": "本次抓取：新增 {inserted} · 更新 {updated}（{sourcesOk}/{sourcesTotal} 源成功）",
+    "today.ingest.done.amber": "本次抓取未产生新文章：{sourcesOk} 源成功 · {failed} 源失败 · {empty} 源暂无结果",
+    "today.ingest.done.none_enabled": "未启用任何数据源，请前往「设置 → 数据源健康」开启至少一个",
+    "today.ingest.view": "查看详情",
+    "today.drawer.title": "本次抓取结果",
+    "today.drawer.empty": "尚未触发抓取",
+    "today.drawer.dismiss": "收起",
+    "today.drawer.via.newsnow": "NewsNow",
+    "today.drawer.via.direct": "直连",
+    "today.drawer.via.cooldown": "冷却",
+    "today.drawer.via.none": "无结果",
+    "today.drawer.status.ok": "成功 {inserted}+{updated}",
+    "today.drawer.status.empty": "无新文章",
+    "today.drawer.status.error": "失败",
+    "today.drawer.source_single": "只抓取：{source}",
+    "today.drawer.show_error": "错误详情",
     "digests.title": "早午晚报",
     "digests.hint": "点击右上方「早报 / 午报 / 晚报」即可生成对应时段的财经速报；已生成的会出现在下方卡片，可预览或一键再推送到 IM 通道。",
     "digests.run": "立即生成",
@@ -493,6 +591,25 @@ const I18N_DICT = {
     "today.list.copy": "Copy",
     "today.list.copied": "Copied to clipboard",
     "today.list.score": "AI {score}",
+    "today.list.ingest.current": "Only current source",
+    "today.list.ingest.more": "More ingest actions",
+    "today.ingest.busy": "Fetching…",
+    "today.ingest.done.green": "Ingest done: +{inserted} new · {updated} updated ({sourcesOk}/{sourcesTotal} sources OK)",
+    "today.ingest.done.amber": "No new articles this round: {sourcesOk} OK · {failed} failed · {empty} empty",
+    "today.ingest.done.none_enabled": "No source enabled. Turn at least one on in Settings → Source health.",
+    "today.ingest.view": "View details",
+    "today.drawer.title": "Last ingest result",
+    "today.drawer.empty": "No ingest run yet",
+    "today.drawer.dismiss": "Dismiss",
+    "today.drawer.via.newsnow": "NewsNow",
+    "today.drawer.via.direct": "Direct",
+    "today.drawer.via.cooldown": "Cooldown",
+    "today.drawer.via.none": "No data",
+    "today.drawer.status.ok": "{inserted}+{updated} items",
+    "today.drawer.status.empty": "empty",
+    "today.drawer.status.error": "failed",
+    "today.drawer.source_single": "Single source: {source}",
+    "today.drawer.show_error": "Error detail",
     "digests.title": "Daily Briefs",
     "digests.hint": "Click Morning / Noon / Evening above to generate a brief for that slot. Generated briefs show up below — preview them or resend to any IM channel with one click.",
     "digests.run": "Generate now",
@@ -936,6 +1053,122 @@ const KNOWN_SOURCES = [
   { id: "newsnow", name: "NewsNow 聚合" },
 ];
 
+/* ── Ingest drawer helpers + component ───────────────────────────
+   The drawer renders the per-source breakdown returned by
+   POST /ingest (or POST /ingest/source/{id}). Each pill shows:
+   · source display name
+   · NewsNow / 直连 / 冷却 / 无结果 badge (the "via" transport)
+   · result summary (+{inserted} new · {updated} updated, empty, failed)
+   · an expandable error row when the fetcher reported an error.
+*/
+function _sourceName(sources, id) {
+  for (let i = 0; i < sources.length; i++) {
+    if (sources[i].id === id) return sources[i].name;
+  }
+  return id || "";
+}
+function _countNonEmpty(bySource) {
+  let n = 0;
+  Object.keys(bySource || {}).forEach(function (k) {
+    const row = bySource[k] || {};
+    if (!row.error && Number(row.inserted || 0) + Number(row.updated || 0) > 0) n += 1;
+  });
+  return n;
+}
+function _pillClass(row) {
+  if (row.error || row.error_kind) return "fp-pill fp-pill--error";
+  if (Number(row.inserted || 0) + Number(row.updated || 0) > 0) return "fp-pill fp-pill--ok";
+  return "fp-pill fp-pill--empty";
+}
+function _viaKey(row) {
+  if (row.error_kind === "rate_limited") return "cooldown";
+  const v = String(row.via || "").toLowerCase();
+  if (v === "newsnow") return "newsnow";
+  if (v === "direct") return "direct";
+  if (v === "none") return "none";
+  return "direct";
+}
+
+function IngestDrawer(props) {
+  const t = useT();
+  const [expandedId, setExpandedId] = useState("");
+  const summary = props.summary;
+  const sources = props.sources;
+  const bySource = summary.bySource || {};
+  const sourceIds = Object.keys(bySource);
+  const totals = summary.totals || {};
+  const inserted = Number(totals.inserted || 0);
+  const updated = Number(totals.updated || 0);
+
+  return (
+    <div className="fp-drawer" role="region" aria-live="polite">
+      <div className="fp-drawer__head">
+        <span className="fp-drawer__title">{t("today.drawer.title")}</span>
+        <span className="fp-drawer__spacer"/>
+        <span className="fp-drawer__summary">
+          <strong>{"+" + inserted}</strong>
+          <span className="fp-pill__sep" style={{margin: "0 4px"}}>·</span>
+          <strong>{updated}</strong>
+          <span style={{opacity: .75, marginLeft: 4}}>
+            ({totals.sources_ok || 0}/{totals.sources_total || sourceIds.length})
+          </span>
+        </span>
+        <button className="btn btn-sm" type="button" onClick={props.onDismiss}>
+          <Ico name="close"/> {t("today.drawer.dismiss")}
+        </button>
+      </div>
+      {sourceIds.length === 0 && (
+        <div className="fp-drawer__summary">
+          {summary.reason === "no_sources_enabled"
+            ? t("today.ingest.done.none_enabled")
+            : t("today.drawer.empty")}
+        </div>
+      )}
+      <div className="fp-drawer__body">
+        {sourceIds.map(function (id) {
+          const row = bySource[id] || {};
+          const viaKey = _viaKey(row);
+          const cls = _pillClass(row);
+          const label = _sourceName(sources, id);
+          const ins = Number(row.inserted || 0);
+          const upd = Number(row.updated || 0);
+          let statusText = "";
+          if (row.error || row.error_kind) {
+            statusText = t("today.drawer.status.error");
+          } else if (ins + upd > 0) {
+            statusText = tfmt(t("today.drawer.status.ok"),
+                              {inserted: ins, updated: upd});
+          } else {
+            statusText = t("today.drawer.status.empty");
+          }
+          const expanded = expandedId === id;
+          const hasError = !!(row.error || row.error_kind);
+          return (
+            <span key={id} className={cls} title={label}>
+              <span className="fp-pill__via">{t("today.drawer.via." + viaKey)}</span>
+              <span>{label}</span>
+              <span className="fp-pill__sep">·</span>
+              <span>{statusText}</span>
+              {hasError && (
+                <button className="fp-pill__btn" type="button"
+                        onClick={function () { setExpandedId(expanded ? "" : id); }}>
+                  {expanded ? "−" : "+"} {t("today.drawer.show_error")}
+                </button>
+              )}
+              {expanded && hasError && (
+                <div className="fp-drawer__error">
+                  <strong>{row.error_kind || "error"}</strong>
+                  {row.error ? " · " + String(row.error).slice(0, 240) : ""}
+                </div>
+              )}
+            </span>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 /* ── Today Tab — live article feed ─────────────────────────────── */
 function TodayTab() {
   const t = useT();
@@ -945,6 +1178,12 @@ function TodayTab() {
   const [filters, setFilters] = useState({ source: "", window: 24, minScore: 0, sort: "time" });
   const [ingesting, setIngesting] = useState(false);
   const [sources, setSources] = useState(KNOWN_SOURCES);
+  /* Most recent ingest summary (null = never ran). Shape:
+     {mode: "all"|"single", sourceId: string|null, totals, by_source, task_id}.
+     The inline drawer reads this; onIngest writes it. */
+  const [lastIngest, setLastIngest] = useState(null);
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
 
   /* Fetch the canonical source list once — keeps the dropdown in
      sync with finpulse_models.SOURCE_DEFS and avoids id drift. */
@@ -987,24 +1226,79 @@ function TodayTab() {
   }, [filters]);
 
   useEffect(function () { load(); }, [load]);
-  useEffect(function () {
-    /* Bootstrap dispatches `openakita:event` only, so the fin-pulse
-       custom event names never fired. Poll every 8s instead — cheap
-       and simple. */
-    const timer = setInterval(load, 8000);
-    return function () { clearInterval(timer); };
-  }, [load]);
+  /* The 8-second setInterval poll is intentionally gone — it masked
+     bugs in the ingest path (green toast + empty list) and consumed
+     resources. We refresh after every POST /ingest below, and the
+     user can click the in-card Refresh button at any time. */
 
-  const onIngest = useCallback(async function () {
+  const runIngest = useCallback(async function (opts) {
+    const single = !!(opts && opts.sourceId);
     if (ingesting) return;
     setIngesting(true);
+    setDrawerOpen(true);
     try {
-      const resp = await api("POST", "/ingest", { since_hours: 24 });
-      window.oaToast({ level: resp && resp.ok ? "success" : "error",
-        message: resp && resp.ok ? "ingest ok: task " + resp.task_id : "ingest failed" });
+      const path = single ? ("/ingest/source/" + encodeURIComponent(opts.sourceId)) : "/ingest";
+      const body = single ? null : { since_hours: 24 };
+      let resp = null;
+      try {
+        resp = await api("POST", path, body);
+      } catch (err) {
+        resp = { ok: false, detail: (err && err.message) || String(err) };
+      }
+      const summary = (resp && resp.summary) || {};
+      const totals = summary.totals || {};
+      const bySource = summary.by_source || {};
+      setLastIngest({
+        mode: single ? "single" : "all",
+        sourceId: single ? opts.sourceId : null,
+        taskId: resp && resp.task_id,
+        totals: totals,
+        bySource: bySource,
+        reason: summary.reason || null,
+        ok: !!(resp && resp.ok),
+      });
+      /* Smart toast — choose colour + message based on the summary */
+      const inserted = Number(totals.inserted || 0);
+      const updated = Number(totals.updated || 0);
+      const sourcesOk = Number(totals.sources_ok || 0);
+      const sourcesTotal = Number(totals.sources_total || Object.keys(bySource).length || 0);
+      const failed = Number(totals.failed_sources || 0);
+      const empty = Math.max(0, sourcesOk - _countNonEmpty(bySource));
+      let level = "success", msg = "";
+      if (summary.reason === "no_sources_enabled") {
+        level = "warning";
+        msg = t("today.ingest.done.none_enabled");
+      } else if (!resp || !resp.ok) {
+        level = "error";
+        msg = "ingest failed: " + ((resp && resp.detail) || "unknown");
+      } else if (inserted + updated > 0) {
+        level = "success";
+        msg = tfmt(t("today.ingest.done.green"), {
+          inserted: inserted, updated: updated,
+          sourcesOk: sourcesOk, sourcesTotal: sourcesTotal });
+      } else {
+        level = "warning";
+        msg = tfmt(t("today.ingest.done.amber"), {
+          sourcesOk: sourcesOk, failed: failed,
+          empty: Math.max(0, sourcesTotal - sourcesOk - failed) });
+      }
+      window.oaToast({ level: level, message: msg });
       load();
     } finally { setIngesting(false); }
-  }, [ingesting, load]);
+  }, [ingesting, load, t]);
+
+  const onIngestAll = useCallback(function () {
+    setMenuOpen(false);
+    runIngest({});
+  }, [runIngest]);
+
+  const onIngestCurrent = useCallback(function () {
+    setMenuOpen(false);
+    if (!filters.source) return;
+    runIngest({ sourceId: filters.source });
+  }, [runIngest, filters.source]);
+
+  const onDismissDrawer = useCallback(function () { setDrawerOpen(false); }, []);
 
   return (
     <div className="stack-layout">
@@ -1060,10 +1354,48 @@ function TodayTab() {
                 onClick={function () { setFilters({source: "", window: 24, minScore: 0, sort: "time"}); }}>
           <Ico name="refresh"/> {t("today.filters.reset")}
         </button>
-        <button className="btn btn-primary" type="button" disabled={ingesting} onClick={onIngest}>
-          <Ico name="play"/> {ingesting ? t("today.list.loading") : t("today.list.ingest")}
-        </button>
+        {/* Split ingest button — primary fires all sources; caret opens
+            a menu with the single-source action when a source is picked. */}
+        <span className="ingest-split">
+          <button className="btn btn-primary" type="button"
+                  disabled={ingesting}
+                  aria-busy={ingesting ? "true" : "false"}
+                  onClick={onIngestAll}>
+            {ingesting
+              ? <span className="fp-spin"><Ico name="refresh"/></span>
+              : <Ico name="play"/>}
+            {" "}
+            {ingesting ? t("today.ingest.busy") : t("today.list.ingest")}
+          </button>
+          <button className="btn btn-primary btn--caret" type="button"
+                  disabled={ingesting}
+                  title={t("today.list.ingest.more")}
+                  onClick={function () { setMenuOpen(!menuOpen); }}>
+            <span style={{fontSize: 10}}>▾</span>
+          </button>
+          {menuOpen && (
+            <div className="ingest-split__menu"
+                 onMouseLeave={function () { setMenuOpen(false); }}>
+              <button type="button" disabled={!filters.source || ingesting}
+                      onClick={onIngestCurrent}>
+                {filters.source
+                  ? tfmt(t("today.drawer.source_single"), {source: _sourceName(sources, filters.source)})
+                  : t("today.list.ingest.current")}
+              </button>
+            </div>
+          )}
+        </span>
       </div>
+
+      {ingesting && <div className="fp-progress" aria-hidden="true"/>}
+
+      {/* Inline ingest-result drawer — appears right under the filter
+          bar after each run so users learn, at a glance, what actually
+          landed (and why empty runs were empty). */}
+      {drawerOpen && lastIngest && (
+        <IngestDrawer summary={lastIngest} sources={sources}
+                      onDismiss={onDismissDrawer} />
+      )}
 
       {/* News list — fills the remaining height */}
       <div className="card grow">
