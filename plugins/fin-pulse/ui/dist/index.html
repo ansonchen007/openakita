@@ -387,9 +387,9 @@ const I18N_DICT = {
     "settings.channels.none": "未在宿主中注册任何 IM 适配器，推送将不可用。",
     "settings.channels.send": "发送测试消息",
     "settings.schedules.title": "定时任务",
-    "settings.schedules.desc": "创建业务模板化的计划任务，底层由主程序 SchedulerView 统一管理。删除/暂停请前往「主程序 → 计划任务」面板。",
+    "settings.schedules.desc": "从下方 4 个模板里挑一个，即可直接写入主程序的定时任务（底层仍是 Agent Scheduler），不用再跳转「计划任务」面板。",
     "settings.schedules.none": "尚未创建任何定时任务",
-    "settings.schedules.create": "新增定时任务",
+    "settings.schedules.create": "新建",
     "settings.schedules.delete": "删除",
     "settings.schedules.daily": "早午晚报",
     "settings.schedules.radar": "热点雷达",
@@ -401,8 +401,14 @@ const I18N_DICT = {
     "settings.schedules.tpl.evening.desc": "每天 19:00 生成并推送晚报",
     "settings.schedules.tpl.radar": "雷达预警",
     "settings.schedules.tpl.radar.desc": "每 15 分钟扫描一次关键词规则",
-    "settings.schedules.dialog.title": "创建定时任务 — {template}",
-    "settings.schedules.dialog.name": "任务名",
+    "settings.schedules.dialog.title": "新建 {template}",
+    "settings.schedules.dialog.name": "任务名称",
+    "settings.schedules.dialog.type": "任务类型",
+    "settings.schedules.dialog.type.digest": "财经日报推送",
+    "settings.schedules.dialog.type.radar": "热点雷达预警",
+    "settings.schedules.dialog.trigger": "触发方式",
+    "settings.schedules.dialog.trigger.cron": "Cron 定时",
+    "settings.schedules.dialog.time": "执行时间",
     "settings.schedules.dialog.cron": "Cron 表达式",
     "settings.schedules.dialog.cron.hint": "不会写？打开 crontab.guru 在线构造",
     "settings.schedules.dialog.channel": "通知通道",
@@ -410,23 +416,41 @@ const I18N_DICT = {
     "settings.schedules.dialog.timezone": "时区",
     "settings.schedules.dialog.session": "早午晚",
     "settings.schedules.dialog.rules": "关键词规则",
-    "settings.schedules.dialog.create": "创建",
+    "settings.schedules.dialog.content": "提醒内容",
+    "settings.schedules.dialog.preview.morning": "每天 {cron} 触发 · 汇总过去 12 小时的 20 条头条推送到 {channel}",
+    "settings.schedules.dialog.preview.noon": "每天 {cron} 触发 · 汇总过去 12 小时的 15 条头条推送到 {channel}",
+    "settings.schedules.dialog.preview.evening": "每天 {cron} 触发 · 汇总过去 12 小时的 20 条头条推送到 {channel}",
+    "settings.schedules.dialog.preview.radar": "每 {cron} 触发 · 匹配关键词规则后推送快讯到 {channel}",
+    "settings.schedules.dialog.enabled": "启用",
+    "settings.schedules.dialog.create": "新建任务",
     "settings.schedules.dialog.cancel": "取消",
-    "settings.schedules.open_host": "在主程序计划任务面板管理 →",
-    "settings.schedules.read_only": "这是只读预览，列表维护请前往主程序计划任务面板",
-    "settings.channels.desc": "IM 通道来自宿主 SchedulerView，展示 `channel · chat_name`；空时先去「主程序 → 设置 → IM 通道」配置。",
+    "settings.schedules.dialog.no_channel": "请先在上方 IM 推送通道配置一个通道",
+    "settings.schedules.row.enabled": "运行中",
+    "settings.schedules.row.disabled": "已暂停",
+    "settings.schedules.row.run": "立即运行",
+    "settings.schedules.row.pause": "暂停",
+    "settings.schedules.row.resume": "启用",
+    "settings.schedules.row.delete": "删除",
+    "settings.schedules.row.deleted": "已删除",
+    "settings.schedules.row.triggered": "已触发一次执行",
+    "settings.schedules.row.confirm_delete": "确认删除该计划任务？",
+    "settings.channels.refresh": "刷新",
+    "settings.channels.refreshed": "已刷新 IM 通道列表",
     "settings.newsnow.title": "NewsNow 热榜聚合",
     "settings.newsnow.mode.off": "关闭",
     "settings.newsnow.mode.public": "公共服务",
     "settings.newsnow.mode.self_host": "自建",
     "settings.newsnow.step1": "① 选择模式",
-    "settings.newsnow.step2": "② 填写 API 地址",
+    "settings.newsnow.step2": "② API 地址",
     "settings.newsnow.step3": "③ 测试连接",
     "settings.newsnow.probe": "测试连接",
     "settings.newsnow.probe.ok": "连接成功：{n} 条热榜",
     "settings.newsnow.probe.fail": "连接失败：{err}",
-    "settings.newsnow.warn.public": "公共服务由开源作者自费维护，当前版本 v0.0.39，请合理控制抓取频率。",
+    "settings.newsnow.warn.public": "公共服务由开源作者自费维护，当前版本 v0.0.39；已默认开启并限制为每 {floor} 秒最多抓取一次，避免压垮上游。",
     "settings.newsnow.help.self_host": "> 自建命令示例：\\n> ```bash\\n> docker run -d --name newsnow -p 4444:4444 ourongxing/newsnow:latest\\n> ```\\n> 完成后 API URL 填 `http://127.0.0.1:4444/api/s`。",
+    "settings.newsnow.url.readonly": "已内置官方公共节点地址（{url}），无需修改。",
+    "settings.newsnow.floor.label": "最小抓取间隔（秒，公共服务下限 300）",
+    "settings.newsnow.rate_limited": "公共服务冷却中，{s} 秒后可再次抓取。",
     "settings.llm.title": "AI 大脑（继承宿主 LLM 工厂）",
     "settings.llm.hint": "fin-pulse 直接复用 OpenAkita 的大脑调用；如需调整 provider / model / 温度，请前往宿主「设置 → 模型」页面修改。",
     "settings.save": "保存",
@@ -534,9 +558,9 @@ const I18N_DICT = {
     "settings.channels.none": "No IM adapter registered in the host. Dispatch will be unavailable.",
     "settings.channels.send": "Send test message",
     "settings.schedules.title": "Scheduled tasks",
-    "settings.schedules.desc": "Business templates for scheduled tasks. Underlying rows are managed by the host SchedulerView — for delete/pause, open the host Scheduler panel.",
+    "settings.schedules.desc": "Pick a template below — the schedule is written straight into the host Agent Scheduler, no separate panel needed. Run, pause or delete rows right here.",
     "settings.schedules.none": "No scheduled tasks",
-    "settings.schedules.create": "Create schedule",
+    "settings.schedules.create": "Create",
     "settings.schedules.delete": "Delete",
     "settings.schedules.daily": "Daily brief",
     "settings.schedules.radar": "Hot radar",
@@ -548,8 +572,14 @@ const I18N_DICT = {
     "settings.schedules.tpl.evening.desc": "Runs every day at 19:00",
     "settings.schedules.tpl.radar": "Hot radar",
     "settings.schedules.tpl.radar.desc": "Scans keyword rules every 15 minutes",
-    "settings.schedules.dialog.title": "Create schedule — {template}",
+    "settings.schedules.dialog.title": "New · {template}",
     "settings.schedules.dialog.name": "Task name",
+    "settings.schedules.dialog.type": "Task type",
+    "settings.schedules.dialog.type.digest": "Fin-pulse digest push",
+    "settings.schedules.dialog.type.radar": "Fin-pulse hot-radar alert",
+    "settings.schedules.dialog.trigger": "Trigger",
+    "settings.schedules.dialog.trigger.cron": "Cron schedule",
+    "settings.schedules.dialog.time": "Execution time",
     "settings.schedules.dialog.cron": "Cron expression",
     "settings.schedules.dialog.cron.hint": "Need help? Open crontab.guru",
     "settings.schedules.dialog.channel": "IM channel",
@@ -557,11 +587,26 @@ const I18N_DICT = {
     "settings.schedules.dialog.timezone": "Timezone",
     "settings.schedules.dialog.session": "Session",
     "settings.schedules.dialog.rules": "Keyword rules",
-    "settings.schedules.dialog.create": "Create",
+    "settings.schedules.dialog.content": "Reminder content",
+    "settings.schedules.dialog.preview.morning": "Fires at {cron} · summarises the last 12h with 20 headlines and pushes to {channel}",
+    "settings.schedules.dialog.preview.noon": "Fires at {cron} · summarises the last 12h with 15 headlines and pushes to {channel}",
+    "settings.schedules.dialog.preview.evening": "Fires at {cron} · summarises the last 12h with 20 headlines and pushes to {channel}",
+    "settings.schedules.dialog.preview.radar": "Fires every {cron} · pushes matching alerts to {channel}",
+    "settings.schedules.dialog.enabled": "Enable on create",
+    "settings.schedules.dialog.create": "Create task",
     "settings.schedules.dialog.cancel": "Cancel",
-    "settings.schedules.open_host": "Open host Scheduler panel →",
-    "settings.schedules.read_only": "Read-only preview — manage rows from the host Scheduler panel",
-    "settings.channels.desc": "Channels are fed from the host SchedulerView (`channel · chat_name`). If empty, configure them in OpenAkita Settings → IM channels first.",
+    "settings.schedules.dialog.no_channel": "Please configure at least one IM channel above first",
+    "settings.schedules.row.enabled": "Running",
+    "settings.schedules.row.disabled": "Paused",
+    "settings.schedules.row.run": "Run now",
+    "settings.schedules.row.pause": "Pause",
+    "settings.schedules.row.resume": "Resume",
+    "settings.schedules.row.delete": "Delete",
+    "settings.schedules.row.deleted": "Schedule deleted",
+    "settings.schedules.row.triggered": "Triggered one ad-hoc run",
+    "settings.schedules.row.confirm_delete": "Delete this scheduled task?",
+    "settings.channels.refresh": "Refresh",
+    "settings.channels.refreshed": "IM channel list refreshed",
     "settings.newsnow.title": "NewsNow aggregator",
     "settings.newsnow.mode.off": "Off",
     "settings.newsnow.mode.public": "Public",
@@ -572,8 +617,11 @@ const I18N_DICT = {
     "settings.newsnow.probe": "Probe connection",
     "settings.newsnow.probe.ok": "OK — {n} items",
     "settings.newsnow.probe.fail": "Failed: {err}",
-    "settings.newsnow.warn.public": "The public service is run by the open-source author at their own cost (current version v0.0.39). Please keep your polling interval reasonable.",
+    "settings.newsnow.warn.public": "The public service is run by the open-source author at their own cost (current version v0.0.39). Enabled by default with a {floor}s hard cooldown between fetches to protect the upstream.",
     "settings.newsnow.help.self_host": "> Self-host command:\\n> ```bash\\n> docker run -d --name newsnow -p 4444:4444 ourongxing/newsnow:latest\\n> ```\\n> Then set API URL to `http://127.0.0.1:4444/api/s`.",
+    "settings.newsnow.url.readonly": "Official public node is pre-filled ({url}) — no edit needed.",
+    "settings.newsnow.floor.label": "Minimum fetch interval (seconds — public floor is 300)",
+    "settings.newsnow.rate_limited": "Public service cooling down, try again in {s}s.",
     "settings.llm.title": "AI Brain (inherits host factory)",
     "settings.llm.hint": "fin-pulse reuses the OpenAkita brain directly; change provider / model / temperature in the host Settings → Models page.",
     "settings.save": "Save",
@@ -612,6 +660,9 @@ const ICON_ALIAS = {
   warn: "warning", eye: "info", send: "upload", copy: "listTask",
   trash: "close", edit: "edit", history: "listTask", lib: "folder",
   ai: "sparkles", template: "book",
+  /* schedule-row actions — host icon lib exposes pause/bell/target but we
+     keep fallbacks to keep first-render safe. */
+  pause: "close", bell: "warning", refresh: "refresh",
 };
 function Ico(props) {
   const name = props.name || "";
@@ -1665,13 +1716,17 @@ function CodeBlock(props) {
   );
 }
 
-/* ── ScheduleDialog — modal form for creating a templated fin-pulse
-   scheduled task (morning / noon / evening brief + hot radar).  */
+/* ── ScheduleDialog — modal form mirroring the host "新建任务" layout
+   (see Image-3 spec) so users can create a fin-pulse scheduled task
+   entirely in-plugin. Every submission goes through the fin-pulse
+   /schedules route which delegates to the host Agent Scheduler, so the
+   underlying rows still live alongside other host-managed schedules —
+   we just skip the redirect hand-off. */
 const SCHEDULE_TEMPLATES = {
-  morning:  {mode: "daily_brief", session: "morning", cron: "0 8 * * *",   since_hours: 12, top_k: 20},
-  noon:     {mode: "daily_brief", session: "noon",    cron: "30 12 * * *", since_hours: 12, top_k: 15},
-  evening:  {mode: "daily_brief", session: "evening", cron: "0 19 * * *",  since_hours: 12, top_k: 20},
-  radar:    {mode: "hot_radar",                       cron: "*/15 * * * *", since_hours: 24, limit: 100, cooldown_s: 600},
+  morning:  {mode: "daily_brief", session: "morning", cron: "0 8 * * *",   since_hours: 12, top_k: 20, name: "fin-pulse morning"},
+  noon:     {mode: "daily_brief", session: "noon",    cron: "30 12 * * *", since_hours: 12, top_k: 15, name: "fin-pulse noon"},
+  evening:  {mode: "daily_brief", session: "evening", cron: "0 19 * * *",  since_hours: 12, top_k: 20, name: "fin-pulse evening"},
+  radar:    {mode: "hot_radar",                       cron: "*/15 * * * *", since_hours: 24, limit: 100, cooldown_s: 600, name: "fin-pulse radar"},
 };
 
 function ScheduleDialog(props) {
@@ -1685,11 +1740,12 @@ function ScheduleDialog(props) {
   })();
 
   const [form, setForm] = useState({
-    name: "fin-pulse " + (preset.session || "radar"),
+    name: preset.name,
     cron: preset.cron,
     channel: firstChannel.channel_id || "",
     chat_id: firstChannel.chat_id || "",
     rules_text: tpl === "radar" ? (props.defaultRulesText || "+美联储") : "",
+    enabled: true,
   });
   const [submitting, setSubmitting] = useState(false);
 
@@ -1707,17 +1763,27 @@ function ScheduleDialog(props) {
 
   const onSubmit = async function () {
     if (submitting) return;
-    if (!form.cron.trim() || !form.channel || !form.chat_id) {
-      window.oaToast({level: "warning", message: t("settings.schedules.dialog.chat_id") + " / cron / channel 必填"});
+    if (!form.name.trim()) {
+      window.oaToast({level: "warning", message: t("settings.schedules.dialog.name")});
+      return;
+    }
+    if (!form.cron.trim()) {
+      window.oaToast({level: "warning", message: t("settings.schedules.dialog.cron")});
+      return;
+    }
+    if (!form.channel || !form.chat_id) {
+      window.oaToast({level: "warning", message: t("settings.schedules.dialog.no_channel")});
       return;
     }
     setSubmitting(true);
     try {
       const body = {
         mode: preset.mode,
+        name: form.name.trim(),
         cron: form.cron.trim(),
         channel: form.channel,
         chat_id: form.chat_id,
+        enabled: !!form.enabled,
       };
       if (preset.mode === "daily_brief") {
         body.session = preset.session;
@@ -1740,45 +1806,88 @@ function ScheduleDialog(props) {
     } finally { setSubmitting(false); }
   };
 
+  const hasChannels = channels.length > 0;
   const titleLabel = t("settings.schedules.tpl." + tpl);
+  const channelLabel = (function () {
+    const pick = channels.find(function (c) { return c.channel_id === form.channel; });
+    if (!pick) return "—";
+    return formatChannelLabel(pick);
+  })();
+  const previewMsg = tfmt(
+    t("settings.schedules.dialog.preview." + tpl),
+    {cron: form.cron || preset.cron, channel: channelLabel}
+  );
+  const typeLabel = preset.mode === "daily_brief"
+    ? t("settings.schedules.dialog.type.digest")
+    : t("settings.schedules.dialog.type.radar");
+
   return (
     <div className="confirm-mask" onClick={function () { props.onDone && props.onDone(false); }}>
-      <div className="confirm-dialog" style={{maxWidth: 480}} onClick={function (e) { e.stopPropagation(); }}>
-        <div className="card-title">{tfmt(t("settings.schedules.dialog.title"), {template: titleLabel})}</div>
-        <div style={{display: "flex", flexDirection: "column", gap: 10, marginTop: 8}}>
+      <div className="confirm-dialog" style={{maxWidth: 560}} onClick={function (e) { e.stopPropagation(); }}>
+        <div className="card-title" style={{marginBottom: 12}}>
+          {tfmt(t("settings.schedules.dialog.title"), {template: titleLabel})}
+        </div>
+        <div style={{display: "flex", flexDirection: "column", gap: 12}}>
           <label style={{display: "flex", flexDirection: "column", gap: 4}}>
-            <span style={{fontSize: 12, color: "var(--text)"}}>{t("settings.schedules.dialog.cron")}</span>
-            <input className="input" value={form.cron} onChange={function (e) { update("cron", e.target.value); }}/>
+            <span style={{fontSize: 12, color: "var(--text)", fontWeight: 600}}>{t("settings.schedules.dialog.name")}</span>
+            <input className="input" value={form.name} onChange={function (e) { update("name", e.target.value); }} placeholder={preset.name}/>
+          </label>
+          <div style={{display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10}}>
+            <div style={{display: "flex", flexDirection: "column", gap: 4}}>
+              <span style={{fontSize: 12, color: "var(--text)", fontWeight: 600}}>{t("settings.schedules.dialog.type")}</span>
+              <div className="input" style={{background: "var(--bg-subtle, rgba(0,0,0,.03))", cursor: "not-allowed"}}>{typeLabel}</div>
+            </div>
+            <div style={{display: "flex", flexDirection: "column", gap: 4}}>
+              <span style={{fontSize: 12, color: "var(--text)", fontWeight: 600}}>{t("settings.schedules.dialog.trigger")}</span>
+              <div className="input" style={{background: "var(--bg-subtle, rgba(0,0,0,.03))", cursor: "not-allowed"}}>{t("settings.schedules.dialog.trigger.cron")}</div>
+            </div>
+          </div>
+          <label style={{display: "flex", flexDirection: "column", gap: 4}}>
+            <span style={{fontSize: 12, color: "var(--text)", fontWeight: 600}}>{t("settings.schedules.dialog.time")}</span>
+            <input className="input" value={form.cron} onChange={function (e) { update("cron", e.target.value); }} placeholder={preset.cron}/>
             <span className="oa-hint" style={{fontSize: 11}}>
               <a href="https://crontab.guru" target="_blank" rel="noreferrer">crontab.guru</a> · {t("settings.schedules.dialog.cron.hint")} · TZ: {tzDisplay || "host"}
             </span>
           </label>
-          <label style={{display: "flex", flexDirection: "column", gap: 4}}>
-            <span style={{fontSize: 12, color: "var(--text)"}}>{t("settings.schedules.dialog.channel")}</span>
-            <select className="input" value={form.channel} onChange={onChannelChange}>
-              <option value="">—</option>
-              {channels.map(function (c) {
-                return <option key={c.channel_id + ":" + (c.chat_id || "")} value={c.channel_id}>{formatChannelLabel(c)}</option>;
-              })}
-            </select>
-          </label>
-          <label style={{display: "flex", flexDirection: "column", gap: 4}}>
-            <span style={{fontSize: 12, color: "var(--text)"}}>{t("settings.schedules.dialog.chat_id")}</span>
-            <input className="input" value={form.chat_id} onChange={function (e) { update("chat_id", e.target.value); }}/>
-          </label>
           {preset.mode === "hot_radar" && (
             <label style={{display: "flex", flexDirection: "column", gap: 4}}>
-              <span style={{fontSize: 12, color: "var(--text)"}}>{t("settings.schedules.dialog.rules")}</span>
-              <textarea className="input" rows={4} value={form.rules_text}
+              <span style={{fontSize: 12, color: "var(--text)", fontWeight: 600}}>{t("settings.schedules.dialog.rules")}</span>
+              <textarea className="input" rows={3} value={form.rules_text}
                         onChange={function (e) { update("rules_text", e.target.value); }}/>
             </label>
           )}
+          <div style={{display: "flex", flexDirection: "column", gap: 4}}>
+            <span style={{fontSize: 12, color: "var(--text)", fontWeight: 600}}>{t("settings.schedules.dialog.content")}</span>
+            <div className="oa-hint" style={{fontSize: 12, padding: "8px 10px", background: "var(--bg-subtle, rgba(0,0,0,.03))", borderRadius: 6, color: "var(--text)"}}>
+              {previewMsg}
+            </div>
+          </div>
+          <div style={{display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10}}>
+            <label style={{display: "flex", flexDirection: "column", gap: 4}}>
+              <span style={{fontSize: 12, color: "var(--text)", fontWeight: 600}}>{t("settings.schedules.dialog.channel")}</span>
+              <select className="input" value={form.channel} onChange={onChannelChange} disabled={!hasChannels}>
+                <option value="">{hasChannels ? "—" : t("settings.schedules.dialog.no_channel")}</option>
+                {channels.map(function (c) {
+                  return <option key={c.channel_id + ":" + (c.chat_id || "")} value={c.channel_id}>{formatChannelLabel(c)}</option>;
+                })}
+              </select>
+            </label>
+            <label style={{display: "flex", flexDirection: "column", gap: 4}}>
+              <span style={{fontSize: 12, color: "var(--text)", fontWeight: 600}}>{t("settings.schedules.dialog.chat_id")}</span>
+              <input className="input" value={form.chat_id} onChange={function (e) { update("chat_id", e.target.value); }}/>
+            </label>
+          </div>
+          <label style={{display: "flex", alignItems: "center", gap: 8, userSelect: "none"}}>
+            <input type="checkbox" checked={!!form.enabled}
+                   onChange={function (e) { update("enabled", e.target.checked); }}/>
+            <span style={{fontSize: 13, color: "var(--text)"}}>{t("settings.schedules.dialog.enabled")}</span>
+          </label>
         </div>
-        <div className="confirm-actions">
+        <div className="confirm-actions" style={{marginTop: 16}}>
           <button className="btn btn-sm" onClick={function () { props.onDone && props.onDone(false); }}>
             {t("settings.schedules.dialog.cancel")}
           </button>
-          <button className="btn btn-sm btn-primary" disabled={submitting} onClick={onSubmit}>
+          <button className="btn btn-sm btn-primary" disabled={submitting || !hasChannels} onClick={onSubmit}>
             {t("settings.schedules.dialog.create")}
           </button>
         </div>
@@ -1787,8 +1896,19 @@ function ScheduleDialog(props) {
   );
 }
 
-/* ── Settings Form — sources, channels (with in-card no-channel banner),
-   templated schedules, NewsNow 3-stage wizard, LLM hint. */
+/* ── Settings Form — sources, channels (with in-card no-channel banner
+   + explicit refresh button), templated schedules (with full in-page
+   run/pause/delete actions), NewsNow 3-stage wizard, LLM hint.
+   We never redirect to the host SchedulerView — row actions talk to
+   the host scheduler REST API directly via the plugin bridge. */
+
+/* Public NewsNow upstream — hard-coded so users never need to hunt for
+   the URL. Keeps the pipeline's 5-minute floor paired with a stable
+   node reference. Change both here and finpulse_task_manager._seed_default_config
+   if upstream ever moves. */
+const NEWSNOW_PUBLIC_URL = "https://newsnow.busiyi.world/api/s";
+const NEWSNOW_PUBLIC_MIN_INTERVAL_S = 300;
+
 function SettingsForm(props) {
   const t = useT();
   const [config, setConfig] = useState({});
@@ -1798,8 +1918,11 @@ function SettingsForm(props) {
   const [probeMsg, setProbeMsg] = useState("");
   const [savingKey, setSavingKey] = useState("");
   const [scheduleDialog, setScheduleDialog] = useState(null);
+  const [channelsRefreshing, setChannelsRefreshing] = useState(false);
+  const [rowPending, setRowPending] = useState({});
 
-  const reloadAll = useCallback(async function () {
+  const reloadAll = useCallback(async function (opts) {
+    const silent = !!(opts && opts.silent);
     const [cfg, ch, sched] = await Promise.all([
       api("GET", "/config"),
       api("GET", "/scheduler/channels"),
@@ -1815,8 +1938,29 @@ function SettingsForm(props) {
     setChannels(list);
     setSchedules((sched && sched.items) || []);
     setLoaded(true);
+    if (!silent) return;
   }, []);
   useEffect(function () { reloadAll(); }, [reloadAll]);
+
+  const reloadSchedules = useCallback(async function () {
+    const sched = await api("GET", "/schedules");
+    setSchedules((sched && sched.items) || []);
+  }, []);
+
+  const onRefreshChannels = useCallback(async function () {
+    setChannelsRefreshing(true);
+    try {
+      const ch = await api("GET", "/scheduler/channels");
+      let list = (ch && Array.isArray(ch.channels)) ? ch.channels : [];
+      if (!list.length) {
+        const fb = await api("GET", "/available-channels");
+        const names = (fb && fb.channels) || [];
+        list = names.map(function (n) { return { channel_id: String(n), chat_id: "" }; });
+      }
+      setChannels(list);
+      window.oaToast({level: "success", message: t("settings.channels.refreshed")});
+    } finally { setChannelsRefreshing(false); }
+  }, [t]);
 
   const setCfgField = function (key, value) {
     setConfig(function (prev) { return Object.assign({}, prev, {[key]: value}); });
@@ -1833,6 +1977,15 @@ function SettingsForm(props) {
   const onProbeNewsNow = useCallback(async function () {
     setProbeMsg("…");
     const resp = await api("POST", "/ingest/source/newsnow");
+    // Rate-limited case surfaces a structured summary rather than detail.
+    const rl = resp && resp.summary && resp.summary.by_source &&
+               resp.summary.by_source.newsnow &&
+               resp.summary.by_source.newsnow.error_kind === "rate_limited"
+      ? resp.summary.by_source.newsnow.retry_after_s : null;
+    if (rl != null) {
+      setProbeMsg(tfmt(t("settings.newsnow.rate_limited"), {s: rl}));
+      return;
+    }
     if (resp && resp.ok) {
       const n = (resp.summary && resp.summary.inserted) || (resp.summary && resp.summary.received) || 0;
       setProbeMsg(tfmt(t("settings.newsnow.probe.ok"), {n: n}));
@@ -1857,16 +2010,64 @@ function SettingsForm(props) {
     });
   }, []);
 
-  const openHostScheduler = useCallback(function () {
+  /* Row-level schedule actions: we call the host scheduler REST API
+     directly through the plugin bridge for toggle / trigger (those
+     endpoints are plugin-specific wrappers that enforce fin-pulse
+     ownership), and the plugin's own /schedules/{id} for delete. */
+  const markRow = function (id, key, val) {
+    setRowPending(function (prev) {
+      const copy = Object.assign({}, prev);
+      copy[id] = Object.assign({}, prev[id] || {}, {[key]: val});
+      return copy;
+    });
+  };
+  const onTriggerRow = useCallback(async function (s) {
+    markRow(s.id, "run", true);
     try {
-      window.dispatchEvent(new CustomEvent("openakita:navigate", {detail: {view: "scheduler"}}));
-    } catch (_) {}
-  }, []);
+      const resp = await api("POST", "/schedules/" + s.id + "/trigger");
+      window.oaToast({
+        level: resp && resp.ok ? "success" : "error",
+        message: resp && resp.ok ? t("settings.schedules.row.triggered") : "failed",
+      });
+    } finally { markRow(s.id, "run", false); }
+  }, [t]);
+  const onToggleRow = useCallback(async function (s) {
+    markRow(s.id, "toggle", true);
+    try {
+      const resp = await api("POST", "/schedules/" + s.id + "/toggle");
+      if (resp && resp.ok) await reloadSchedules();
+      else window.oaToast({level: "error", message: "toggle failed"});
+    } finally { markRow(s.id, "toggle", false); }
+  }, [reloadSchedules]);
+  const onDeleteRow = useCallback(async function (s) {
+    if (!window.confirm(t("settings.schedules.row.confirm_delete"))) return;
+    markRow(s.id, "del", true);
+    try {
+      const resp = await api("DELETE", "/schedules/" + s.id);
+      if (resp && resp.ok) {
+        window.oaToast({level: "success", message: t("settings.schedules.row.deleted")});
+        await reloadSchedules();
+      } else {
+        window.oaToast({level: "error", message: "delete failed"});
+      }
+    } finally { markRow(s.id, "del", false); }
+  }, [reloadSchedules, t]);
 
   if (!loaded) return <div className="card"><div className="empty">{t("today.list.loading")}</div></div>;
 
-  const newsnowMode = String(config["newsnow.mode"] || "off");
-  const newsnowUrl = String(config["newsnow.api_url"] || "");
+  /* NewsNow defaults: first-render should treat ``undefined`` / ``off``
+     as "use the public aggregator with the built-in URL". We only show
+     the input box in self_host mode to avoid confusing copy-paste. */
+  const rawNewsnowMode = config["newsnow.mode"];
+  const newsnowMode = (rawNewsnowMode && String(rawNewsnowMode)) || "public";
+  const rawNewsnowUrl = config["newsnow.api_url"];
+  const newsnowUrl = (rawNewsnowUrl && String(rawNewsnowUrl))
+    || (newsnowMode === "public" ? NEWSNOW_PUBLIC_URL : "");
+  const rawMinInterval = parseInt(config["newsnow.min_interval_s"] || "300", 10);
+  const newsnowFloor = (isNaN(rawMinInterval) ? 300 : Math.max(
+    newsnowMode === "public" ? NEWSNOW_PUBLIC_MIN_INTERVAL_S : 0,
+    rawMinInterval
+  ));
   const radarRules = String(config["radar_rules"] || "+美联储 +降息");
   const hasAnyChannel = channels.length > 0;
 
@@ -1890,8 +2091,14 @@ function SettingsForm(props) {
       </div>
 
       <div className="card">
-        <div className="card-title">{t("settings.channels.title")}</div>
-        <div className="oa-hint" style={{marginBottom: 8}}>{t("settings.channels.desc")}</div>
+        <div style={{display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8}}>
+          <div className="card-title" style={{margin: 0}}>{t("settings.channels.title")}</div>
+          <button className="btn btn-sm" type="button"
+                  disabled={channelsRefreshing}
+                  onClick={onRefreshChannels}>
+            <Ico name="refresh"/> {t("settings.channels.refresh")}
+          </button>
+        </div>
         {!hasAnyChannel ? (
           <div className="oa-config-banner" role="alert">
             <span className="oa-icon oa-config-banner__icon"><Ico name="warn"/></span>
@@ -1920,14 +2127,9 @@ function SettingsForm(props) {
       </div>
 
       <div className="card">
-        <div style={{display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6}}>
-          <div className="card-title" style={{margin: 0}}>{t("settings.schedules.title")}</div>
-          <button className="btn btn-sm" type="button" onClick={openHostScheduler}>
-            {t("settings.schedules.open_host")}
-          </button>
-        </div>
+        <div className="card-title" style={{marginBottom: 6}}>{t("settings.schedules.title")}</div>
         <div className="oa-hint" style={{marginBottom: 10}}>{t("settings.schedules.desc")}</div>
-        <div style={{display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 8, marginBottom: 10}}>
+        <div style={{display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 8, marginBottom: 14}}>
           {["morning", "noon", "evening", "radar"].map(function (tpl) {
             return (
               <button key={tpl}
@@ -1943,19 +2145,41 @@ function SettingsForm(props) {
             );
           })}
         </div>
-        <div className="oa-hint" style={{fontSize: 11, marginBottom: 4}}>{t("settings.schedules.read_only")}</div>
         {schedules.length === 0 ? (
           <div className="empty">{t("settings.schedules.none")}</div>
         ) : (
           <div>
             {schedules.map(function (s) {
+              const pending = rowPending[s.id] || {};
+              const enabled = s.enabled !== false;
               return (
                 <div key={s.id}
-                     style={{display: "flex", alignItems: "center", gap: 8, padding: "8px 0", borderBottom: "1px solid var(--border)"}}>
+                     style={{display: "flex", alignItems: "center", gap: 8, padding: "8px 0", borderBottom: "1px solid var(--border)", flexWrap: "wrap"}}>
                   <span className="api-pill">{s.name || s.id}</span>
                   <span style={{fontSize: 11, color: "var(--text-muted)"}}>{s.cron || s.cron_expression || ""}</span>
-                  <span style={{flex: 1}}/>
-                  <span style={{fontSize: 11, color: "var(--text-muted)"}}>{s.channel_id || ""} {s.chat_id ? "· " + s.chat_id : ""}</span>
+                  <span className={"api-pill " + (enabled ? "" : "api-pill--missing")} style={{fontSize: 11}}>
+                    {enabled ? t("settings.schedules.row.enabled") : t("settings.schedules.row.disabled")}
+                  </span>
+                  <span style={{flex: 1, minWidth: 8}}/>
+                  <span style={{fontSize: 11, color: "var(--text-muted)"}}>
+                    {s.channel || s.channel_id || ""}{s.chat_id ? " · " + s.chat_id : ""}
+                  </span>
+                  <button className="btn btn-sm"
+                          disabled={!!pending.run}
+                          onClick={function () { onTriggerRow(s); }}>
+                    <Ico name="play"/> {t("settings.schedules.row.run")}
+                  </button>
+                  <button className="btn btn-sm"
+                          disabled={!!pending.toggle}
+                          onClick={function () { onToggleRow(s); }}>
+                    <Ico name={enabled ? "pause" : "play"}/>{" "}
+                    {enabled ? t("settings.schedules.row.pause") : t("settings.schedules.row.resume")}
+                  </button>
+                  <button className="btn btn-sm"
+                          disabled={!!pending.del}
+                          onClick={function () { onDeleteRow(s); }}>
+                    <Ico name="trash"/> {t("settings.schedules.row.delete")}
+                  </button>
                 </div>
               );
             })}
@@ -1983,7 +2207,12 @@ function SettingsForm(props) {
                       onClick={async function () {
                         setSavingKey("newsnow");
                         try {
-                          await persist({"newsnow.mode": newsnowMode, "newsnow.api_url": newsnowUrl});
+                          const updates = {
+                            "newsnow.mode": newsnowMode,
+                            "newsnow.api_url": newsnowUrl,
+                            "newsnow.min_interval_s": String(newsnowFloor),
+                          };
+                          await persist(updates);
                           await onProbeNewsNow();
                         } finally { setSavingKey(""); }
                       }}>
@@ -1999,7 +2228,19 @@ function SettingsForm(props) {
               const active = newsnowMode === m;
               return <span key={m}
                            className={"api-pill " + (active ? "" : "api-pill--missing")}
-                           onClick={function () { setCfgField("newsnow.mode", m); }}>
+                           onClick={function () {
+                             setCfgField("newsnow.mode", m);
+                             // Snap URL/floor back to built-in values when
+                             // switching into public mode so users don't have
+                             // to hit any extra save step.
+                             if (m === "public") {
+                               setCfgField("newsnow.api_url", NEWSNOW_PUBLIC_URL);
+                               const cur = parseInt(config["newsnow.min_interval_s"] || "300", 10);
+                               if (isNaN(cur) || cur < NEWSNOW_PUBLIC_MIN_INTERVAL_S) {
+                                 setCfgField("newsnow.min_interval_s", String(NEWSNOW_PUBLIC_MIN_INTERVAL_S));
+                               }
+                             }
+                           }}>
                 {t("settings.newsnow.mode." + m)}
               </span>;
             })}
@@ -2008,27 +2249,46 @@ function SettingsForm(props) {
             <div className="oa-config-banner" role="alert" style={{marginTop: 10, background: "rgba(245,158,11,.12)", border: "1px solid rgba(245,158,11,.24)"}}>
               <span className="oa-icon oa-config-banner__icon"><Ico name="warn"/></span>
               <div className="oa-config-banner__text" style={{fontSize: 12}}>
-                {t("settings.newsnow.warn.public")}
+                {tfmt(t("settings.newsnow.warn.public"), {floor: newsnowFloor})}
               </div>
             </div>
           )}
         </div>
 
-        {newsnowMode !== "off" && (
+        {newsnowMode === "public" && (
+          <div style={{marginBottom: 10}}>
+            <div className="label">{t("settings.newsnow.step2")}</div>
+            <div className="oa-hint" style={{fontSize: 12, padding: "8px 10px", background: "var(--bg-subtle, rgba(0,0,0,.03))", borderRadius: 6, color: "var(--text)"}}>
+              {tfmt(t("settings.newsnow.url.readonly"), {url: NEWSNOW_PUBLIC_URL})}
+            </div>
+            <div className="label" style={{marginTop: 10}}>{t("settings.newsnow.floor.label")}</div>
+            <div className="field-wrap">
+              <input className="input"
+                     type="number"
+                     min={NEWSNOW_PUBLIC_MIN_INTERVAL_S}
+                     step={60}
+                     value={newsnowFloor}
+                     onChange={function (e) {
+                       const v = Math.max(NEWSNOW_PUBLIC_MIN_INTERVAL_S, parseInt(e.target.value || "300", 10) || NEWSNOW_PUBLIC_MIN_INTERVAL_S);
+                       setCfgField("newsnow.min_interval_s", String(v));
+                     }}/>
+            </div>
+          </div>
+        )}
+
+        {newsnowMode === "self_host" && (
           <div style={{marginBottom: 10}}>
             <div className="label">{t("settings.newsnow.step2")}</div>
             <div className="field-wrap">
               <input className="input"
                      type="text"
-                     placeholder={newsnowMode === "self_host" ? "http://127.0.0.1:4444/api/s" : "https://newsnow-public.example.com/api/s"}
+                     placeholder="http://127.0.0.1:4444/api/s"
                      value={newsnowUrl}
                      onChange={function (e) { setCfgField("newsnow.api_url", e.target.value); }}/>
             </div>
-            {newsnowMode === "self_host" && (
-              <div style={{marginTop: 8}}>
-                <CodeBlock text={t("settings.newsnow.help.self_host")} />
-              </div>
-            )}
+            <div style={{marginTop: 8}}>
+              <CodeBlock text={t("settings.newsnow.help.self_host")} />
+            </div>
           </div>
         )}
 
