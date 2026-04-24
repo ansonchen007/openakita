@@ -37,29 +37,24 @@ _EMAIL_RE = re.compile(r"[\w.\-+]+@[\w\-]+\.[\w.\-]+")
 logger = logging.getLogger(__name__)
 
 
+_DEFAULT_UA = "OpenAkita fin-pulse contact@openakita.com"
+
+
 class SecEdgarFetcher(BaseFetcher):
     source_id = "sec_edgar"
 
     async def fetch(self, **_: Any) -> list[NormalizedItem]:
-        contact = (self._config.get("sec_edgar.contact") or "").strip()
-        if not _EMAIL_RE.search(contact):
-            # Surface the config problem via a classifiable ImportError
-            # substitute — ``map_exception`` treats ``Missing ... contact``
-            # strings as "auth" so the drawer tells the user to set
-            # ``sec_edgar.contact`` instead of silently 403-ing.
-            raise RuntimeError(
-                "SEC EDGAR rejects generic UAs — set sec_edgar.contact to "
-                "'Your Name your-email@example.com' per "
-                "https://www.sec.gov/os/accessing-edgar-data"
-            )
+        raw = (self._config.get("sec_edgar.contact") or "").strip()
+        # SEC returns 403 when the User-Agent is a bare browser string — it
+        # must include a real contact. Fall back to a project placeholder so
+        # first-run ingest never 500s; operators should still replace this
+        # with their own name + e-mail per sec.gov access policy.
+        contact = raw if _EMAIL_RE.search(raw) else _DEFAULT_UA
 
         async with make_client(
             timeout=self._timeout_sec,
             user_agent=contact,
-            extra_headers={
-                "Accept-Encoding": "gzip, deflate",
-                "Host": "www.sec.gov",
-            },
+            extra_headers={"Accept-Encoding": "gzip, deflate"},
         ) as client:
             body = await fetch_text(client, _EDGAR_RSS)
         items = parse_feed(self.source_id, body)

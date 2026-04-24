@@ -896,28 +896,103 @@ function _finPulsePath(path) {
   if (path.startsWith("/api/")) return path;
   return API_BASE_PATH + (path.startsWith("/") ? path : "/" + path);
 }
+/* FastAPI and some proxies return ``detail`` as a string, an object, or
+   a Pydantic ``[{loc,msg,...}]`` array — the toast and ingest error line
+   must never degrade to the useless plain word ``unknown``. */
+function _stringifyApiDetail(d) {
+  if (d == null || d === "") return "";
+  if (typeof d === "string") return d;
+  if (Array.isArray(d)) {
+    return d.map(function (x) {
+      if (x && typeof x === "object" && "msg" in x) return String(x.msg);
+      return String(x);
+    }).join("; ");
+  }
+  if (typeof d === "object" && d !== null && "msg" in d) {
+    return String((d).msg);
+  }
+  try { return JSON.stringify(d); } catch (_) { return String(d); }
+}
+/* Unify every host/bridge response shape the iframe can see.
+
+   1) Full transport (preferred): ``{ok, status, body}`` from the
+      desktop host's fetch proxy.
+   2) Bootstrap timeout: ``{ok:false, error:"timeout"}`` — *no* ``body``
+      key, so the old code fell through and ``ingest`` showed
+      ``ingest failed: unknown`` (reported 2025-04).
+   3) Lean hosts that forward JSON without wrapping — return as-is
+      after normalising a top-level ``detail`` string. */
+function _normalizeBridgeApiResult(res) {
+  if (!res || typeof res !== "object") {
+    return { ok: false, detail: "no-response" };
+  }
+  if (!("body" in res) && ("error" in res || "message" in res)) {
+    var err = res.error != null ? res.error : res.message;
+    return {
+      ok: false,
+      detail: _stringifyApiDetail(err) || "bridge_error",
+    };
+  }
+  if ("body" in res && "status" in res) {
+    var inner = res.body;
+    if (inner == null || typeof inner !== "object" || Array.isArray(inner)) {
+      inner = {};
+    } else {
+      inner = Object.assign({}, inner);
+    }
+    if (!("ok" in inner)) {
+      inner.ok = !!res.ok;
+    }
+    if (!inner.ok) {
+      if (!("detail" in inner) && res.status) {
+        inner.detail = "http_" + res.status;
+      } else if (!("detail" in inner)) {
+        inner.detail = "http_error";
+      } else {
+        inner.detail = _stringifyApiDetail(inner.detail);
+      }
+    }
+    return inner;
+  }
+  if ("detail" in res && !("ok" in res)) {
+    return Object.assign({ ok: false }, res, {
+      detail: _stringifyApiDetail(res.detail),
+    });
+  }
+  return res;
+}
 async function api(method, path, body) {
   const fullPath = _finPulsePath(path);
   if (window.OpenAkita && typeof window.OpenAkita.api === "function") {
     const res = await window.OpenAkita.api(method, fullPath, body);
-    if (res && typeof res === "object" && "body" in res && "status" in res) {
-      const inner = res.body || {};
-      if (inner && typeof inner === "object") {
-        if (!("ok" in inner)) inner.ok = !!res.ok;
-        if (!inner.ok && !("detail" in inner) && res.status) {
-          inner.detail = "http_" + res.status;
-        }
-      }
-      return inner;
-    }
-    return res || { ok: false, error: "no-response" };
+    return _normalizeBridgeApiResult(res);
   }
   const resp = await fetch(fullPath, {
     method: method,
     headers: body ? { "Content-Type": "application/json" } : {},
     body: body ? JSON.stringify(body) : undefined,
   });
-  try { return await resp.json(); } catch (_) { return { ok: resp.ok }; }
+  var json;
+  try {
+    json = await resp.json();
+  } catch (_) {
+    return {
+      ok: false,
+      detail: (resp && resp.status) ? "http_" + resp.status : "empty_body",
+    };
+  }
+  if (json == null) {
+    return { ok: false, detail: (resp && resp.status) ? "http_" + resp.status : "empty_body" };
+  }
+  if (!resp.ok) {
+    if (typeof json === "object" && json && "detail" in json) {
+      return Object.assign({ ok: false }, json, {
+        detail: _stringifyApiDetail(json.detail),
+      });
+    }
+    return { ok: false, detail: (resp && resp.status) ? "http_" + resp.status : "request_failed" };
+  }
+  return json;
 }
 
 /* ── Settings hook (Phase 1 placeholder — Phase 6 hydrates from /config) ── */
@@ -1309,7 +1384,13 @@ function TodayTab() {
         msg = t("today.ingest.done.none_enabled");
       } else if (!resp || !resp.ok) {
         level = "error";
-        msg = "ingest failed: " + ((resp && resp.detail) || "unknown");
+        var why = "";
+        if (resp) {
+          why = _stringifyApiDetail(resp.detail);
+          if (!why && typeof resp.error === "string") { why = resp.error; }
+          if (!why && typeof resp.message === "string") { why = resp.message; }
+        }
+        msg = "ingest failed: " + (why || "unknown");
       } else if (inserted + updated > 0) {
         level = "success";
         msg = tfmt(t("today.ingest.done.green"), {
