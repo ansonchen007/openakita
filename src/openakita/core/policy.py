@@ -1660,19 +1660,20 @@ class PolicyEngine:
         self._ui_confirm_events.pop(confirm_id, None)
         self._ui_confirm_decisions.pop(confirm_id, None)
 
-    def resolve_ui_confirm(self, confirm_id: str, decision: str) -> None:
-        """用户通过按钮等方式确认后调用，唤醒 wait_for_ui_resolution。"""
-        if not confirm_id:
-            return
-        if confirm_id in self._ui_confirm_decisions:
-            return
-        self._ui_confirm_decisions[confirm_id] = decision
-        ev = self._ui_confirm_events.get(confirm_id)
-        if ev is not None:
-            ev.set()
-
     async def wait_for_ui_resolution(self, confirm_id: str, timeout: float) -> str:
-        """等待 resolve_ui_confirm；超时视为 deny。"""
+        """等待 ``resolve_ui_confirm`` 被调用；超时视为 ``deny``。
+
+        唤醒路径：任意调用 ``resolve_ui_confirm(confirm_id, decision)``
+        （HTTP endpoint / IM 按钮回调 / IM 纯文本回退）会在内部把
+        ``decision`` 写入 ``_ui_confirm_decisions`` 并 ``set()`` 对应
+        ``_ui_confirm_events[confirm_id]``。
+
+        注意：历史上此处曾短暂出现同名 ``resolve_ui_confirm`` 的"只 set
+        event、不 mark_confirmed"的简化版本，会覆盖真正做 pop +
+        mark_confirmed 的实现，导致 allow_session / allow_always 等
+        scope 全部失效。修复详情见 commit history；当前只保留
+        ``resolve_ui_confirm`` 的单一完整实现。
+        """
         if not confirm_id:
             return "deny"
         ev = self._ui_confirm_events.get(confirm_id)
@@ -1682,6 +1683,10 @@ class PolicyEngine:
             await asyncio.wait_for(ev.wait(), timeout=timeout)
         except TimeoutError:
             if confirm_id not in self._ui_confirm_decisions:
+                # 超时兜底：调用完整的 resolve_ui_confirm("deny")，
+                # 保证任何仍挂在 _pending_ui_confirms 的孤儿也会被 pop
+                # （decision="deny" 不在 scope_map 里，不会误加 allowlist），
+                # 同时唤醒 event 并落下 decision，保持与正常路径一致。
                 self.resolve_ui_confirm(confirm_id, "deny")
         return self._ui_confirm_decisions.get(confirm_id, "deny")
 
