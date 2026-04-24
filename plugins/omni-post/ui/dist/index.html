@@ -386,6 +386,80 @@
       padding: 10px 16px; border-top: 1px solid var(--border);
       display: flex; justify-content: flex-end; gap: 8px;
     }
+    /* Calendar ─────────────────────────────────────────────────────── */
+    .cal-header {
+      display: flex; align-items: center; gap: 10px; margin-bottom: 8px; flex-wrap: wrap;
+    }
+    .cal-title { font-size: 15px; font-weight: 600; color: var(--text); }
+    .cal-sub { font-size: 12px; color: var(--text-muted); }
+    .cal-grid {
+      display: grid; grid-template-columns: repeat(7, 1fr); gap: 8px;
+    }
+    .cal-day {
+      background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px;
+      min-height: 120px; padding: 8px; display: flex; flex-direction: column; gap: 6px;
+    }
+    .cal-day__header {
+      font-size: 11px; color: var(--text-muted); font-weight: 600;
+      display: flex; justify-content: space-between; align-items: center;
+      border-bottom: 1px dashed var(--border); padding-bottom: 4px;
+    }
+    .cal-day--today { border-color: var(--primary); box-shadow: 0 0 0 1px var(--primary) inset; }
+    .cal-day--today .cal-day__header { color: var(--primary); }
+    .cal-item {
+      border-radius: 6px; padding: 6px 8px; font-size: 11px;
+      background: rgba(99,102,241,.1); color: var(--text);
+      display: flex; flex-direction: column; gap: 2px; cursor: default;
+      border-left: 3px solid var(--primary);
+    }
+    .cal-item--conflict { border-left-color: var(--danger, #ef4444); background: rgba(239,68,68,.1); }
+    .cal-item__time { font-weight: 600; font-size: 11px; }
+    .cal-item__meta { color: var(--text-muted); font-size: 10.5px; }
+    .cal-day__empty { color: var(--text-muted); font-size: 11px; opacity: .6; padding: 6px 0; }
+    /* Platform accent colours — chosen for adequate contrast against the
+       soft indigo card background while still being visually distinct. */
+    .cal-item[data-platform="douyin"]      { border-left-color: #000; background: rgba(0,0,0,.08); }
+    .cal-item[data-platform="rednote"]     { border-left-color: #ff2442; background: rgba(255,36,66,.08); }
+    .cal-item[data-platform="bilibili"]    { border-left-color: #00a1d6; background: rgba(0,161,214,.08); }
+    .cal-item[data-platform="wechat_channels"] { border-left-color: #07c160; background: rgba(7,193,96,.08); }
+    .cal-item[data-platform="kuaishou"]    { border-left-color: #ff6a00; background: rgba(255,106,0,.08); }
+    .cal-item[data-platform="youtube"]     { border-left-color: #ff0000; background: rgba(255,0,0,.08); }
+    .cal-item[data-platform="tiktok"]      { border-left-color: #25f4ee; background: rgba(37,244,238,.12); }
+    .cal-item[data-platform="zhihu"]       { border-left-color: #0066ff; background: rgba(0,102,255,.08); }
+    .cal-item[data-platform="weibo"]       { border-left-color: #e6162d; background: rgba(230,22,45,.08); }
+    .cal-item[data-platform="wechat_mp"]   { border-left-color: #07c160; background: rgba(7,193,96,.08); }
+    /* Library ──────────────────────────────────────────────────────── */
+    .lib-tabs { display: flex; gap: 6px; margin-bottom: 10px; }
+    .lib-tabs .btn-pill {
+      border-radius: 999px; padding: 4px 14px; font-size: 12px;
+      background: var(--bg-card); border: 1px solid var(--border); color: var(--text);
+      cursor: pointer;
+    }
+    .lib-tabs .btn-pill.is-active { background: var(--primary); color: #fff; border-color: var(--primary); }
+    .lib-grid {
+      display: grid; gap: 10px;
+      grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    }
+    .lib-card {
+      background: var(--bg-card); border: 1px solid var(--border); border-radius: 10px;
+      padding: 10px; display: flex; flex-direction: column; gap: 6px;
+      font-size: 12px; color: var(--text);
+    }
+    .lib-card__thumb {
+      width: 100%; aspect-ratio: 16/9; background: rgba(0,0,0,.2);
+      border-radius: 6px; display: flex; align-items: center; justify-content: center;
+      color: var(--text-muted); font-size: 11px; overflow: hidden;
+    }
+    .lib-card__thumb img { width: 100%; height: 100%; object-fit: cover; }
+    .lib-card__name { font-weight: 600; font-size: 12.5px; word-break: break-all; }
+    .lib-card__meta { font-size: 11px; color: var(--text-muted); }
+    .lib-card__tags { display: flex; flex-wrap: wrap; gap: 4px; }
+    .lib-card__actions { display: flex; gap: 6px; justify-content: flex-end; }
+    .tpl-card__body {
+      font-size: 11px; color: var(--text-muted); font-family: var(--font-mono, ui-monospace, monospace);
+      background: rgba(0,0,0,.18); border-radius: 4px; padding: 6px 8px;
+      max-height: 110px; overflow: auto; white-space: pre-wrap; word-break: break-word;
+    }
   </style>
 </head>
 <body>
@@ -633,10 +707,50 @@ const I18N_DICT = {
     "omniPost.accounts.remove.confirm": "确认删除该账号？Cookie 与历史记录将一并移除。",
     "omniPost.accounts.refresh.toast.ok": "已刷新健康状态：{status}",
     "omniPost.accounts.refresh.toast.fail": "刷新失败：{msg}",
-    "omniPost.calendar.coming.title": "发布日历 (S3)",
-    "omniPost.calendar.coming.desc": "S3 将交付：月/周/日视图、拖拽改期、按平台配色、时区指示、同账号 30min 内冲突提示。",
-    "omniPost.library.coming.title": "素材 / 模板库 (S3)",
-    "omniPost.library.coming.desc": "S3 将交付：AssetLibrary（网格 + kind/tags/md5 筛选 + 已发平台标记 + 悬浮元数据）+ TemplateLibrary（文案 / 话题 / 封面模板）。",
+    "omniPost.calendar.header": "发布日历",
+    "omniPost.calendar.subtitle": "本周已排程的发布任务，按平台配色显示；冲突（同账号 30min 内）会高亮。",
+    "omniPost.calendar.prev": "上一周",
+    "omniPost.calendar.next": "下一周",
+    "omniPost.calendar.today": "回到本周",
+    "omniPost.calendar.empty": "本周暂无排程任务。在「发布」面板打开“定时发布”即可生成。",
+    "omniPost.calendar.conflict": "同账号 30 分钟内出现多条发布，建议错峰。",
+    "omniPost.calendar.day.header": "{date} · {weekday}",
+    "omniPost.calendar.item.status": "状态：{status}",
+    "omniPost.calendar.reschedule.ok": "已改期",
+    "omniPost.calendar.reschedule.fail": "改期失败：{msg}",
+    "omniPost.calendar.timezone": "时区：{tz}",
+    "omniPost.library.header": "素材 / 模板库",
+    "omniPost.library.subtitle": "已收录的多媒体素材 · 可复用的文案 / 话题 / 封面模板。",
+    "omniPost.library.tab.assets": "素材",
+    "omniPost.library.tab.templates": "模板",
+    "omniPost.library.assets.empty": "暂无素材。通过「发布」面板拖入文件或从 Asset Bus 拉取即可入库。",
+    "omniPost.library.assets.filter.all": "全部",
+    "omniPost.library.assets.filter.video": "视频",
+    "omniPost.library.assets.filter.image": "图片",
+    "omniPost.library.assets.filter.audio": "音频",
+    "omniPost.library.assets.filter.article": "文章",
+    "omniPost.library.assets.kind": "类型：{kind}",
+    "omniPost.library.assets.size": "大小：{size}",
+    "omniPost.library.assets.md5": "MD5：{md5}",
+    "omniPost.library.assets.source": "来源：{source}",
+    "omniPost.library.assets.delete": "删除",
+    "omniPost.library.assets.delete.confirm": "确认删除此素材？已发历史不会被删除，但后续无法再选用。",
+    "omniPost.library.templates.empty": "暂无模板。为反复使用的标题 / 话题 / 封面保存一份模板，节省重复输入。",
+    "omniPost.library.templates.kind.caption": "文案",
+    "omniPost.library.templates.kind.topic": "话题",
+    "omniPost.library.templates.kind.cover": "封面",
+    "omniPost.library.templates.add": "新增模板",
+    "omniPost.library.templates.tags": "标签：{tags}",
+    "omniPost.library.templates.delete.confirm": "确认删除此模板？",
+    "omniPost.library.templates.modal.title": "新建模板",
+    "omniPost.library.templates.modal.name": "名称",
+    "omniPost.library.templates.modal.kind": "类型",
+    "omniPost.library.templates.modal.body": "正文 / JSON",
+    "omniPost.library.templates.modal.tags": "标签（逗号分隔）",
+    "omniPost.library.templates.modal.submit": "保存",
+    "omniPost.library.templates.toast.ok": "模板已保存",
+    "omniPost.library.templates.toast.fail": "保存失败：{msg}",
+    "omniPost.library.templates.body.placeholder": "支持占位符 {{topic}}、{{brand}}，可粘贴 JSON 做平台差异化覆盖。",
     "omniPost.settings.coming.title": "设置 (S4)",
     "omniPost.settings.coming.desc": "S4 将交付：引擎切换（auto/pw/mp）、MultiPost 扩展探测与安装引导、并发 / 冷却 / 重试策略、代理、通知渠道、数据导出、危险区（清空素材/重置数据库）。",
     "omniPost.engine.pw": "Playwright",
@@ -758,10 +872,50 @@ const I18N_DICT = {
     "omniPost.accounts.remove.confirm": "Remove this account? Cookies and history will be deleted too.",
     "omniPost.accounts.refresh.toast.ok": "Health refreshed: {status}",
     "omniPost.accounts.refresh.toast.fail": "Refresh failed: {msg}",
-    "omniPost.calendar.coming.title": "Publish calendar (S3)",
-    "omniPost.calendar.coming.desc": "S3 delivers: month / week / day views, drag to reschedule, colour by platform, timezone indicator, 30-min collision warnings per account.",
-    "omniPost.library.coming.title": "Asset & template library (S3)",
-    "omniPost.library.coming.desc": "S3 delivers: AssetLibrary (grid + kind / tags / md5 filters + per-platform publish markers + hover metadata) and TemplateLibrary (caption / topic / cover mappings).",
+    "omniPost.calendar.header": "Publish calendar",
+    "omniPost.calendar.subtitle": "Scheduled tasks for the week, coloured by platform; same-account windows < 30 min are flagged.",
+    "omniPost.calendar.prev": "Previous week",
+    "omniPost.calendar.next": "Next week",
+    "omniPost.calendar.today": "Jump to this week",
+    "omniPost.calendar.empty": "No scheduled publishes this week. Enable 'Schedule' on the Publish tab to queue some.",
+    "omniPost.calendar.conflict": "Multiple publishes for one account within 30 min; consider staggering.",
+    "omniPost.calendar.day.header": "{date} · {weekday}",
+    "omniPost.calendar.item.status": "Status: {status}",
+    "omniPost.calendar.reschedule.ok": "Rescheduled",
+    "omniPost.calendar.reschedule.fail": "Reschedule failed: {msg}",
+    "omniPost.calendar.timezone": "Timezone: {tz}",
+    "omniPost.library.header": "Asset & template library",
+    "omniPost.library.subtitle": "All ingested media · reusable caption / topic / cover templates.",
+    "omniPost.library.tab.assets": "Assets",
+    "omniPost.library.tab.templates": "Templates",
+    "omniPost.library.assets.empty": "No assets yet. Drop files into the Publish tab or pull from Asset Bus to populate.",
+    "omniPost.library.assets.filter.all": "All",
+    "omniPost.library.assets.filter.video": "Video",
+    "omniPost.library.assets.filter.image": "Image",
+    "omniPost.library.assets.filter.audio": "Audio",
+    "omniPost.library.assets.filter.article": "Article",
+    "omniPost.library.assets.kind": "Kind: {kind}",
+    "omniPost.library.assets.size": "Size: {size}",
+    "omniPost.library.assets.md5": "MD5: {md5}",
+    "omniPost.library.assets.source": "Source: {source}",
+    "omniPost.library.assets.delete": "Delete",
+    "omniPost.library.assets.delete.confirm": "Delete this asset? Publish history is preserved, but you will not be able to reuse it.",
+    "omniPost.library.templates.empty": "No templates yet. Save repeatable captions / topics / covers so they're one click away.",
+    "omniPost.library.templates.kind.caption": "Caption",
+    "omniPost.library.templates.kind.topic": "Topic",
+    "omniPost.library.templates.kind.cover": "Cover",
+    "omniPost.library.templates.add": "New template",
+    "omniPost.library.templates.tags": "Tags: {tags}",
+    "omniPost.library.templates.delete.confirm": "Delete this template?",
+    "omniPost.library.templates.modal.title": "Create template",
+    "omniPost.library.templates.modal.name": "Name",
+    "omniPost.library.templates.modal.kind": "Kind",
+    "omniPost.library.templates.modal.body": "Body / JSON",
+    "omniPost.library.templates.modal.tags": "Tags (comma-separated)",
+    "omniPost.library.templates.modal.submit": "Save",
+    "omniPost.library.templates.toast.ok": "Template saved",
+    "omniPost.library.templates.toast.fail": "Save failed: {msg}",
+    "omniPost.library.templates.body.placeholder": "Placeholders like {{topic}} / {{brand}} are allowed; paste JSON for per-platform overrides.",
     "omniPost.settings.coming.title": "Settings (S4)",
     "omniPost.settings.coming.desc": "S4 delivers: engine switch (auto / pw / mp), MultiPost extension detection + install wizard, concurrency / cooldown / retry policy, proxy, IM channels, data export, danger zone (clear assets / reset DB).",
     "omniPost.engine.pw": "Playwright",
@@ -1957,6 +2111,434 @@ function AccountsTab() {
   );
 }
 
+/* ─── Calendar Tab ──────────────────────────────────────────────────
+   Tab 4: week-view publish calendar. Conflict detection flags tasks
+   that land on the same account within 30 min of another — operations
+   usually cares more about the same-account window than cross-account
+   bursts, which are intentional in matrix mode.
+
+   We deliberately render only scheduled_at dates (not finished
+   publishes) so the calendar stays focused on "what's coming up" and
+   doesn't turn into a crowded activity log. The Tasks tab already
+   covers post-mortem visibility.
+   ───────────────────────────────────────────────────────────────── */
+function startOfWeek(d) {
+  const copy = new Date(d.getTime());
+  const day = copy.getDay(); // 0 = Sunday in browsers
+  const diff = (day === 0 ? -6 : 1 - day); // normalise to Monday-start
+  copy.setDate(copy.getDate() + diff);
+  copy.setHours(0, 0, 0, 0);
+  return copy;
+}
+function addDays(d, n) {
+  const copy = new Date(d.getTime());
+  copy.setDate(copy.getDate() + n);
+  return copy;
+}
+function isoAt(d, h, m, s) {
+  const copy = new Date(d.getTime());
+  copy.setHours(h, m, s, 0);
+  return copy.toISOString();
+}
+function formatWeekdayShort(d, loc) {
+  try { return d.toLocaleDateString(loc, { weekday: "short" }); }
+  catch (_e) { return ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"][(d.getDay() + 6) % 7]; }
+}
+
+function CalendarTab() {
+  const t = useT();
+  const loc = (window.navigator && window.navigator.language) || "en-US";
+  const [weekStart, setWeekStart] = useState(function () { return startOfWeek(new Date()); });
+  const [items, setItems] = useState([]);
+  const { accounts } = useAccounts();
+
+  const weekEnd = useMemo(function () { return addDays(weekStart, 6); }, [weekStart]);
+
+  const refresh = useCallback(function () {
+    const from = isoAt(weekStart, 0, 0, 0);
+    const to = isoAt(weekEnd, 23, 59, 59);
+    pluginApi("GET", "/calendar?from=" + encodeURIComponent(from) + "&to=" + encodeURIComponent(to))
+      .then(function (r) {
+        if (r && r.ok && r.body && Array.isArray(r.body.items)) setItems(r.body.items);
+        else setItems([]);
+      });
+  }, [weekStart, weekEnd]);
+  useEffect(refresh, [refresh]);
+  useEffect(function () {
+    const off = onEvent("plugin:omni-post:task_update", refresh);
+    const off2 = onEvent("plugin:omni-post:task_rescheduled", refresh);
+    return function () {};
+  }, [refresh]);
+
+  // Bucket tasks per day in local time so daylight-savings edges land
+  // on the correct cell. The cal_day comparator uses the user's locale,
+  // not UTC, which matches what operators expect when reading the grid.
+  const byDay = useMemo(function () {
+    const buckets = []; for (let i = 0; i < 7; i++) buckets.push([]);
+    items.forEach(function (task) {
+      const d = new Date(task.scheduled_at);
+      if (isNaN(d.getTime())) return;
+      const idx = Math.floor((d - weekStart) / (24 * 3600 * 1000));
+      if (idx >= 0 && idx < 7) buckets[idx].push(task);
+    });
+    buckets.forEach(function (b) { b.sort(function (a, c) { return a.scheduled_at < c.scheduled_at ? -1 : 1; }); });
+    return buckets;
+  }, [items, weekStart]);
+
+  // Same-account-within-30min collision detector. O(n log n) sort,
+  // O(n) sweep per day; n is usually small but this stays safe even
+  // if matrix mode fires dozens of rows per day.
+  const conflictIds = useMemo(function () {
+    const flagged = new Set();
+    byDay.forEach(function (dayTasks) {
+      const byAcc = {};
+      dayTasks.forEach(function (task) {
+        const bucket = byAcc[task.account_id] = byAcc[task.account_id] || [];
+        bucket.push(task);
+      });
+      Object.keys(byAcc).forEach(function (aid) {
+        const arr = byAcc[aid];
+        for (let i = 1; i < arr.length; i++) {
+          const dt = (new Date(arr[i].scheduled_at) - new Date(arr[i-1].scheduled_at)) / 60000;
+          if (dt < 30) { flagged.add(arr[i].id); flagged.add(arr[i-1].id); }
+        }
+      });
+    });
+    return flagged;
+  }, [byDay]);
+
+  const accById = useMemo(function () {
+    const out = {}; accounts.forEach(function (a) { out[a.id] = a; }); return out;
+  }, [accounts]);
+
+  const tz = (Intl && Intl.DateTimeFormat) ? Intl.DateTimeFormat().resolvedOptions().timeZone : "UTC";
+  const today = new Date(); today.setHours(0,0,0,0);
+  return (
+    <div role="tabpanel" id="omnipost-pane-calendar">
+      <div className="cal-header">
+        <div className="flex-1">
+          <div className="cal-title">{t("omniPost.calendar.header")}</div>
+          <div className="cal-sub">{t("omniPost.calendar.subtitle")}</div>
+          <div className="cal-sub">{t("omniPost.calendar.timezone", { tz: tz })}</div>
+        </div>
+        <button className="btn btn-sm" onClick={function () { setWeekStart(addDays(weekStart, -7)); }}>
+          <Ico name="chevron-up" /> {t("omniPost.calendar.prev")}
+        </button>
+        <button className="btn btn-sm" onClick={function () { setWeekStart(startOfWeek(new Date())); }}>
+          {t("omniPost.calendar.today")}
+        </button>
+        <button className="btn btn-sm" onClick={function () { setWeekStart(addDays(weekStart, 7)); }}>
+          {t("omniPost.calendar.next")} <Ico name="chevron-down" />
+        </button>
+        <button className="btn btn-sm" onClick={refresh}><Ico name="refresh" /> {t("omniPost.common.refresh")}</button>
+      </div>
+      {items.length === 0 ? (
+        <div className="stub"><Ico name="info" /><p>{t("omniPost.calendar.empty")}</p></div>
+      ) : null}
+      <div className="cal-grid">
+        {Array.from({ length: 7 }, function (_u, i) {
+          const day = addDays(weekStart, i);
+          const isToday = day.getTime() === today.getTime();
+          const bucket = byDay[i];
+          return (
+            <div key={i} className={"cal-day" + (isToday ? " cal-day--today" : "")}>
+              <div className="cal-day__header">
+                <span>{(day.getMonth() + 1) + "/" + day.getDate()}</span>
+                <span>{formatWeekdayShort(day, loc)}</span>
+              </div>
+              {bucket.length === 0
+                ? <div className="cal-day__empty">—</div>
+                : bucket.map(function (task) {
+                  const d = new Date(task.scheduled_at);
+                  const hm = (String(d.getHours()).padStart(2, "0")) + ":" + (String(d.getMinutes()).padStart(2, "0"));
+                  const acc = accById[task.account_id];
+                  const conflict = conflictIds.has(task.id);
+                  return (
+                    <div key={task.id}
+                         className={"cal-item" + (conflict ? " cal-item--conflict" : "")}
+                         data-platform={task.platform}
+                         title={t("omniPost.calendar.item.status", { status: task.status })}>
+                      <div className="cal-item__time">{hm} · {task.platform}</div>
+                      <div className="cal-item__meta">
+                        {acc ? acc.nickname : shortId(task.account_id)}
+                        {conflict ? (<span style={{ color: "var(--danger, #ef4444)", marginLeft: 6 }}>
+                          <Ico name="warn" /> {t("omniPost.calendar.conflict")}
+                        </span>) : null}
+                      </div>
+                    </div>
+                  );
+                })}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/* ─── Library Tab (assets + templates) ──────────────────────────────
+   Tab 5: left-hand segmented control toggles between the asset grid
+   and the template library. We load both lazily but cache the lists in
+   top-level state, so switching segments never re-hits the backend. */
+function LibraryTab() {
+  const t = useT();
+  const [seg, setSeg] = useState("assets");
+  return (
+    <div role="tabpanel" id="omnipost-pane-library">
+      <div className="flex gap-2 items-center" style={{ marginBottom: 10 }}>
+        <div className="flex-1">
+          <div className="card-title" style={{ marginBottom: 0 }}>{t("omniPost.library.header")}</div>
+          <div className="cal-sub">{t("omniPost.library.subtitle")}</div>
+        </div>
+      </div>
+      <div className="lib-tabs">
+        <button className={"btn-pill" + (seg === "assets" ? " is-active" : "")}
+                onClick={function () { setSeg("assets"); }}>
+          {t("omniPost.library.tab.assets")}
+        </button>
+        <button className={"btn-pill" + (seg === "templates" ? " is-active" : "")}
+                onClick={function () { setSeg("templates"); }}>
+          {t("omniPost.library.tab.templates")}
+        </button>
+      </div>
+      {seg === "assets" ? <LibraryAssets /> : <LibraryTemplates />}
+    </div>
+  );
+}
+
+function LibraryAssets() {
+  const t = useT();
+  const [assets, setAssets] = useState([]);
+  const [kind, setKind] = useState("all");
+
+  const refresh = useCallback(function () {
+    const qs = kind === "all" ? "" : "?kind=" + encodeURIComponent(kind);
+    pluginApi("GET", "/assets" + qs).then(function (r) {
+      if (r && r.ok && r.body && Array.isArray(r.body.assets)) setAssets(r.body.assets);
+    });
+  }, [kind]);
+  useEffect(refresh, [refresh]);
+  useEffect(function () {
+    const off = onEvent("plugin:omni-post:upload_completed", refresh);
+    const off2 = onEvent("plugin:omni-post:asset_bus_updated", refresh);
+    return function () {};
+  }, [refresh]);
+
+  async function onDelete(asset) {
+    if (!window.confirm(t("omniPost.library.assets.delete.confirm"))) return;
+    const r = await pluginApi("DELETE", "/assets/" + encodeURIComponent(asset.id));
+    if (r && r.ok) refresh();
+  }
+
+  const filters = ["all", "video", "image", "audio", "article"];
+  return (
+    <div>
+      <div className="flex gap-2 flex-wrap" style={{ marginBottom: 10 }}>
+        {filters.map(function (k) {
+          return (
+            <button key={k}
+                    className={"btn btn-sm" + (kind === k ? " btn-primary" : "")}
+                    onClick={function () { setKind(k); }}>
+              {t("omniPost.library.assets.filter." + k)}
+            </button>
+          );
+        })}
+        <span style={{ flex: 1 }} />
+        <button className="btn btn-sm" onClick={refresh}><Ico name="refresh" /> {t("omniPost.common.refresh")}</button>
+      </div>
+      {assets.length === 0 ? (
+        <div className="stub"><Ico name="info" /><p>{t("omniPost.library.assets.empty")}</p></div>
+      ) : (
+        <div className="lib-grid">
+          {assets.map(function (a) {
+            const thumb = a.thumb_path ? ("/thumbs/" + encodeURIComponent(a.thumb_path.split(/[\\/]/).pop())) : null;
+            return (
+              <div key={a.id} className="lib-card">
+                <div className="lib-card__thumb">
+                  {thumb
+                    ? <img src={"/api/plugins/omni-post" + thumb} alt="" onError={function (e) { e.target.style.display = "none"; }} />
+                    : a.kind}
+                </div>
+                <div className="lib-card__name" title={a.filename}>{a.filename}</div>
+                <div className="lib-card__meta">
+                  <div>{t("omniPost.library.assets.kind", { kind: a.kind })}</div>
+                  <div>{t("omniPost.library.assets.size", { size: formatBytes(a.filesize) })}</div>
+                  {a.source_plugin ? <div>{t("omniPost.library.assets.source", { source: a.source_plugin })}</div> : null}
+                  <div>{t("omniPost.library.assets.md5", { md5: String(a.md5 || "").slice(0, 10) })}</div>
+                </div>
+                {a.tags && a.tags.length ? (
+                  <div className="lib-card__tags">
+                    {a.tags.map(function (tag, i) {
+                      return <span key={i} className="badge badge-pending">{tag}</span>;
+                    })}
+                  </div>
+                ) : null}
+                <div className="lib-card__actions">
+                  <button className="btn btn-sm" onClick={function () { onDelete(a); }}>
+                    <Ico name="trash" /> {t("omniPost.library.assets.delete")}
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function LibraryTemplates() {
+  const t = useT();
+  const [templates, setTemplates] = useState([]);
+  const [kind, setKind] = useState("all");
+  const [showAdd, setShowAdd] = useState(false);
+
+  const refresh = useCallback(function () {
+    const qs = kind === "all" ? "" : "?kind=" + encodeURIComponent(kind);
+    pluginApi("GET", "/templates" + qs).then(function (r) {
+      if (r && r.ok && r.body && Array.isArray(r.body.templates)) setTemplates(r.body.templates);
+    });
+  }, [kind]);
+  useEffect(refresh, [refresh]);
+  useEffect(function () {
+    const off = onEvent("plugin:omni-post:template_created", refresh);
+    return function () {};
+  }, [refresh]);
+
+  async function onDelete(tpl) {
+    if (!window.confirm(t("omniPost.library.templates.delete.confirm"))) return;
+    const r = await pluginApi("DELETE", "/templates/" + encodeURIComponent(tpl.id));
+    if (r && r.ok) refresh();
+  }
+
+  const kinds = ["all", "caption", "topic", "cover"];
+  return (
+    <div>
+      <div className="flex gap-2 flex-wrap" style={{ marginBottom: 10 }}>
+        {kinds.map(function (k) {
+          return (
+            <button key={k}
+                    className={"btn btn-sm" + (kind === k ? " btn-primary" : "")}
+                    onClick={function () { setKind(k); }}>
+              {k === "all"
+                ? t("omniPost.library.assets.filter.all")
+                : t("omniPost.library.templates.kind." + k)}
+            </button>
+          );
+        })}
+        <span style={{ flex: 1 }} />
+        <button className="btn btn-sm btn-primary" onClick={function () { setShowAdd(true); }}>
+          <Ico name="plus" /> {t("omniPost.library.templates.add")}
+        </button>
+      </div>
+      {templates.length === 0 ? (
+        <div className="stub"><Ico name="info" /><p>{t("omniPost.library.templates.empty")}</p></div>
+      ) : (
+        <div className="lib-grid">
+          {templates.map(function (tpl) {
+            let bodyPreview = "";
+            try { bodyPreview = JSON.stringify(tpl.body, null, 2); } catch (_e) { bodyPreview = String(tpl.body || ""); }
+            return (
+              <div key={tpl.id} className="lib-card">
+                <div className="lib-card__name">{tpl.name}</div>
+                <div className="lib-card__meta">
+                  {t("omniPost.library.templates.kind." + (tpl.kind || "caption"))}
+                </div>
+                <div className="tpl-card__body">{bodyPreview}</div>
+                {tpl.tags && tpl.tags.length ? (
+                  <div className="lib-card__meta">
+                    {t("omniPost.library.templates.tags", { tags: tpl.tags.join(", ") })}
+                  </div>
+                ) : null}
+                <div className="lib-card__actions">
+                  <button className="btn btn-sm" onClick={function () { onDelete(tpl); }}>
+                    <Ico name="trash" /> {t("omniPost.library.assets.delete")}
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+      {showAdd ? <TemplateAddModal onClose={function () { setShowAdd(false); }}
+                                    onSaved={function () { setShowAdd(false); refresh(); }} /> : null}
+    </div>
+  );
+}
+
+function TemplateAddModal({ onClose, onSaved }) {
+  const t = useT();
+  const [name, setName] = useState("");
+  const [kind, setKind] = useState("caption");
+  const [bodyText, setBodyText] = useState("");
+  const [tagsText, setTagsText] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+
+  async function submit() {
+    if (!name.trim()) return;
+    let body = {};
+    const trimmed = bodyText.trim();
+    if (trimmed) {
+      try { body = JSON.parse(trimmed); }
+      catch (_e) { body = { text: bodyText }; } // free-form text fallback so non-JSON users still work
+    }
+    const tags = tagsText.split(",").map(function (s) { return s.trim(); }).filter(Boolean);
+    setSubmitting(true);
+    try {
+      const r = await pluginApi("POST", "/templates", { name: name.trim(), kind: kind, body: body, tags: tags });
+      if (r && r.ok) {
+        showToast(t("omniPost.library.templates.toast.ok"), "success");
+        onSaved && onSaved();
+      } else {
+        showToast(t("omniPost.library.templates.toast.fail", { msg: (r && r.body && r.body.detail) || r.status }), "error");
+      }
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div className="ak-modal-mask" onClick={onClose}>
+      <div className="ak-modal" onClick={function (e) { e.stopPropagation(); }}>
+        <div className="ak-modal__head">
+          <span>{t("omniPost.library.templates.modal.title")}</span>
+          <button className="btn btn-sm btn-ghost" onClick={onClose}><Ico name="close" /></button>
+        </div>
+        <div className="ak-modal__body">
+          <label>
+            <div className="cal-sub">{t("omniPost.library.templates.modal.name")}</div>
+            <input className="input" value={name} onChange={function (e) { setName(e.target.value); }} />
+          </label>
+          <label>
+            <div className="cal-sub">{t("omniPost.library.templates.modal.kind")}</div>
+            <select className="input" value={kind} onChange={function (e) { setKind(e.target.value); }}>
+              <option value="caption">{t("omniPost.library.templates.kind.caption")}</option>
+              <option value="topic">{t("omniPost.library.templates.kind.topic")}</option>
+              <option value="cover">{t("omniPost.library.templates.kind.cover")}</option>
+            </select>
+          </label>
+          <label>
+            <div className="cal-sub">{t("omniPost.library.templates.modal.body")}</div>
+            <textarea className="input" rows={6} value={bodyText}
+                      placeholder={t("omniPost.library.templates.body.placeholder")}
+                      onChange={function (e) { setBodyText(e.target.value); }} />
+          </label>
+          <label>
+            <div className="cal-sub">{t("omniPost.library.templates.modal.tags")}</div>
+            <input className="input" value={tagsText} onChange={function (e) { setTagsText(e.target.value); }} />
+          </label>
+        </div>
+        <div className="ak-modal__foot">
+          <button className="btn btn-sm" onClick={onClose}>{t("omniPost.common.cancel")}</button>
+          <button className="btn btn-sm btn-primary" disabled={submitting || !name.trim()} onClick={submit}>
+            {t("omniPost.library.templates.modal.submit")}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* ─── Stubs for tabs that land in later sprints ────────────────────── */
 function StubTab({ titleKey, descKey }) {
   const t = useT();
@@ -1977,8 +2559,8 @@ function App() {
     case "publish":  pane = <PublishTab />; break;
     case "tasks":    pane = <TasksTab />;   break;
     case "accounts": pane = <AccountsTab />; break;
-    case "calendar": pane = <StubTab titleKey="omniPost.calendar.coming.title" descKey="omniPost.calendar.coming.desc" />; break;
-    case "library":  pane = <StubTab titleKey="omniPost.library.coming.title" descKey="omniPost.library.coming.desc" />; break;
+    case "calendar": pane = <CalendarTab />; break;
+    case "library":  pane = <LibraryTab />;  break;
     case "settings": pane = <StubTab titleKey="omniPost.settings.coming.title" descKey="omniPost.settings.coming.desc" />; break;
     default: pane = <PublishTab />;
   }

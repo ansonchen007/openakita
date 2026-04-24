@@ -167,6 +167,23 @@ CREATE TABLE IF NOT EXISTS selectors_health (
     last_error        TEXT,
     last_alerted_at   TEXT
 );
+
+-- 8. Templates (caption + topic + cover mappings).
+-- Kept plain on purpose: a template is just a reusable payload preset,
+-- so we carry a single JSON blob ('body_json') instead of modelling
+-- every field as a column. Platform-specific overrides live inside
+-- ``body_json.per_platform`` so renaming a platform never migrates the
+-- schema.
+CREATE TABLE IF NOT EXISTS templates (
+    id            TEXT PRIMARY KEY,
+    name          TEXT NOT NULL,
+    kind          TEXT NOT NULL DEFAULT 'caption',  -- caption|topic|cover
+    body_json     TEXT NOT NULL DEFAULT '{}',
+    tags_json     TEXT NOT NULL DEFAULT '[]',
+    created_at    TEXT NOT NULL,
+    updated_at    TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_templates_kind ON templates(kind);
 """
 
 
@@ -859,6 +876,201 @@ class OmniPostTaskManager:
         ) as cur:
             rows = await cur.fetchall()
         return [dict(r) for r in rows]
+
+    # ── Calendar queries ─────────────────────────────────────────────
+
+    async def list_scheduled_tasks_in_range(
+        self,
+        *,
+        from_iso: str,
+        to_iso: str,
+        platform: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Return tasks with ``scheduled_at`` inside ``[from_iso, to_iso]``.
+
+        Powers the calendar Tab. We query ``tasks`` directly (not
+        ``schedules``) so the UI sees one row per publish attempt and can
+        show platform / account inline without an extra join hop.
+
+        The lower bound is inclusive, the upper bound is inclusive too —
+        calendar ranges are rendered by day buckets, so "midnight to
+        23:59:59" must land on the right day.
+        """
+
+        conn = self._conn()
+        clauses = [
+            "scheduled_at IS NOT NULL",
+            "scheduled_at >= ?",
+            "scheduled_at <= ?",
+            "status IN ('pending', 'running', 'scheduled', 'succeeded', 'failed')",
+        ]
+        args: list[Any] = [from_iso, to_iso]
+        if platform:
+            clauses.append("platform = ?")
+            args.append(platform)
+        sql = (
+            "SELECT * FROM tasks WHERE "
+            + " AND ".join(clauses)
+            + " ORDER BY scheduled_at ASC LIMIT 1000"
+        )
+        async with conn.execute(sql, tuple(args)) as cur:
+            rows = await cur.fetchall()
+        return [d for d in (_row_to_dict(r) for r in rows) if d is not None]
+
+    async def find_schedule_for_task(self, task_id: str) -> dict[str, Any] | None:
+        """Most-recent schedule row for a given task (if any)."""
+
+        conn = self._conn()
+        async with conn.execute(
+            "SELECT * FROM schedules WHERE task_id=? ORDER BY created_at DESC LIMIT 1",
+            (task_id,),
+        ) as cur:
+            row = await cur.fetchone()
+        return dict(row) if row is not None else None
+
+    async def reschedule_task(
+        self,
+        *,
+        task_id: str,
+        new_scheduled_at: str,
+    ) -> bool:
+        """Move a scheduled task to a new UTC ISO time.
+
+        Returns True iff the update touched a row. Refuses to touch tasks
+        that already left the ``pending`` state — rescheduling something
+        that already started would confuse receipts / history.
+        """
+
+        conn = self._conn()
+        cur = await conn.execute(
+            "UPDATE tasks SET scheduled_at=? WHERE id=? AND status='pending'",
+            (new_scheduled_at, task_id),
+        )
+        await conn.commit()
+        touched_task = (cur.rowcount or 0) > 0
+        if touched_task:
+            await conn.execute(
+                """
+                UPDATE schedules SET scheduled_at=?
+                WHERE task_id=? AND status='scheduled'
+                """,
+                (new_scheduled_at, task_id),
+            )
+            await conn.commit()
+        return touched_task
+
+    # ── Templates ────────────────────────────────────────────────────
+
+    async def create_template(
+        self,
+        *,
+        name: str,
+        kind: str = "caption",
+        body: dict[str, Any] | None = None,
+        tags: list[str] | None = None,
+    ) -> str:
+        """Insert a template and return its id."""
+
+        if kind not in {"caption", "topic", "cover"}:
+            raise ValueError(f"unknown template kind: {kind!r}")
+        if not name.strip():
+            raise ValueError("template name is required")
+        conn = self._conn()
+        tid = _new_id("tpl")
+        now = _utc_iso()
+        await conn.execute(
+            """
+            INSERT INTO templates (
+                id, name, kind, body_json, tags_json, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                tid,
+                name.strip(),
+                kind,
+                json.dumps(body or {}, ensure_ascii=False),
+                json.dumps(tags or [], ensure_ascii=False),
+                now,
+                now,
+            ),
+        )
+        await conn.commit()
+        return tid
+
+    async def list_templates(self, *, kind: str | None = None) -> list[dict[str, Any]]:
+        conn = self._conn()
+        if kind:
+            async with conn.execute(
+                "SELECT * FROM templates WHERE kind=? ORDER BY updated_at DESC",
+                (kind,),
+            ) as cur:
+                rows = await cur.fetchall()
+        else:
+            async with conn.execute(
+                "SELECT * FROM templates ORDER BY updated_at DESC",
+            ) as cur:
+                rows = await cur.fetchall()
+        return [self._template_row_to_dict(r) for r in rows]
+
+    async def update_template(
+        self,
+        template_id: str,
+        *,
+        name: str | None = None,
+        body: dict[str, Any] | None = None,
+        tags: list[str] | None = None,
+    ) -> bool:
+        conn = self._conn()
+        updates: list[str] = []
+        args: list[Any] = []
+        if name is not None:
+            if not name.strip():
+                raise ValueError("template name cannot be empty")
+            updates.append("name=?")
+            args.append(name.strip())
+        if body is not None:
+            updates.append("body_json=?")
+            args.append(json.dumps(body, ensure_ascii=False))
+        if tags is not None:
+            updates.append("tags_json=?")
+            args.append(json.dumps(tags, ensure_ascii=False))
+        if not updates:
+            return False
+        updates.append("updated_at=?")
+        args.append(_utc_iso())
+        args.append(template_id)
+        cur = await conn.execute(
+            f"UPDATE templates SET {', '.join(updates)} WHERE id=?",
+            tuple(args),
+        )
+        await conn.commit()
+        return (cur.rowcount or 0) > 0
+
+    async def delete_template(self, template_id: str) -> bool:
+        conn = self._conn()
+        cur = await conn.execute("DELETE FROM templates WHERE id=?", (template_id,))
+        await conn.commit()
+        return (cur.rowcount or 0) > 0
+
+    @staticmethod
+    def _template_row_to_dict(row: Any) -> dict[str, Any]:
+        try:
+            body = json.loads(row["body_json"] or "{}")
+        except (json.JSONDecodeError, TypeError):
+            body = {}
+        try:
+            tags = json.loads(row["tags_json"] or "[]")
+        except (json.JSONDecodeError, TypeError):
+            tags = []
+        return {
+            "id": row["id"],
+            "name": row["name"],
+            "kind": row["kind"],
+            "body": body,
+            "tags": tags,
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+        }
 
     # ── Aggregates ───────────────────────────────────────────────────
 

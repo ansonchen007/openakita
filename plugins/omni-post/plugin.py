@@ -51,7 +51,7 @@ from datetime import UTC
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 from omni_post_adapters import load_selector_bundle
 from omni_post_assets import UploadPipeline
 from omni_post_cookies import CookieEncryptError, CookiePool
@@ -403,6 +403,88 @@ class OmniPostPlugin(PluginBase):
             assert self._tm is not None
             removed = await self._tm.delete_asset(asset_id)
             return {"ok": removed}
+
+        # Calendar ─────────────────────────────────────────────────
+        # Tab 4 driver. `from`/`to` are ISO strings so the client owns
+        # timezone conversion (the backend stays strictly UTC).
+
+        @router.get("/calendar")
+        async def list_calendar(
+            from_: str = Query(..., alias="from"),
+            to: str = Query(...),
+            platform: str | None = None,
+        ) -> dict:
+            self._require_tm()
+            assert self._tm is not None
+            items = await self._tm.list_scheduled_tasks_in_range(
+                from_iso=from_,
+                to_iso=to,
+                platform=platform,
+            )
+            return {"items": items, "count": len(items)}
+
+        @router.put("/calendar/{task_id}")
+        async def reschedule_task(task_id: str, body: _RescheduleBody) -> dict:
+            self._require_tm()
+            assert self._tm is not None
+            if self._api is not None:
+                ok = await self._tm.reschedule_task(
+                    task_id=task_id,
+                    new_scheduled_at=body.scheduled_at,
+                )
+                if ok:
+                    self._api.broadcast_ui_event(
+                        "task_rescheduled",
+                        {"task_id": task_id, "scheduled_at": body.scheduled_at},
+                    )
+                return {"ok": ok}
+            return {"ok": False, "reason": "host_offline"}
+
+        # Library: templates ───────────────────────────────────────
+        # Tab 5 (the right half). Assets already have their own routes
+        # above; templates round out the library so captions / topics /
+        # covers can be saved once and reused across campaigns.
+
+        @router.get("/templates")
+        async def list_templates(kind: str | None = None) -> dict:
+            self._require_tm()
+            assert self._tm is not None
+            return {"templates": await self._tm.list_templates(kind=kind)}
+
+        @router.post("/templates")
+        async def create_template(body: _TemplateCreateBody) -> dict:
+            self._require_tm()
+            assert self._tm is not None
+            tid = await self._tm.create_template(
+                name=body.name,
+                kind=body.kind,
+                body=body.body,
+                tags=body.tags,
+            )
+            if self._api is not None:
+                self._api.broadcast_ui_event(
+                    "template_created",
+                    {"template_id": tid, "kind": body.kind},
+                )
+            return {"template_id": tid}
+
+        @router.put("/templates/{template_id}")
+        async def update_template(template_id: str, body: _TemplateUpdateBody) -> dict:
+            self._require_tm()
+            assert self._tm is not None
+            ok = await self._tm.update_template(
+                template_id,
+                name=body.name,
+                body=body.body,
+                tags=body.tags,
+            )
+            return {"ok": ok}
+
+        @router.delete("/templates/{template_id}")
+        async def delete_template(template_id: str) -> dict:
+            self._require_tm()
+            assert self._tm is not None
+            return {"ok": await self._tm.delete_template(template_id)}
 
         @router.get("/thumbs/{filename:path}")
         async def serve_thumb(filename: str) -> FileResponse:
@@ -955,6 +1037,36 @@ class _AssetBusPullBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     asset_id: str
+
+
+class _RescheduleBody(BaseModel):
+    """Payload for ``PUT /calendar/{task_id}``.
+
+    We keep this strict (``extra="forbid"``) so the UI never silently
+    sends a stray field that the backend ignores — surprising silence
+    in rescheduling is worse than a 422.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    scheduled_at: str  # ISO-8601 UTC, e.g. ``2026-05-01T09:00:00+00:00``
+
+
+class _TemplateCreateBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    kind: str = "caption"          # caption | topic | cover
+    body: dict[str, Any] | None = None
+    tags: list[str] | None = None
+
+
+class _TemplateUpdateBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str | None = None
+    body: dict[str, Any] | None = None
+    tags: list[str] | None = None
 
 
 # ── Tool definitions (LLM-callable) ───────────────────────────────
