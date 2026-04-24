@@ -354,9 +354,9 @@ def apply_budget_to_sections(
     }
 
     # 截断策略
-    # NOTE: skills 段刻意改为 "none" — 与 hermes-agent 的零截断范式对齐，
-    # 由 SkillCatalog.get_grouped_compact_catalog 通过紧凑分组本身控制规模，
-    # 避免新装技能因排序靠后或预算紧张被截断从而对 LLM 不可见。
+    # NOTE: skills 段使用 "none" — SkillCatalog.get_grouped_compact_catalog
+    # 内部自带三级自适应压缩（完整描述 → 短描述 → 仅名字），
+    # 既保证所有技能名字可见，又控制 token 总量。
     strategy_map = {
         "memory": "start",  # 记忆保留最新
         "skills": "none",  # 技能不截断（紧凑分组本身已小）

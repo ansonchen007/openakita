@@ -510,6 +510,10 @@ export function FeedbackModal({ open, onClose, apiBase, initialMode = "bug", onN
       captchaNonceRef.current = "";
       abortRef.current = null;
       setSubmitting(false);
+      // Release the dedup guard so the user can retry in the same open modal
+      // session (otherwise a subsequent click is silently dropped by the
+      // `if (submittingRef.current) return;` check at the top of this handler).
+      submittingRef.current = false;
     }
   }, [captchaCfg, mode, title, description, steps, uploadLogs, uploadDebug, contactEmail, contactWechat, imageFiles, apiBase, t, resetForm, useOfflineIpc, handleSubmitViaIpc, handleSseError]);
 

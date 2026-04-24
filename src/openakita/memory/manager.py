@@ -25,6 +25,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import os
 import threading
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -297,16 +298,25 @@ class MemoryManager:
 
     def _save_memories(self) -> None:
         """Save to memories.json (backward compat, dual-write)"""
+        import tempfile
+
         try:
             with self._memories_lock:
                 data = [m.to_dict() for m in self._memories.values()]
-            tmp = self.memories_file.with_suffix(self.memories_file.suffix + ".tmp")
-            with open(tmp, "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
-            bak = self.memories_file.with_suffix(self.memories_file.suffix + ".bak")
-            if self.memories_file.exists():
-                self.memories_file.replace(bak)
-            tmp.rename(self.memories_file)
+            target_dir = self.memories_file.parent
+            fd, tmp_path = tempfile.mkstemp(
+                suffix=".tmp", prefix="memories_", dir=target_dir
+            )
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    json.dump(data, f, ensure_ascii=False, indent=2)
+                os.replace(tmp_path, self.memories_file)
+            except BaseException:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+                raise
         except Exception as e:
             logger.error(f"Failed to save memories.json: {e}")
 

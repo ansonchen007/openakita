@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from openakita_plugin_sdk import PluginAPI
+    from openakita.plugins.api import PluginAPI
 
 
 @dataclass

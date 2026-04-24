@@ -349,7 +349,14 @@ class QQBotAdapter(ChannelAdapter):
             )
 
     # 不可重试的配置类错误关键词（遇到后大幅延长重试间隔）
-    _FATAL_KEYWORDS = ("不在白名单", "invalid appid", "invalid secret", "鉴权失败")
+    _FATAL_KEYWORDS = (
+        "不在白名单",
+        "invalid appid",
+        "invalid secret",
+        "鉴权失败",
+        "'access_token'",
+        "access_token",
+    )
     _FATAL_GIVE_UP_THRESHOLD = 5
 
     # ==================== WebSocket Gateway ====================

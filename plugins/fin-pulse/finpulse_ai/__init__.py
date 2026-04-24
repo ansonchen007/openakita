@@ -20,6 +20,7 @@ from finpulse_ai.filter import (
     interests_digest,
     score_batch,
 )
+from finpulse_ai.rules_suggest import suggest_rules_text
 
 __all__ = [
     "canonical_dedupe_key",
@@ -30,4 +31,5 @@ __all__ = [
     "score_batch",
     "simhash_distance",
     "simhash_title",
+    "suggest_rules_text",
 ]

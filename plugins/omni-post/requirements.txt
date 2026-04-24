@@ -1,0 +1,25 @@
+# omni-post — cross-platform social publishing plugin.
+#
+# Python runtime dependencies. All other packages (playwright, httpx,
+# aiosqlite, aiofiles, Pillow, pydantic, fastapi) are reused from the
+# host and intentionally NOT declared here to avoid version conflicts.
+#
+# cryptography — symmetric Fernet encryption for the cookie pool. The
+# key is derived from the OpenAkita identity/ salt on first load so
+# cookies never hit disk in cleartext (see omni_post_cookies.py).
+cryptography>=42.0.0
+
+# System-level binaries (NOT pip packages):
+#   - ffmpeg / ffprobe: required for upload metadata (duration, codec,
+#     dimensions) and thumbnail generation. On missing binaries the
+#     plugin falls back to ErrorKind.dependency with an install hint
+#     (see omni_post_assets.py::probe_ffmpeg_available).
+#     * Windows: winget install Gyan.FFmpeg
+#     * macOS:   brew install ffmpeg
+#     * Linux:   apt install ffmpeg  /  dnf install ffmpeg
+#
+# Playwright browser binaries:
+#   The playwright Python package is shipped by the host (>=1.40). The
+#   Chromium browser binary itself is downloaded on first engine boot
+#   via ``python -m playwright install chromium`` — on-demand, not in
+#   this requirements file. See README.md "Quickstart" for details.

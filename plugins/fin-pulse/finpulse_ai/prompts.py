@@ -83,6 +83,38 @@ def build_score_items_block(items: list[dict[str, str]]) -> str:
     return "\n".join(lines)
 
 
+RULES_SUGGEST_SYSTEM_ZH: Final[str] = (
+    "你是一名财经雷达规则编辑。你会把用户用自然语言描述的关注点翻译成"
+    " TrendRadar 兼容的规则 DSL。DSL 规则如下：\n"
+    "- 每一组写在一个空行分隔的段落里；段落内所有词都要满足才算命中\n"
+    "- 前缀 `+` 表示该词必须命中（等价）\n"
+    "- 前缀 `!` 表示该词一旦出现则整条排除\n"
+    "- 前缀 `@别名` 表示同义词替换（放在具体关键词前一行）\n"
+    "- `[GLOBAL_FILTER]` 段内所有词作为全局负面词（对所有组生效）\n"
+    "- 常用组合：央行 & 政策；公司财报 & 突发；地缘 & 关税；加密 & 合规\n"
+    "只返回规则文本本身，不要任何解释、Markdown 标题或代码块。\n"
+    "每组不超过 5 个词；控制总规模，避免误伤。"
+)
+
+RULES_SUGGEST_SYSTEM_EN: Final[str] = (
+    "You are a finance-radar rules editor. Translate the user's plain-language "
+    "watchlist into a TrendRadar-compatible rules DSL:\n"
+    "- Each group is separated by a blank line; all keywords in a group must "
+    "co-occur for a hit.\n"
+    "- Prefix `+` marks a required keyword.\n"
+    "- Prefix `!` excludes the whole item if that word appears.\n"
+    "- `@alias` on a line introduces a synonym for the next keyword.\n"
+    "- A `[GLOBAL_FILTER]` section applies negative filters to every group.\n"
+    "Return ONLY the rules text — no prose, no fences. Keep groups ≤ 5 words."
+)
+
+RULES_SUGGEST_USER_TEMPLATE: Final[str] = (
+    "自然语言描述 / Description:\n{description}\n\n"
+    "现有规则 (可为空，供参考) / Existing rules (may be empty):\n{existing}\n\n"
+    "请输出全新的规则文本。"
+)
+
+
 __all__ = [
     "SCORE_SYSTEM_EN",
     "SCORE_SYSTEM_ZH",
@@ -90,5 +122,8 @@ __all__ = [
     "TAG_EXTRACTION_SYSTEM_EN",
     "TAG_EXTRACTION_SYSTEM_ZH",
     "TAG_EXTRACTION_USER_TEMPLATE",
+    "RULES_SUGGEST_SYSTEM_EN",
+    "RULES_SUGGEST_SYSTEM_ZH",
+    "RULES_SUGGEST_USER_TEMPLATE",
     "build_score_items_block",
 ]

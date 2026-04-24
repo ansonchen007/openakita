@@ -52,6 +52,7 @@ export const StreamEventType = {
   // ── UI enrichment (injected by API layer) ──
   ARTIFACT: "artifact",
   UI_PREFERENCE: "ui_preference",
+  ENDPOINT_NOTICE: "endpoint_notice",
 } as const;
 
 export type StreamEventTypeValue =

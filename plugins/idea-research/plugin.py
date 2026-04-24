@@ -61,11 +61,12 @@ from idea_pipeline import (
 from idea_research_inline.mdrm_adapter import MdrmAdapter
 from idea_research_inline.upload_preview import add_upload_preview_routes
 from idea_task_manager import IdeaTaskManager
-from openakita_plugin_sdk import PluginBase
 from pydantic import BaseModel, ConfigDict, Field
 
+from openakita.plugins.api import PluginBase
+
 if TYPE_CHECKING:  # pragma: no cover
-    from openakita_plugin_sdk import PluginAPI
+    from openakita.plugins.api import PluginAPI
 
 
 PLUGIN_VERSION = "1.0.0"

@@ -626,6 +626,14 @@ class Agent:
         # are promoted from deferred to full-schema in _effective_tools.
         self._discovered_tools: set[str] = set()
 
+        # Per-session system prompt cache (hermes-style).
+        # Key = (conv_id, mode, skip_catalogs); value = prompt string.
+        # Invalidated by _invalidate_system_prompt_cache() on memory/mode/
+        # compression events.  Avoids re-running the full prompt assembly
+        # pipeline every turn when only the user message changes.
+        self._system_prompt_cache: dict[tuple, str] = {}
+        self._system_prompt_cache_dirty = True
+
         # Sub-agent call flag: set by orchestrator._call_agent()
         self._is_sub_agent_call = False
         # Agent tool names to exclude when running as sub-agent
@@ -2224,29 +2232,60 @@ class Agent:
         _prompt_profile = self._resolve_prompt_profile(intent, session_type)
         _prompt_tier = resolve_tier(ctx_window)
 
-        prompt = await self.prompt_assembler.build_system_prompt_compiled(
-            task_description,
-            session_type=session_type,
-            context_window=ctx_window,
-            is_sub_agent=self._is_sub_agent_call,
-            tools_enabled=tools_enabled,
-            memory_keywords=_mem_keywords,
-            model_display_name=model_display,
-            session_context=session_context,
-            mode=_effective_mode,
-            model_id=_model_id,
-            skip_catalogs=_skip_catalogs,
-            user_input_tokens=_user_input_tokens,
-            prompt_profile=_prompt_profile,
-            prompt_tier=_prompt_tier,
+        # Session-level system prompt cache: reuse when the structural
+        # parameters (mode, catalogs, profile) haven't changed.  Memory
+        # keywords vary per turn so the cache key includes them.
+        _conv_id = session.id if session else ""
+        _cache_key = (
+            _conv_id,
+            _effective_mode,
+            _skip_catalogs,
+            _prompt_profile,
+            _prompt_tier,
+            tuple(sorted(_mem_keywords)) if _mem_keywords else (),
         )
-        # 记录本轮最终使用的 mode，供 chat.py done 事件透传给前端，让用户
-        # 看到"我传 agent 但实际跑的是 ask"这类静默降级。
+
+        if (
+            not self._system_prompt_cache_dirty
+            and _cache_key in self._system_prompt_cache
+        ):
+            prompt = self._system_prompt_cache[_cache_key]
+            logger.debug("[Agent] system prompt cache HIT (key=%s)", _cache_key[:3])
+        else:
+            prompt = await self.prompt_assembler.build_system_prompt_compiled(
+                task_description,
+                session_type=session_type,
+                context_window=ctx_window,
+                is_sub_agent=self._is_sub_agent_call,
+                tools_enabled=tools_enabled,
+                memory_keywords=_mem_keywords,
+                model_display_name=model_display,
+                session_context=session_context,
+                mode=_effective_mode,
+                model_id=_model_id,
+                skip_catalogs=_skip_catalogs,
+                user_input_tokens=_user_input_tokens,
+                prompt_profile=_prompt_profile,
+                prompt_tier=_prompt_tier,
+            )
+            self._system_prompt_cache[_cache_key] = prompt
+            self._system_prompt_cache_dirty = False
+
         self._last_effective_mode = _effective_mode
         if self._custom_prompt_suffix:
             prompt += f"\n\n{self._custom_prompt_suffix}"
         prompt += self._build_multi_agent_prompt_section()
         return prompt
+
+    def _invalidate_system_prompt_cache(self, reason: str = "") -> None:
+        """Mark system prompt cache dirty so it rebuilds on next turn."""
+        if self._system_prompt_cache:
+            self._system_prompt_cache.clear()
+            logger.debug(
+                "[Agent] system prompt cache invalidated%s",
+                f" ({reason})" if reason else "",
+            )
+        self._system_prompt_cache_dirty = True
 
     def _resolve_prompt_profile(self, intent: Any, session_type: str) -> "PromptProfile":
         """Determine PromptProfile from intent and session type."""
@@ -2642,6 +2681,7 @@ class Agent:
                 f"(system_prompt={'custom' if system_prompt else 'default'}, "
                 f"tools={len(_tools) if _tools else 0})"
             )
+            self._invalidate_system_prompt_cache("context compression")
         return result
 
     async def _compress_large_tool_results(

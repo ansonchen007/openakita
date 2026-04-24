@@ -301,12 +301,15 @@ export default function PluginAppHost({ pluginId, apiBase, onViewChange }: Plugi
           display: "flex", alignItems: "center", justifyContent: "center",
           background: "var(--bg, #fff)",
         }}>
-          <div style={{ textAlign: "center", maxWidth: 360, padding: 24 }}>
+          <div style={{
+            display: "flex", flexDirection: "column", alignItems: "center",
+            justifyContent: "center", textAlign: "center", maxWidth: 360, padding: 24,
+          }}>
             {meta.iconUrl ? (
               <img
                 src={meta.iconUrl}
                 alt=""
-                style={{ width: 48, height: 48, borderRadius: 8, marginBottom: 16, objectFit: "cover" }}
+                style={{ display: "block", width: 48, height: 48, borderRadius: 8, margin: "0 auto 16px", objectFit: "cover" }}
               />
             ) : null}
             <div className="spinner" style={{ width: 44, height: 44, margin: "0 auto 16px" }} />

@@ -631,6 +631,37 @@ class TestResolveUIConfirm:
     def test_nonexistent_returns_false(self, engine):
         assert engine.resolve_ui_confirm("nonexistent", "allow_once") is False
 
+    def test_resolve_ui_confirm_not_shadowed_by_duplicate_def(self, engine):
+        """Regression guard: policy.py 曾因 backport 合并引入同名 ``resolve_ui_confirm``
+        的简化版本，覆盖掉真正做 ``pop`` + ``mark_confirmed`` 的老实现，
+        导致 IM 卡片确认后 allow_session / allow_always / sandbox 全部
+        失效（只 set event 不写 allowlist）。这里从静态和运行时双向守卫。
+
+        - 静态：PolicyEngine 类字典里只能有一个 ``resolve_ui_confirm``；
+          Python 类里后定义的同名方法会覆盖前面的，一旦再次有人复制
+          粘贴同名 def，这里不会命中——但 test_allow_once_scope 等
+          会因返回 None 而 FAIL，作为第二道护栏。
+        - 运行时：调用必须返回 ``bool``（True/False），而不是 None。
+        """
+        # 单一定义守卫：类字典里 resolve_ui_confirm 只能来自 PolicyEngine
+        # 自身（不是被子类或其他地方重写）；且必须是 callable 且返回 bool。
+        method = type(engine).__dict__.get("resolve_ui_confirm")
+        assert method is not None, "resolve_ui_confirm 必须在 PolicyEngine 上定义"
+        assert callable(method)
+
+        # 运行时守卫：返回值必须是 bool（老版本契约），不是 None。
+        engine.store_ui_pending("t_guard", "run_shell", {"command": "echo guard"})
+        result = engine.resolve_ui_confirm("t_guard", "allow_session")
+        assert result is True, (
+            "resolve_ui_confirm 返回 None 说明老版本 def 已被覆盖；"
+            "检查 core/policy.py 是否有第二个同名 def"
+        )
+        # 并且副作用要生效：session allowlist 里应该有东西
+        assert len(engine._session_allowlist) > 0, (
+            "resolve_ui_confirm 副作用失效：mark_confirmed 没被调用；"
+            "意味着老版本定义被新版本覆盖了"
+        )
+
 
 # ---------------------------------------------------------------------------
 # Death switch with configurable multiplier

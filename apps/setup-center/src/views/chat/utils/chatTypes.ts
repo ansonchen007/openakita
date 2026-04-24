@@ -85,6 +85,7 @@ export type StreamEvent =
   | { type: "security_confirm"; tool: string; tool_name?: string; args: Record<string, unknown>; id?: string; call_id?: string; confirm_id?: string; reason: string; risk_level: string; needs_sandbox: boolean; protocol_version?: number; timeout_seconds?: number; default_on_timeout?: string }
   | { type: "death_switch"; active: boolean; reason?: string }
   | { type: "ui_preference"; theme?: string; language?: string }
+  | { type: "endpoint_notice"; reason_code?: string; notice_type?: string; endpoint?: string }
   | { type: "error"; message: string }
   | { type: "done"; reason?: string; usage?: { input_tokens: number; output_tokens: number; total_tokens?: number; context_tokens?: number; context_limit?: number } };
 

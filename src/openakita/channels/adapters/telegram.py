@@ -346,6 +346,11 @@ class TelegramAdapter(ChannelAdapter):
         self._seen_update_ids: OrderedDict[int, None] = OrderedDict()
         self._seen_update_ids_max = 500
 
+        # 安全确认回调 token 映射：Telegram callback_data 最长 64 字节，
+        # 无法承载完整 confirm_id，因此用短 token 间接引用真实 confirm_id。
+        self._sec_cb_tokens: OrderedDict[str, str] = OrderedDict()
+        self._sec_cb_tokens_max = 500
+
         # 思考占位消息：session_key -> (chat_id_int, message_id)
         self._thinking_cards: dict[str, tuple[int, int]] = {}
         # 流式输出状态
@@ -672,12 +677,15 @@ class TelegramAdapter(ChannelAdapter):
         with contextlib.suppress(Exception):
             await query.answer()
 
-        # Security confirmation callbacks: sec_<decision>_<confirm_id>
+        # Security confirmation callbacks: sec_<decision>_<token>
+        # token 是 _alloc_sec_callback_token 分配的短 id，通过 _sec_cb_tokens 反查真实 confirm_id。
+        # 历史兼容：若 token 查不到，则按原样视为 confirm_id（处理重启后残留的未回收按钮）。
         if data.startswith("sec_"):
             parts = data.split("_", 2)
             if len(parts) >= 3:
                 decision_key = parts[1]
-                confirm_id = parts[2]
+                confirm_raw = parts[2]
+                confirm_id = self._sec_cb_tokens.get(confirm_raw, confirm_raw)
                 decision_map = {
                     "allow": "allow_once",
                     "session": "allow_session",

@@ -360,6 +360,47 @@ but with full schema you'll fill arguments more reliably.
                 groups.setdefault(cat, set()).add(name)
         return groups
 
+    def get_index_catalog(self, exclude_high_freq: bool = True) -> str:
+        """Generate a minimal index-only catalog (category + tool names, no descriptions).
+
+        Used for CONSUMER_CHAT / SMALL tier / early turns where a full catalog
+        wastes tokens.  All tool names remain visible so the LLM can still
+        discover them via ``tool_search`` or direct invocation.
+        """
+        if not self._tools:
+            return ""
+
+        categories: OrderedDict[str, list[str]] = OrderedDict()
+        for name in sorted(self._tools):
+            if exclude_high_freq and name in _CATALOG_EXCLUDED_SET:
+                continue
+            tool = self._tools[name]
+            cat = tool.get("category") or infer_category(name)
+            if not cat and name in self._tool_sources:
+                cat = "Plugin"
+            cat = cat or "Other"
+            categories.setdefault(cat, []).append(name)
+
+        lines: list[str] = ["## Available System Tools (index)"]
+        emitted: set[str] = set()
+        for cat in self.CATEGORY_ORDER:
+            if cat not in categories:
+                continue
+            display = self.CATEGORY_DISPLAY_NAMES.get(cat, cat)
+            lines.append(f"**{display}**: {', '.join(categories[cat])}")
+            emitted.add(cat)
+        for cat, names in categories.items():
+            if cat in emitted:
+                continue
+            display = self.CATEGORY_DISPLAY_NAMES.get(cat, cat)
+            lines.append(f"**{display}**: {', '.join(names)}")
+
+        lines.append(
+            "\nUse `tool_search(query=\"...\")` to discover full parameters "
+            "before calling any tool above."
+        )
+        return "\n".join(lines)
+
     def get_catalog(
         self,
         refresh: bool = False,

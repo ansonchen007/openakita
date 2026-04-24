@@ -82,7 +82,7 @@ Do not infer filesystem paths from the workspace map; `get_skill_info` is author
         self._cached_catalog: str | None = None
         self._cached_index: str | None = None
         self._cached_compact: str | None = None
-        self._cached_grouped: dict[str | None, str] = {}
+        self._cached_grouped: dict[tuple, str] = {}
         self._snapshot_loaded: bool = False  # 单次进程启动只尝试加载一次
 
     def _list_model_visible(self, exposure_filter: str | None = None) -> list:
@@ -217,21 +217,24 @@ Do not infer filesystem paths from the workspace map; `get_skill_info` is author
             return result
 
     def get_grouped_compact_catalog(
-        self, *, exposure_filter: str | None = None
+        self, *, exposure_filter: str | None = None, max_tokens: int = 0
     ) -> str:
         """生成 **按分类分组的紧凑技能清单**，用于系统提示注入。
 
-        参考 hermes-agent 的"零截断"范式：
+        零丢失 + 自适应压缩：
+        - 所有技能名字始终保留（保证 LLM 能发现并调用）
         - 按分类字典序、再按 name 字典序输出（确定性，避免抖动）
-        - 每个 skill 一行：``- **name**: when_to_use 或 description 首句``
         - 分类标题展示 ``DESCRIPTION.md`` 的描述（如果有）
-        - 不做 token 预算截断；调用方 ``PromptBuilder._build_catalogs_section``
-          直接整块注入，保证新装技能也能被 LLM 看到
 
-        缓存：按 ``exposure_filter`` 维度缓存；``invalidate_cache`` 同时清空。
+        当 ``max_tokens > 0`` 时启用三级自适应压缩：
+        - Level B (默认): ``- **name**: when_to_use`` (描述截至 160 字符)
+        - Level B-short: 描述缩短至 80 字符（技能数 > 80 时自动触发）
+        - Level C (index): 分类 + 逗号分隔名字，无描述
+
+        缓存：按 ``(exposure_filter, max_tokens)`` 维度缓存。
         """
         with self._lock:
-            cache_key = exposure_filter
+            cache_key = (exposure_filter, max_tokens)
             cached = self._cached_grouped.get(cache_key)
             if cached is not None:
                 return cached
@@ -280,44 +283,78 @@ Do not infer filesystem paths from the workspace map; `get_skill_info` is author
                 except Exception:
                     pass
 
-            lines: list[str] = [
-                "## Available Skills",
-                "",
-                "Use `get_skill_info(skill_name)` to load full instructions when needed.",
-                "Skills are grouped by category. All installed skills are listed below.",
-                "",
-            ]
+            sorted_cats = sorted(grouped.keys(), key=lambda x: x.lower())
 
-            for cat in sorted(grouped.keys(), key=lambda x: x.lower()):
-                desc = cat_descriptions.get(cat)
-                if desc:
-                    lines.append(f"### {cat} — {desc}")
-                else:
-                    lines.append(f"### {cat}")
-                for s in grouped[cat]:
-                    when = (getattr(s, "when_to_use", "") or "").strip()
-                    if not when:
-                        when = (s.description or "").split("\n")[0].strip()
-                    when = when[:160]
-                    lines.append(self._safe_format(
-                        "- **{name}**: {when}",
-                        name=s.name,
-                        when=when,
-                    ))
-                lines.append("")
+            def _render(when_max: int) -> str:
+                """渲染带描述的技能清单 (Level B)"""
+                lines: list[str] = [
+                    "## Available Skills",
+                    "",
+                    "Use `get_skill_info(skill_name)` to load full instructions when needed.",
+                    "",
+                ]
+                for cat in sorted_cats:
+                    desc = cat_descriptions.get(cat)
+                    lines.append(f"### {cat} — {desc}" if desc else f"### {cat}")
+                    for s in grouped[cat]:
+                        when = (getattr(s, "when_to_use", "") or "").strip()
+                        if not when:
+                            when = (s.description or "").split("\n")[0].strip()
+                        when = when[:when_max]
+                        lines.append(self._safe_format(
+                            "- **{name}**: {when}",
+                            name=s.name,
+                            when=when,
+                        ))
+                    lines.append("")
+                if hidden_count > 0:
+                    lines.append(
+                        f"_({hidden_count} more skill(s) hidden by profile — "
+                        "use `list_skills` to enumerate)_"
+                    )
+                return "\n".join(lines).rstrip() + "\n"
 
-            if hidden_count > 0:
-                lines.append(
-                    f"_({hidden_count} more skill(s) hidden by profile — "
-                    "use `list_skills` to enumerate)_"
-                )
+            def _render_index() -> str:
+                """渲染仅名字的紧凑清单 (Level C)"""
+                lines: list[str] = [
+                    "## Available Skills",
+                    "",
+                    "Use `get_skill_info(skill_name)` to load full instructions before using a skill.",
+                    "",
+                ]
+                for cat in sorted_cats:
+                    names = [s.name for s in grouped[cat]]
+                    desc = cat_descriptions.get(cat)
+                    lines.append(f"### {cat} — {desc}" if desc else f"### {cat}")
+                    lines.append(", ".join(names))
+                    lines.append("")
+                if hidden_count > 0:
+                    lines.append(
+                        f"_({hidden_count} more skill(s) hidden by profile — "
+                        "use `list_skills` to enumerate)_"
+                    )
+                return "\n".join(lines).rstrip() + "\n"
 
-            result = "\n".join(lines).rstrip() + "\n"
+            def _est_tokens(text: str) -> int:
+                return max(len(text) // 4, len(text.encode("utf-8")) // 3)
+
+            if max_tokens <= 0:
+                result = _render(160)
+            else:
+                result = _render(160)
+                if _est_tokens(result) > max_tokens:
+                    result = _render(80)
+                if _est_tokens(result) > max_tokens:
+                    result = _render_index()
+
             self._cached_grouped[cache_key] = result
             logger.debug(
-                "Generated grouped catalog: %d skills across %d categories",
+                "Generated grouped catalog: %d skills across %d categories "
+                "(~%d tokens, max_tokens=%d)",
                 len(skills),
                 len(grouped),
+                _est_tokens(result),
+                max_tokens,
             )
             try:
                 self._write_disk_snapshot()
@@ -562,8 +599,12 @@ Do not infer filesystem paths from the workspace map; `get_skill_info` is author
                 continue
         return manifest
 
-    def _load_disk_snapshot_if_valid(self) -> dict[str | None, str] | None:
-        """如果 manifest 与 snapshot 一致，返回 ``{exposure_filter: catalog}``。"""
+    def _load_disk_snapshot_if_valid(self) -> dict[tuple, str] | None:
+        """如果 manifest 与 snapshot 一致，返回缓存字典。
+
+        磁盘快照只存 max_tokens=0 的无预算版本（完整描述），
+        预算压缩版在内存中按需从完整版推导，不持久化。
+        """
         path = self._snapshot_path()
         if path is None or not path.exists():
             return None
@@ -578,13 +619,12 @@ Do not infer filesystem paths from the workspace map; `get_skill_info` is author
         current = self._build_manifest()
         if current != snap_manifest:
             return None
-        # snap_catalogs 的 key 是字符串；空串恢复为 None（即默认 exposure）
-        result: dict[str | None, str] = {}
+        result: dict[tuple, str] = {}
         for k, v in snap_catalogs.items():
             if not isinstance(v, str):
                 continue
-            real_key: str | None = k if k else None
-            result[real_key] = v
+            exposure: str | None = k if k else None
+            result[(exposure, 0)] = v
         return result
 
     def _write_disk_snapshot(self) -> None:
@@ -597,8 +637,11 @@ Do not infer filesystem paths from the workspace map; `get_skill_info` is author
         except OSError:
             return
         manifest = self._build_manifest()
-        # 把 None key 序列化为 ""，反序列化时还原
-        catalogs = {(k if k is not None else ""): v for k, v in self._cached_grouped.items()}
+        # 只持久化 max_tokens=0 的无预算版本；预算压缩版在内存中按需推导
+        catalogs = {}
+        for (exposure, mt), v in self._cached_grouped.items():
+            if mt == 0:
+                catalogs[exposure if exposure is not None else ""] = v
         payload = {"version": 1, "manifest": manifest, "catalogs": catalogs}
 
         try:

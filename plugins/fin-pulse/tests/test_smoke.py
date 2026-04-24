@@ -35,6 +35,22 @@ def test_assets_present() -> None:
     assert not missing, f"missing UI Kit assets: {missing}"
 
 
+def test_sidebar_icon_present() -> None:
+    """plugins/fin-pulse/icon.svg is auto-discovered by the host to render
+    the sidebar app-launcher icon (see api/routes/plugins.py _ICON_NAMES).
+    The file must exist, be non-trivial, and declare an <svg> root.
+    Also served from ui/dist/icon.svg so ``ui.icon`` resolves through the
+    PluginAppHost loading splash.
+    """
+    for candidate in (PLUGIN_DIR / "icon.svg", UI_DIR / "icon.svg"):
+        assert candidate.exists(), f"icon.svg missing: {candidate}"
+        blob = candidate.read_text("utf-8")
+        assert "<svg" in blob and "viewBox" in blob, f"{candidate} is not a valid SVG"
+        assert len(blob) > 256, f"{candidate} seems too small / empty"
+    manifest = json.loads(MANIFEST.read_text("utf-8"))
+    assert manifest["ui"]["icon"] == "icon.svg", "plugin.json ui.icon should be icon.svg"
+
+
 def test_index_html_exists_and_nonempty() -> None:
     assert INDEX_HTML.exists(), "ui/dist/index.html missing"
     html = INDEX_HTML.read_text("utf-8")
@@ -57,7 +73,6 @@ def test_ui_hard_contracts() -> None:
         r'class\s+PluginErrorBoundary\s+extends\s+React\.Component',
         r'ReactDOM\.createRoot\(document\.getElementById\("root"\)\)',
         r'window\.OpenAkitaI18n\.register\(I18N_DICT\)',
-        r'onEvent\("plugin:fin-pulse:',
         r'"tabs\.today"',
         r'"tabs\.digests"',
         r'"tabs\.radar"',
@@ -65,10 +80,30 @@ def test_ui_hard_contracts() -> None:
         r'"tabs\.settings"',
         r'oa-config-banner',
         r'oa-hero-title',
-        r'split-layout',
+        r'oa-section-title',
+        r'stack-layout',
+        r'seg-group',
+        r'seg-btn',
+        r'filter-bar',
+        r'oa-hint',
+        r'BrandMark',
         r'api-pill',
         r'ConfirmHost',
-        r'setInterval',
+        # P0 — api() must unwrap Bridge {ok,status,body} envelopes.
+        r'"body"\s+in\s+res',
+        # P0 — oaToast must send {type, body} for the host notify API.
+        r'type:\s*level',
+        r'body:\s*message',
+        # P1 — radar editor is kept compact; hit preview grows.
+        r'card--compact',
+        # P1 — templated schedule buttons exist instead of window.prompt.
+        r'SCHEDULE_TEMPLATES',
+        r'ScheduleDialog',
+        # P2 — CodeBlock component for NewsNow docker snippet.
+        r'fp-codeblock',
+        # P2 — Darker muted / dim tokens.
+        r'--text-muted:\s*#5E3540',
+        r'--text-dim:\s*#7A4E59',
     ]
     for pat in required:
         assert re.search(pat, html), f"hard contract missing: {pat}"
@@ -78,6 +113,12 @@ def test_ui_hard_contracts() -> None:
         r"classList\.toggle\('dark-mode'\)",
         # Raw ReactDOM.render is forbidden; createRoot is required.
         r'ReactDOM\.render\(',
+        # The fin-pulse custom event names never fired — we must not
+        # register listeners for them any more.
+        r'onEvent\("plugin:fin-pulse:',
+        # The Settings schedule card should no longer use window.prompt
+        # for mode/cron/session — replaced by ScheduleDialog.
+        r'window\.prompt\("mode\s*\(daily_brief',
     ]
     for pat in forbidden:
         assert not re.search(pat, html), f"forbidden token present: {pat}"
@@ -121,3 +162,144 @@ def test_fallback_modes_mirror_models_module() -> None:
     plugin_src = (PLUGIN_DIR / "plugin.py").read_text("utf-8")
     for mode in ("daily_brief", "hot_radar", "ask_news"):
         assert f'"{mode}"' in plugin_src, f"plugin.py missing fallback mode: {mode}"
+
+
+def test_ui_tabs_are_hydrated() -> None:
+    """Phase 6 — each tab body must talk to the REST surface instead of
+    rendering the Phase-1 placeholder. We assert that the hot-path API
+    calls and the NewsNow 3-stage wizard tokens are present.
+    """
+    html = INDEX_HTML.read_text("utf-8")
+
+    # Today tab talks to /articles + /ingest and uses the new
+    # /sources route to hydrate its dropdown (P0 — avoids drift with
+    # finpulse_models.SOURCE_DEFS).
+    assert 'api("GET", "/articles"' in html
+    # The Today tab now calls /ingest via a dynamic ``path`` variable so
+    # the same code path covers both bulk and single-source runs. We
+    # still require either the literal POST string or the path-shaped
+    # call to prove the wiring is present.
+    assert (
+        'api("POST", "/ingest"' in html
+        or 'api("POST", path' in html
+    ), "Today tab missing POST /ingest call"
+    assert '/ingest/source/' in html, (
+        "Today tab must expose the single-source /ingest/source/{id} call"
+    )
+    assert 'api("GET", "/sources"' in html
+
+    # Digests tab lists + runs + iframes html blobs.
+    assert 'api("GET", "/digests' in html
+    assert 'api("POST", "/digest/run"' in html
+    assert '/digests/' in html and '/html' in html
+
+    # Radar tab exercises the evaluate + config save paths.
+    assert 'api("POST", "/radar/evaluate"' in html
+    assert 'radar_rules' in html
+    # Phase 6b — AI optimise + template + history + naming-save tokens.
+    assert 'api("POST", "/radar/ai-suggest"' in html
+    assert 'api("GET", "/radar/library"' in html
+    assert 'api("POST", "/radar/library"' in html
+    assert 'api("DELETE", "/radar/library/"' in html
+    for key in (
+        "radar.template",
+        "radar.ai",
+        "radar.history",
+        "radar.save.title",
+        "radar.save.placeholder",
+    ):
+        assert key in html, f"Radar i18n key missing: {key}"
+
+    # Ask tab surfaces the 7 agent tools.
+    for tool in (
+        "fin_pulse_create",
+        "fin_pulse_status",
+        "fin_pulse_list",
+        "fin_pulse_cancel",
+        "fin_pulse_settings_get",
+        "fin_pulse_settings_set",
+        "fin_pulse_search_news",
+    ):
+        assert tool in html, f"Ask tab missing tool: {tool}"
+
+    # Settings tab exposes channels / schedules / NewsNow wizard.
+    # P1 — channels are fed from the host /scheduler/channels proxy so
+    # the dropdown matches SchedulerView. /available-channels is kept
+    # only as a fallback.
+    assert 'api("GET", "/scheduler/channels"' in html
+    assert 'api("GET", "/available-channels"' in html
+    assert 'api("GET", "/schedules"' in html
+    assert 'api("POST", "/schedules"' in html
+    assert 'newsnow.mode' in html and 'newsnow.api_url' in html
+    assert 'settings.newsnow.step1' in html
+    assert 'settings.newsnow.step2' in html
+    assert 'settings.newsnow.step3' in html
+    # P1 — schedule templates (morning / noon / evening / radar).
+    for tpl in ("morning", "noon", "evening", "radar"):
+        assert f'settings.schedules.tpl.{tpl}' in html, f"schedule tpl i18n missing: {tpl}"
+
+    # P2 — in-page schedule row actions: run / toggle / delete talk to
+    # our own /schedules/{id}/... routes, not the host SchedulerView.
+    assert '/schedules/" + s.id + "/trigger' in html, (
+        "expected per-row trigger call"
+    )
+    assert '/schedules/" + s.id + "/toggle' in html, (
+        "expected per-row toggle call"
+    )
+    assert '"DELETE", "/schedules/" + s.id' in html, (
+        "expected per-row delete call"
+    )
+    # P2 — the redirect-to-host button and read-only banner must have
+    # been removed now that the in-page dialog is authoritative.
+    assert 'settings.schedules.open_host' not in html, (
+        "open_host redirect affordance should be gone"
+    )
+    assert 'settings.schedules.read_only' not in html, (
+        "read-only preview banner should be gone"
+    )
+    # P2 — IM-channels card exposes an explicit refresh button and no
+    # longer carries the stale hint about "main program → SchedulerView".
+    assert 'settings.channels.refresh' in html
+    assert 'settings.channels.desc' not in html
+    # P2 — NewsNow defaults to the public aggregator: the pre-filled
+    # upstream URL and the 300-second rate-limit floor ship embedded in
+    # the HTML bundle.
+    assert 'https://newsnow.busiyi.world/api/s' in html
+    assert 'NEWSNOW_PUBLIC_MIN_INTERVAL_S' in html
+    assert 'newsnow.min_interval_s' in html
+
+    # P1 — global "no IM channel" banner must only live inside the
+    # Settings IM-channels card, not at the App shell level.
+    assert "showChannelBanner" not in html, (
+        "the legacy App-shell channel banner should have been removed"
+    )
+
+    # Today hybrid-ingest UX — inline result drawer, smart toast, and
+    # split-button single-source ingest must all be wired up.
+    for key in (
+        "today.ingest.done.green",
+        "today.ingest.done.amber",
+        "today.drawer.title",
+        "today.drawer.via.newsnow",
+        "today.drawer.via.direct",
+        "today.drawer.via.cooldown",
+        "today.list.ingest.current",
+    ):
+        assert key in html, f"hybrid Today i18n missing: {key}"
+    # The drawer component + split-button dropdown markup.
+    assert 'IngestDrawer' in html
+    assert 'ingest-split' in html
+    assert 'api("POST", "/ingest/source/"' not in html or (
+        '"/ingest/source/"' in html
+    ), "single-source endpoint wiring expected"
+    assert '/ingest/source/' in html, (
+        "Today tab must expose the single-source /ingest/source/{id} call"
+    )
+    # Spinner + indeterminate progress styling tokens.
+    assert 'fp-spin' in html
+    assert 'fp-progress' in html
+    # The old 8-second poll MUST be gone (a plain comment about it is
+    # allowed; an actual ``setInterval(load`` invocation is not).
+    assert 'setInterval(load' not in html, (
+        "the legacy 8s ingest poll should have been removed"
+    )

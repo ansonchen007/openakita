@@ -25,7 +25,7 @@
     "vector.access",
     "memory.read",
     "memory.write",
-    "channel.push"
+    "channel.send"
   ],
   "requires": {
     "openakita": ">=1.28.0",

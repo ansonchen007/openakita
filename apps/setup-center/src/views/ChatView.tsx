@@ -5,7 +5,6 @@ import { useEffect, useMemo, useRef, useState, useCallback, memo } from "react";
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import { setLanguage } from "../i18n";
-import { AgentIcon } from "../components/AgentIcon";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { ProviderIcon } from "../components/ProviderIcon";
 import { Button } from "@/components/ui/button";
@@ -305,7 +304,7 @@ export function ChatView({
           !isShell || (decidedPrefix !== "" && _cmdPrefix(String(item.args.command ?? "")) === decidedPrefix)
         );
         if (match) {
-          fetch(`${apiBaseUrl}/api/chat/security-confirm`, {
+          safeFetch(`${apiBaseUrl}/api/chat/security-confirm`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ confirm_id: item.toolId, decision: "allow_once" }),
@@ -2067,7 +2066,7 @@ export function ChatView({
 
       resetIdleTimer(); // Start idle timer before fetch
 
-      const response = await fetch(`${apiBase}/api/chat`, {
+      const response = await safeFetch(`${apiBase}/api/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -2510,7 +2509,7 @@ export function ChatView({
                 };
                 if (securityPolicy.checkAutoAllow(scEvt)) {
                   securityPolicy.recordAllow(scEvt.tool);
-                  fetch(`${apiBaseUrl}/api/chat/security-confirm`, {
+                  safeFetch(`${apiBaseUrl}/api/chat/security-confirm`, {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ confirm_id: scEvt.id, decision: "allow_once" }),
@@ -2790,6 +2789,7 @@ export function ChatView({
         }
       }
     } catch (e: unknown) {
+      sctx._hadError = true;
       if (sctx.userStopped) {
         updateMessages((prev) => prev.map((m) =>
           m.id === assistantMsg.id ? { ...m, content: m.content || "（已中止）", streaming: false } : m
@@ -2878,10 +2878,11 @@ export function ChatView({
       queryGuard.endQuery(guardHandle.generation);
       setStreamingTick(t => t + 1);
 
+      const finalStatus = sctx._hadError ? "error" : "completed";
       setConversations((prev) => {
         const updated = prev.map((c) =>
           c.id === thisConvId
-            ? { ...c, lastMessage: text.slice(0, 60), timestamp: Date.now(), messageCount: (c.messageCount || 0) + 2, status: "completed" as ConversationStatus }
+            ? { ...c, lastMessage: text.slice(0, 60), timestamp: Date.now(), messageCount: (c.messageCount || 0) + 2, status: finalStatus as ConversationStatus }
             : c
         );
         const conv = updated.find((c) => c.id === thisConvId);

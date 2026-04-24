@@ -1,18 +1,20 @@
-"""CLS Telegram (财联社电报) — API-driven source.
+"""CLS Telegram (财联社电报) — NewsNow-first with API fallback.
 
-CLS publishes a JSON endpoint with short-form news flashes (电报). We
-hit the public ``depth`` endpoint and normalise the payload. The API
-shape has evolved in the past; the parser is defensive — unknown keys
-land in ``extra`` rather than raising.
+Primary path reads through the NewsNow aggregator (``?id=cls-hot``) —
+TrendRadar does the same and has proved more resilient to cls.com
+API shape changes. The legacy direct path (``nodeapi/updateTelegraphList``)
+is retained as a graceful-degradation branch for firewalled users.
 """
 
 from __future__ import annotations
 
+import logging
 import time
 from typing import Any
 
 from finpulse_fetchers._http import fetch_json, make_client
 from finpulse_fetchers.base import BaseFetcher, NormalizedItem
+from finpulse_fetchers.newsnow_base import fetch_from_newsnow
 
 
 _CLS_ENDPOINT = (
@@ -20,11 +22,43 @@ _CLS_ENDPOINT = (
     "?app=CailianpressWeb&category=&os=web&rn=20&subscribedColumnIds=&sv=7.7.5"
 )
 
+logger = logging.getLogger(__name__)
+
 
 class CLSFetcher(BaseFetcher):
     source_id = "cls"
+    NEWSNOW_PLATFORM_ID = "cls-hot"
+
+    def __init__(
+        self, *, config: dict[str, str] | None = None, timeout_sec: float = 15.0
+    ) -> None:
+        super().__init__(config=config, timeout_sec=timeout_sec)
+        self._last_via: str = "none"
 
     async def fetch(self, **_: Any) -> list[NormalizedItem]:
+        try:
+            primary = await fetch_from_newsnow(
+                platform_id=self.NEWSNOW_PLATFORM_ID,
+                source_id=self.source_id,
+                config=self._config,
+                timeout_sec=self._timeout_sec,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.info("cls via newsnow failed, will try direct: %s", exc)
+            primary = []
+        if primary:
+            self._last_via = "newsnow"
+            return primary
+
+        if (self._config.get("source.cls.fallback_direct") or "true").lower() == "false":
+            self._last_via = "none"
+            return []
+
+        direct = await self._fetch_direct()
+        self._last_via = "direct" if direct else "none"
+        return direct
+
+    async def _fetch_direct(self) -> list[NormalizedItem]:
         ts = int(time.time())
         url = f"{_CLS_ENDPOINT}&lastTime={ts}"
         async with make_client(timeout=self._timeout_sec) as client:

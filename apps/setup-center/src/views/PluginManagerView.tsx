@@ -721,6 +721,8 @@ export default function PluginManagerView({ visible, httpApiBase }: Props) {
     (p) => (p.pending_permissions?.length ?? 0) > 0
   );
   const failedEntries = Object.entries(failed);
+  const pluginIds = new Set(plugins.map((p) => p.id));
+  const orphanedFailed = failedEntries.filter(([id]) => !pluginIds.has(id));
   const categoryTabs = ["all", ...Array.from(new Set(plugins.map((p) => p.category || p.type || "tool"))).sort()];
   const filteredPlugins = plugins.filter(
     (p) => categoryFilter === "all" || (p.category || p.type || "tool") === categoryFilter
@@ -951,7 +953,8 @@ export default function PluginManagerView({ visible, httpApiBase }: Props) {
               >
                 <Card className={cn(
                   "gap-0 overflow-hidden border-border/80 py-0 shadow-sm transition-shadow hover:shadow-md",
-                  hasPending && "border-amber-500/50"
+                  hasPending && "border-amber-500/50",
+                  p.status === "failed" && "border-destructive/50 bg-destructive/5"
                 )}>
                   <CardHeader className="gap-1.5 px-5 py-2">
                     <div className="flex items-start justify-between gap-4">
@@ -1463,24 +1466,30 @@ export default function PluginManagerView({ visible, httpApiBase }: Props) {
             );
           })}
 
-          {failedEntries.length > 0 && (
-            <Card className="border-destructive/40 bg-destructive/5 shadow-sm">
-              <CardHeader className="gap-2">
-                <CardTitle className="text-base text-foreground">{t("plugins.failedToLoad")}</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-3">
-                {failedEntries.map(([id, reason]) => (
-                  <div
-                    key={id}
-                    className="rounded-xl border border-destructive/20 bg-background/80 p-4"
-                  >
-                    <div className="font-medium text-foreground">{id}</div>
-                    <div className="mt-1 text-sm leading-6 text-destructive">{reason}</div>
+          {orphanedFailed.map(([id, reason]) => (
+            <div key={id}>
+              <Card className="gap-0 overflow-hidden border-destructive/50 bg-destructive/5 py-0 shadow-sm">
+                <CardHeader className="gap-1.5 px-5 py-2">
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="flex min-w-0 gap-4">
+                      <div className="flex size-10 shrink-0 items-center justify-center rounded-xl border border-destructive/30 bg-destructive/10">
+                        <IconPlug size={18} className="text-destructive" />
+                      </div>
+                      <div className="min-w-0 flex-1 space-y-1">
+                        <div className="flex min-w-0 items-center gap-2">
+                          <CardTitle className="min-w-0 truncate py-0.5 text-base leading-tight" title={id}>{id}</CardTitle>
+                          <Badge variant="destructive" className="max-w-[96px] shrink overflow-hidden whitespace-nowrap text-ellipsis" title={t("plugins.failed")}>
+                            {t("plugins.failed")}
+                          </Badge>
+                        </div>
+                        <div className="text-sm leading-6 text-destructive">{reason}</div>
+                      </div>
+                    </div>
                   </div>
-                ))}
-              </CardContent>
-            </Card>
-          )}
+                </CardHeader>
+              </Card>
+            </div>
+          ))}
         </div>
       ) : null}
 

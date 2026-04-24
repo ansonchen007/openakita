@@ -754,9 +754,11 @@ export function LLMView(props: LLMViewProps) {
       priority: 1,
       providerSlug: ep.provider || "",
       apiType: (ep.api_type as any) || "openai",
+      streamOnly: !!(ep as any).stream_only,
       baseUrl: ep.base_url || "",
       apiKeyEnv: ep.api_key_env || "",
       apiKeyValue: envDraft[ep.api_key_env || ""] || "",
+      apiKeyDirty: false,
       modelId: ep.model || "",
       caps: ["text"],
       maxTokens: typeof ep.max_tokens === "number" ? ep.max_tokens : 2048,
@@ -784,9 +786,11 @@ export function LLMView(props: LLMViewProps) {
       priority: 1,
       providerSlug: ep.provider || "",
       apiType: (ep.api_type as any) || "openai",
+      streamOnly: !!(ep as any).stream_only,
       baseUrl: ep.base_url || "",
       apiKeyEnv: ep.api_key_env || "",
       apiKeyValue: envDraft[ep.api_key_env || ""] || "",
+      apiKeyDirty: false,
       modelId: ep.model || "",
       caps: ["text"],
       maxTokens: 0,
@@ -1471,7 +1475,30 @@ export function LLMView(props: LLMViewProps) {
           {editDraft && <div className="flex-1 overflow-y-auto min-h-0 px-6 py-4 space-y-4" style={{ scrollbarGutter: "stable" }}>
             {/* Provider (read-only) */}
             <div className="space-y-1.5">
-              <Label className="flex items-center gap-1 flex-wrap">{t("llm.provider")} <span className="text-[11px] font-normal text-muted-foreground/70">{t("llm.providerReadonly")}</span> {!["custom", "ollama", "lmstudio"].includes(editDraft.providerSlug) && <span className="inline-flex items-center gap-0.5 text-[11px] font-normal text-muted-foreground/70 min-w-0"><span className="shrink-0">{t("llm.baseUrlLabel")}</span><span className="inline-block max-w-[200px] overflow-x-auto whitespace-nowrap align-middle" style={{ scrollbarWidth: "thin" }}>{editDraft.baseUrl || "—"}</span> <Button type="button" variant="link" size="xs" className="h-auto p-0 text-[11px] shrink-0" onClick={() => setEditBaseUrlExpanded(v => !v)}>{editBaseUrlExpanded ? t("llm.baseUrlCollapse") : t("llm.baseUrlToggle")}</Button></span>}</Label>
+              <div className="flex items-baseline flex-wrap gap-x-1.5 gap-y-0.5">
+                <Label className="shrink-0">{t("llm.provider")}</Label>
+                <span className="text-[11px] font-normal text-muted-foreground/70">{t("llm.providerReadonly")}</span>
+              </div>
+              {!["custom", "ollama", "lmstudio"].includes(editDraft.providerSlug) && (
+                <div className="flex items-center gap-1 text-xs font-normal text-muted-foreground/70 min-w-0">
+                  <span className="shrink-0">{t("llm.baseUrlLabel")}</span>
+                  <span
+                    className="flex-1 min-w-0 overflow-x-auto whitespace-nowrap"
+                    style={{ scrollbarWidth: "thin" }}
+                  >
+                    {editDraft.baseUrl || "—"}
+                  </span>
+                  <Button
+                    type="button"
+                    variant="link"
+                    size="xs"
+                    className="h-auto p-0 text-xs shrink-0"
+                    onClick={() => setEditBaseUrlExpanded(v => !v)}
+                  >
+                    {editBaseUrlExpanded ? t("llm.baseUrlCollapse") : t("llm.baseUrlToggle")}
+                  </Button>
+                </div>
+              )}
               <Input value={(() => { const p = providers.find((x) => x.slug === editDraft.providerSlug); return p ? p.name : (editDraft.providerSlug || "custom"); })()} disabled className="opacity-70" />
             </div>
 

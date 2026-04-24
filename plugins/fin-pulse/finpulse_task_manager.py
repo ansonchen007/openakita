@@ -141,9 +141,16 @@ def _seed_default_config() -> dict[str, str]:
         "dedupe.url_merge": "true",
         "dedupe.use_llm": "false",
         "dedupe.topic_top_k": "60",
-        # NewsNow integration (off by default; Settings wizard lands Phase 6).
-        "newsnow.mode": "off",  # off | public | self_host
-        "newsnow.api_url": "",
+        # NewsNow integration — public aggregator is enabled by default so
+        # fresh installs light up hot-list coverage without extra config.
+        # ``api_url`` is pinned to the upstream community instance; users
+        # can override it via /config if they self-host. ``min_interval_s``
+        # is a server-enforced floor that prevents probe-hammering the
+        # volunteer-run public node (see pipeline._fetch_one).
+        "newsnow.mode": "public",  # off | public | self_host
+        "newsnow.api_url": "https://newsnow.busiyi.world/api/s",
+        "newsnow.min_interval_s": "300",  # 5 minutes — hard UI floor
+        "newsnow.last_fetch_ts": "",  # unix seconds (str) of last ok fetch
         # Daily-brief schedules — disabled by default; Settings toggles
         # flip these on and call POST /schedules to hand a task to the
         # host scheduler.

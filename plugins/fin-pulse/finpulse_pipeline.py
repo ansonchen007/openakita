@@ -15,6 +15,7 @@ concurrency cap read from ``config['fetch_concurrency']``.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import time
 from datetime import datetime, timezone
@@ -23,10 +24,12 @@ from typing import TYPE_CHECKING, Any
 from finpulse_errors import map_exception
 from finpulse_fetchers import SOURCE_REGISTRY, get_fetcher
 from finpulse_fetchers.base import FetchReport, NormalizedItem
+from finpulse_frequency import FrequencyMatcher, compile_matcher
 from finpulse_models import SESSIONS, SOURCE_DEFS
 from finpulse_report import build_daily_brief
 
 if TYPE_CHECKING:
+    from finpulse_dispatch import DispatchService
     from finpulse_task_manager import FinpulseTaskManager
 
 logger = logging.getLogger(__name__)
@@ -34,6 +37,35 @@ logger = logging.getLogger(__name__)
 
 def _utcnow_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _newsnow_rate_limit_remaining(cfg: dict[str, str]) -> float:
+    """Return seconds the caller must wait before NewsNow can refresh.
+
+    Returns ``0.0`` (or negative) when the floor has elapsed. The floor is
+    only enforced for the public upstream aggregator — self-hosted
+    instances are fair game.
+
+    Uses ``newsnow.min_interval_s`` (default 300) and
+    ``newsnow.last_fetch_ts`` (unix seconds). A non-positive floor
+    disables the guard entirely so advanced users can opt out.
+    """
+    if (cfg.get("newsnow.mode") or "off") != "public":
+        return 0.0
+    try:
+        floor = float(cfg.get("newsnow.min_interval_s") or "300")
+    except ValueError:
+        floor = 300.0
+    if floor <= 0:
+        return 0.0
+    try:
+        last = float(cfg.get("newsnow.last_fetch_ts") or "0")
+    except ValueError:
+        last = 0.0
+    if last <= 0:
+        return 0.0
+    elapsed = time.time() - last
+    return max(0.0, floor - elapsed)
 
 
 async def _resolve_enabled_sources(
@@ -56,6 +88,14 @@ async def _resolve_enabled_sources(
             continue
         sources.append(source_id)
     return sources
+
+
+# CN hot-list sources that tap the NewsNow aggregator first. Enabling
+# any of them auto-lifts ``newsnow.mode`` to ``"public"`` for the run so
+# the hybrid path works out of the box (still honouring the 300s floor).
+_NEWSNOW_BACKED_CN_SOURCES: frozenset[str] = frozenset(
+    {"wallstreetcn", "cls", "eastmoney", "xueqiu"}
+)
 
 
 async def _fetch_one(
@@ -86,10 +126,16 @@ async def _fetch_one(
             items = await fetcher.fetch(since=since)
         else:
             items = await fetcher.fetch()
+        # Hybrid CN fetchers record which transport actually served the
+        # rows via ``_last_via``. Stash it on the report so the Today
+        # tab drawer can render a NewsNow / Direct badge per source.
+        via_raw = getattr(fetcher, "_last_via", None)
+        via = via_raw if isinstance(via_raw, str) and via_raw else "direct"
         return FetchReport(
             source_id=source_id,
             items=list(items or []),
             duration_ms=(time.perf_counter() - t0) * 1000.0,
+            via=via,
         )
     except Exception as exc:  # noqa: BLE001 — intentional pipeline boundary
         kind, msg, _hints = map_exception(exc)
@@ -148,7 +194,44 @@ async def ingest(
     cfg = await tm.get_all_config()
     enabled = await _resolve_enabled_sources(tm, include=sources)
     if not enabled:
-        return {"ok": False, "reason": "no_sources_enabled", "by_source": {}}
+        summary_empty: dict[str, Any] = {
+            "ok": False,
+            "reason": "no_sources_enabled",
+            "by_source": {},
+            "totals": {
+                "fetched": 0,
+                "inserted": 0,
+                "updated": 0,
+                "failed_sources": 0,
+                "sources_total": 0,
+                "sources_ok": 0,
+            },
+        }
+        if task_id is not None:
+            await tm.update_task_safe(
+                task_id,
+                status="skipped",
+                progress=1.0,
+                result=summary_empty,
+                completed_at=time.time(),
+                finished_at=_utcnow_iso(),
+            )
+        return summary_empty
+
+    # CN hot-list sources default to the NewsNow aggregator (TrendRadar
+    # pattern). If any of them is enabled, lift ``newsnow.mode`` in memory
+    # to ``"public"`` for this run so the hybrid fetchers can reach the
+    # aggregator even when the user never opened the Settings wizard.
+    # This DOES NOT persist to config — the wizard remains the single
+    # source of truth for long-term preference.
+    if any(sid in _NEWSNOW_BACKED_CN_SOURCES for sid in enabled):
+        mode = (cfg.get("newsnow.mode") or "off").strip().lower()
+        if mode == "off":
+            cfg["newsnow.mode"] = "public"
+        if not (cfg.get("newsnow.api_url") or "").strip():
+            from finpulse_fetchers.newsnow_base import DEFAULT_NEWSNOW_URL
+
+            cfg["newsnow.api_url"] = DEFAULT_NEWSNOW_URL
 
     since: datetime | None = None
     if since_hours:
@@ -164,6 +247,17 @@ async def ingest(
         concurrency = 4
     concurrency = max(1, min(concurrency, 16))
 
+    # NewsNow rate-limit: quietly drop the newsnow source from this run
+    # when the caller is still within the public-aggregator cooldown so
+    # we never hammer the volunteer-run upstream node. Every other source
+    # continues unaffected, and the returned summary surfaces the skip
+    # reason so the Settings UI can render a countdown.
+    newsnow_skip_remaining = 0.0
+    if "newsnow" in enabled:
+        newsnow_skip_remaining = _newsnow_rate_limit_remaining(cfg)
+        if newsnow_skip_remaining > 0:
+            enabled = [sid for sid in enabled if sid != "newsnow"]
+
     sem = asyncio.Semaphore(concurrency)
 
     async def _guarded(source_id: str) -> FetchReport:
@@ -178,14 +272,29 @@ async def ingest(
         "ok": True,
         "since": since.strftime("%Y-%m-%dT%H:%M:%SZ") if since else None,
         "by_source": {},
-        "totals": {"fetched": 0, "inserted": 0, "updated": 0, "failed_sources": 0},
+        "totals": {
+            "fetched": 0,
+            "inserted": 0,
+            "updated": 0,
+            "failed_sources": 0,
+            "sources_total": len(reports),
+            "sources_ok": 0,
+        },
     }
     updates: dict[str, str] = {}
+    # Track whether any hybrid fetcher actually used NewsNow, so we can
+    # refresh the shared ``newsnow.last_fetch_ts`` without needing the
+    # standalone newsnow aggregator source to be enabled.
+    newsnow_public_hit = False
 
     for report in reports:
+        # Hybrid CN fetchers stash their transport on the report so we
+        # can surface a NewsNow / Direct / None badge in the UI drawer.
+        via = report.via or "direct"
         entry: dict[str, Any] = {
             "fetched": len(report.items),
             "duration_ms": round(report.duration_ms, 2),
+            "via": via,
         }
         if report.error:
             entry["error_kind"] = report.error_kind
@@ -201,10 +310,40 @@ async def ingest(
             entry["updated"] = updated
             summary["totals"]["inserted"] += inserted
             summary["totals"]["updated"] += updated
+            summary["totals"]["sources_ok"] += 1
             updates[f"source.{report.source_id}.last_ok"] = _utcnow_iso()
             updates[f"source.{report.source_id}.last_error"] = ""
+            if via == "newsnow":
+                newsnow_public_hit = True
         summary["totals"]["fetched"] += entry["fetched"]
         summary["by_source"][report.source_id] = entry
+        # Persist a fresh ``newsnow.last_fetch_ts`` after a successful
+        # upstream call so the 5-minute floor is measured from the last
+        # OK (not the last attempt). Self-hosted mode is exempt from the
+        # throttle entirely.
+        if (
+            report.source_id == "newsnow"
+            and not report.error
+            and (cfg.get("newsnow.mode") or "off") == "public"
+        ):
+            updates["newsnow.last_fetch_ts"] = str(int(time.time()))
+
+    # If any CN fetcher hit the public aggregator, bump the cooldown
+    # clock too — the volunteer-run node sees all of those calls.
+    if newsnow_public_hit and (cfg.get("newsnow.mode") or "off") == "public":
+        updates["newsnow.last_fetch_ts"] = str(int(time.time()))
+
+    if newsnow_skip_remaining > 0:
+        summary["by_source"]["newsnow"] = {
+            "fetched": 0,
+            "duration_ms": 0.0,
+            "error_kind": "rate_limited",
+            "error": (
+                "newsnow public aggregator cooldown in effect; "
+                f"{int(newsnow_skip_remaining)}s remaining"
+            ),
+            "retry_after_s": int(newsnow_skip_remaining),
+        }
 
     if updates:
         await tm.set_configs(updates)
@@ -301,6 +440,208 @@ async def run_daily_brief(
     return result
 
 
+async def evaluate_radar(
+    tm: FinpulseTaskManager,
+    *,
+    rules_text: str,
+    since_hours: int = 24,
+    limit: int = 100,
+    min_score: float | None = None,
+) -> dict[str, Any]:
+    """Compile ``rules_text`` into a :class:`FrequencyMatcher` and run
+    it over recent articles. Purely read-only — used by the Radar tab's
+    preview and by :func:`run_hot_radar` below.
+
+    Returns a dict with ``hits`` (articles that matched) and ``meta``
+    (compiled rule counts / window) so the UI can render a rule-parse
+    error banner without falling through to 500.
+    """
+    try:
+        matcher = compile_matcher(rules_text or "")
+    except Exception as exc:  # noqa: BLE001 — DSL error boundary
+        logger.warning("radar rule compile failed: %s", exc)
+        return {
+            "ok": False,
+            "error": "rule_compile_failed",
+            "error_detail": str(exc),
+            "hits": [],
+            "meta": {"groups": 0, "filters": 0},
+        }
+
+    since_hours = max(1, min(int(since_hours), 168))
+    limit = max(1, min(int(limit), 500))
+    now = datetime.now(timezone.utc)
+    since = datetime.fromtimestamp(
+        now.timestamp() - since_hours * 3600, tz=timezone.utc
+    ).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    rows, _total = await tm.list_articles(
+        since=since,
+        min_score=min_score,
+        sort="time",
+        limit=limit,
+        offset=0,
+    )
+
+    hits: list[dict[str, Any]] = []
+    for row in rows:
+        title = row.get("title") or ""
+        if not matcher.match(title):
+            continue
+        terms = matcher.matched_terms(title)
+        hits.append(
+            {
+                "id": row.get("id"),
+                "source_id": row.get("source_id"),
+                "title": title,
+                "url": row.get("url"),
+                "fetched_at": row.get("fetched_at"),
+                "published_at": row.get("published_at"),
+                "ai_score": row.get("ai_score"),
+                "matched_terms": terms,
+            }
+        )
+
+    return {
+        "ok": True,
+        "hits": hits,
+        "meta": {
+            "groups": len(matcher.rules.groups),
+            "filters": len(matcher.rules.filter_words),
+            "global_filters": len(matcher.rules.global_filters),
+            "window_hours": since_hours,
+            "scanned": len(rows),
+            "matched": len(hits),
+        },
+    }
+
+
+def _radar_markdown(
+    *, header: str | None, hits: list[dict[str, Any]], limit: int = 20
+) -> str:
+    """Render radar hits as the compact markdown the dispatcher will
+    push over IM. Truncates above ``limit`` so a runaway rule doesn't
+    silently spam a 200-line payload — the iframe in the UI still
+    shows the full list.
+    """
+    lines: list[str] = []
+    if header:
+        lines.append(header.rstrip())
+        lines.append("")
+    trimmed = list(hits[:limit])
+    for i, hit in enumerate(trimmed, start=1):
+        title = (hit.get("title") or "").strip()
+        url = (hit.get("url") or "").strip()
+        src = (hit.get("source_id") or "").strip()
+        score = hit.get("ai_score")
+        terms = hit.get("matched_terms") or []
+        score_suffix = (
+            f" · score {float(score):.1f}"
+            if isinstance(score, (int, float))
+            else ""
+        )
+        term_suffix = f" · {' '.join(f'[{t}]' for t in terms[:4])}" if terms else ""
+        if url:
+            lines.append(f"{i}. [{title}]({url}) · {src}{score_suffix}{term_suffix}")
+        else:
+            lines.append(f"{i}. {title} · {src}{score_suffix}{term_suffix}")
+    if len(hits) > limit:
+        lines.append("")
+        lines.append(f"… +{len(hits) - limit} more")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+async def run_hot_radar(
+    tm: FinpulseTaskManager,
+    dispatch: DispatchService,
+    *,
+    rules_text: str,
+    targets: list[dict[str, str]],
+    since_hours: int = 24,
+    limit: int = 100,
+    min_score: float | None = None,
+    title: str | None = None,
+    cooldown_s: float = 600.0,
+    task_id: str | None = None,
+    dedupe_by_content: bool = True,
+) -> dict[str, Any]:
+    """Evaluate the rules and fan matching titles out to every target
+    using :class:`DispatchService`. Cooldown keys include the radar key
+    so the same ruleset can't re-fire within ``cooldown_s`` seconds.
+
+    When no hits are found the call returns early without touching the
+    dispatcher — this keeps quiet days truly quiet (important for
+    chat rooms with multiple plugin tenants).
+    """
+    eval_result = await evaluate_radar(
+        tm,
+        rules_text=rules_text,
+        since_hours=since_hours,
+        limit=limit,
+        min_score=min_score,
+    )
+    hits = eval_result.get("hits", [])
+
+    dispatch_results: list[dict[str, Any]] = []
+    if eval_result.get("ok") and hits:
+        header = title or "📡 fin-pulse 热点雷达"
+        md = _radar_markdown(header=header, hits=hits, limit=20)
+        # Cooldown key derives from the header + hit set so identical
+        # firings dedupe but a fresh batch of hits gets through. The
+        # key is suffixed with ``channel:chat_id`` in the loop below so
+        # fanning to multiple targets never self-cancels.
+        key_basis = (header + "\n" + "|".join(str(h.get("id") or "") for h in hits)).encode(
+            "utf-8"
+        )
+        base_key = "radar:" + hashlib.sha256(key_basis).hexdigest()[:8]
+        for tgt in targets:
+            channel = str(tgt.get("channel") or "").strip()
+            chat_id = str(tgt.get("chat_id") or "").strip()
+            if not channel or not chat_id:
+                dispatch_results.append(
+                    {
+                        "ok": False,
+                        "channel": channel,
+                        "chat_id": chat_id,
+                        "sent_chunks": 0,
+                        "skipped": None,
+                        "errors": ["missing_target"],
+                    }
+                )
+                continue
+            outcome = await dispatch.send(
+                channel=channel,
+                chat_id=chat_id,
+                content=md,
+                cooldown_key=f"{base_key}:{channel}:{chat_id}",
+                cooldown_s=cooldown_s,
+                dedupe_by_content=dedupe_by_content,
+            )
+            dispatch_results.append(outcome.as_dict())
+
+    result: dict[str, Any] = {
+        "ok": bool(eval_result.get("ok")),
+        "hits": hits,
+        "meta": eval_result.get("meta", {}),
+        "dispatched": dispatch_results,
+    }
+    if not eval_result.get("ok"):
+        result["error"] = eval_result.get("error")
+        result["error_detail"] = eval_result.get("error_detail")
+
+    if task_id is not None:
+        status = "succeeded" if result["ok"] else "failed"
+        await tm.update_task_safe(
+            task_id,
+            status=status,
+            progress=1.0,
+            result=result,
+            completed_at=time.time(),
+            finished_at=_utcnow_iso(),
+        )
+    return result
+
+
 class FinpulsePipeline:
     """Thin wrapper that bundles the pipeline entry points for
     ``plugin.py`` to call. Keeps the plugin module free of direct
@@ -342,10 +683,56 @@ class FinpulsePipeline:
             title=title,
         )
 
+    async def evaluate_radar(
+        self,
+        *,
+        rules_text: str,
+        since_hours: int = 24,
+        limit: int = 100,
+        min_score: float | None = None,
+    ) -> dict[str, Any]:
+        return await evaluate_radar(
+            self._tm,
+            rules_text=rules_text,
+            since_hours=since_hours,
+            limit=limit,
+            min_score=min_score,
+        )
+
+    async def run_hot_radar(
+        self,
+        dispatch: DispatchService,
+        *,
+        rules_text: str,
+        targets: list[dict[str, str]],
+        since_hours: int = 24,
+        limit: int = 100,
+        min_score: float | None = None,
+        title: str | None = None,
+        cooldown_s: float = 600.0,
+        task_id: str | None = None,
+        dedupe_by_content: bool = True,
+    ) -> dict[str, Any]:
+        return await run_hot_radar(
+            self._tm,
+            dispatch,
+            rules_text=rules_text,
+            targets=targets,
+            since_hours=since_hours,
+            limit=limit,
+            min_score=min_score,
+            title=title,
+            cooldown_s=cooldown_s,
+            task_id=task_id,
+            dedupe_by_content=dedupe_by_content,
+        )
+
 
 __all__ = [
     "FinpulsePipeline",
     "FetchReport",
+    "evaluate_radar",
     "ingest",
     "run_daily_brief",
+    "run_hot_radar",
 ]

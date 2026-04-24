@@ -993,21 +993,14 @@ class Brain:
                 continue
 
             if is_deferred:
-                short_desc = description.split("\n")[0][:200] if description else ""
-                result.append(
-                    Tool(
-                        name=name,
-                        description=(
-                            f"[DEFERRED] {short_desc} — "
-                            "Recommended: call `tool_search(query=\"...\")` first "
-                            "to load full parameters. Direct calls are still "
-                            "accepted (auto-promoted) but argument validation may "
-                            "fail without full schema."
-                        ),
-                        input_schema={"type": "object", "properties": {}},
-                    )
-                )
+                # Deferred tools are completely omitted from the API tools list.
+                # They remain visible in the system prompt's textual catalog
+                # (with [deferred] annotation) so the LLM can still discover
+                # them via tool_search or direct invocation (auto-promoted).
+                # This saves ~150 tokens per deferred tool compared to
+                # sending a stub entry with an empty schema.
                 deferred += 1
+                continue
             else:
                 result.append(
                     Tool(

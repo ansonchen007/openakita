@@ -890,8 +890,11 @@ class WeWorkWsAdapter(ChannelAdapter):
                     errmsg = frame.get("errmsg", "unknown")
                     self._auth_error = f"{errcode} {errmsg}"
                     logger.error(f"Auth failed: {errcode} {errmsg}")
-                    _FATAL_AUTH_CODES = {600041, 600042, 600043}
-                    if errcode in _FATAL_AUTH_CODES:
+                    _FATAL_AUTH_CODES = {600041, 600042, 600043, 853000}
+                    _fatal_keywords = ("invalid bot_id", "invalid secret")
+                    if errcode in _FATAL_AUTH_CODES or any(
+                        kw in errmsg.lower() for kw in _fatal_keywords
+                    ):
                         self._auth_fatal = True
                 return
 

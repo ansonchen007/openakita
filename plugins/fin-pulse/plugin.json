@@ -48,6 +48,7 @@
   },
   "ui": {
     "entry": "ui/dist/index.html",
+    "icon": "icon.svg",
     "title": "财经脉动",
     "title_i18n": { "zh": "财经脉动", "en": "Fin Pulse" },
     "sidebar_group": "apps",

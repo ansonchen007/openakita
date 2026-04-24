@@ -349,9 +349,26 @@ class TaskScheduler:
         async with self._lock:
             self._save_tasks()
 
-    async def trigger_now(self, task_id: str) -> TaskExecution | None:
+    async def trigger_now(
+        self,
+        task_id: str,
+        *,
+        execution: TaskExecution | None = None,
+        _skip_running_check: bool = False,
+    ) -> TaskExecution | None:
         """
         立即触发任务（走 semaphore 并发控制，检查任务状态）
+
+        Args:
+            task_id: 目标任务 id
+            execution: 可选，调用方预先分配的 TaskExecution；
+                用于 trigger_in_background 场景下让 API 返回的 execution_id
+                与实际落库的 execution 对齐。若为 None 则由 _execute_task 自行创建。
+            _skip_running_check: 内部参数。当调用方已经同步把 task_id 放入
+                ``_running_tasks`` 做排他占位（trigger_in_background 的用法），
+                置为 True 以跳过重复的 "already running" 护栏——否则此处会把
+                调用方自己提前放入的标记当作"另一个正在执行的副本"直接返回
+                None，导致任务永远不被执行。
 
         Returns:
             执行记录, 或 None（任务不存在/不可用/已在运行）
@@ -364,29 +381,34 @@ class TaskScheduler:
             logger.warning(f"trigger_now: task {task_id} is disabled, skipping")
             return None
 
-        if task_id in self._running_tasks:
-            logger.warning(f"trigger_now: task {task_id} is already running, skipping")
-            return None
+        if not _skip_running_check:
+            if task_id in self._running_tasks:
+                logger.warning(f"trigger_now: task {task_id} is already running, skipping")
+                return None
+            self._running_tasks.add(task_id)
 
-        self._running_tasks.add(task_id)
         try:
             if self._semaphore:
                 async with self._semaphore:
-                    return await self._execute_task(task)
+                    return await self._execute_task(task, execution=execution)
             else:
-                return await self._execute_task(task)
+                return await self._execute_task(task, execution=execution)
         finally:
+            # discard 幂等：无论是 trigger_now 自己 add 的还是 trigger_in_background
+            # 预先 add 的，执行完后都释放占位，允许后续再次触发。
             self._running_tasks.discard(task_id)
 
     def trigger_in_background(self, task_id: str) -> str | None:
         """
         在后台触发任务（不等待执行完成），用于 API 路由避免请求超时。
 
-        立即返回 execution_id（或 None 表示任务不存在 / 已在运行 / 已禁用）；
-        实际执行通过 asyncio.create_task 异步进行。
+        立即返回真实 execution_id（或 None 表示任务不存在 / 已在运行 / 已禁用）；
+        实际执行通过 asyncio.create_task 异步进行。预创建的 TaskExecution 会随后被
+        _execute_task 使用并最终落到 executions 存储中，因此调用方可用返回的 id
+        查询真实结果。
 
         Returns:
-            execution_id（提前生成，与最终 TaskExecution.id 对齐）或 None
+            真实的 execution_id（形如 "exec_<12hex>"）或 None
         """
         task = self._tasks.get(task_id)
         if not task:
@@ -400,15 +422,31 @@ class TaskScheduler:
             )
             return None
 
-        import uuid
+        # 同步占位 _running_tasks，避免快速连按在 create_task 调度到之前
+        # 两次 trigger_in_background 都通过 running 检查导致重复触发。
+        # 由于 trigger_now 开头也有 "already running" 护栏，这里必须把
+        # _skip_running_check=True 透传下去，否则 _runner 里的 trigger_now
+        # 会把我们刚放进去的占位当作"另一个副本"直接返回 None，任务永远不跑。
+        self._running_tasks.add(task_id)
 
-        execution_id = str(uuid.uuid4())
+        # 预创建 TaskExecution，让返回值与最终落库的记录共享同一个 id。
+        execution = TaskExecution.create(task.id)
+        execution_id = execution.id
 
         async def _runner() -> None:
             try:
-                await self.trigger_now(task_id)
+                await self.trigger_now(
+                    task_id,
+                    execution=execution,
+                    _skip_running_check=True,
+                )
             except Exception as e:
                 logger.error(f"trigger_in_background runner error for {task_id}: {e}")
+            finally:
+                # trigger_now 正常路径已 discard；这里兜底处理 trigger_now
+                # 因 task 消失 / 被禁用等在进入 try/finally 之前 return 的情况，
+                # 保证我们提前 add 的占位最终一定被释放。
+                self._running_tasks.discard(task_id)
 
         asyncio.create_task(_runner())
         return execution_id
@@ -462,9 +500,22 @@ class TaskScheduler:
         finally:
             self._running_tasks.discard(task.id)
 
-    async def _execute_task(self, task: ScheduledTask) -> TaskExecution:
-        """执行任务"""
-        execution = TaskExecution.create(task.id)
+    async def _execute_task(
+        self,
+        task: ScheduledTask,
+        *,
+        execution: TaskExecution | None = None,
+    ) -> TaskExecution:
+        """执行任务
+
+        Args:
+            task: 要执行的任务
+            execution: 可选，外部预创建的 TaskExecution（trigger_in_background 用以
+                让 API 返回的 execution_id 与最终持久化的记录对齐）。
+                若为 None 则创建一个新的 TaskExecution。
+        """
+        if execution is None:
+            execution = TaskExecution.create(task.id)
 
         logger.info(f"Executing task: {task.id} ({task.name})")
         task.mark_running()
