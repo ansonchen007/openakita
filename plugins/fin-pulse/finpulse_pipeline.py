@@ -90,6 +90,14 @@ async def _resolve_enabled_sources(
     return sources
 
 
+# CN hot-list sources that tap the NewsNow aggregator first. Enabling
+# any of them auto-lifts ``newsnow.mode`` to ``"public"`` for the run so
+# the hybrid path works out of the box (still honouring the 300s floor).
+_NEWSNOW_BACKED_CN_SOURCES: frozenset[str] = frozenset(
+    {"wallstreetcn", "cls", "eastmoney", "xueqiu"}
+)
+
+
 async def _fetch_one(
     source_id: str,
     *,
@@ -118,10 +126,16 @@ async def _fetch_one(
             items = await fetcher.fetch(since=since)
         else:
             items = await fetcher.fetch()
+        # Hybrid CN fetchers record which transport actually served the
+        # rows via ``_last_via``. Stash it on the report so the Today
+        # tab drawer can render a NewsNow / Direct badge per source.
+        via_raw = getattr(fetcher, "_last_via", None)
+        via = via_raw if isinstance(via_raw, str) and via_raw else "direct"
         return FetchReport(
             source_id=source_id,
             items=list(items or []),
             duration_ms=(time.perf_counter() - t0) * 1000.0,
+            via=via,
         )
     except Exception as exc:  # noqa: BLE001 — intentional pipeline boundary
         kind, msg, _hints = map_exception(exc)
@@ -180,7 +194,44 @@ async def ingest(
     cfg = await tm.get_all_config()
     enabled = await _resolve_enabled_sources(tm, include=sources)
     if not enabled:
-        return {"ok": False, "reason": "no_sources_enabled", "by_source": {}}
+        summary_empty: dict[str, Any] = {
+            "ok": False,
+            "reason": "no_sources_enabled",
+            "by_source": {},
+            "totals": {
+                "fetched": 0,
+                "inserted": 0,
+                "updated": 0,
+                "failed_sources": 0,
+                "sources_total": 0,
+                "sources_ok": 0,
+            },
+        }
+        if task_id is not None:
+            await tm.update_task_safe(
+                task_id,
+                status="skipped",
+                progress=1.0,
+                result=summary_empty,
+                completed_at=time.time(),
+                finished_at=_utcnow_iso(),
+            )
+        return summary_empty
+
+    # CN hot-list sources default to the NewsNow aggregator (TrendRadar
+    # pattern). If any of them is enabled, lift ``newsnow.mode`` in memory
+    # to ``"public"`` for this run so the hybrid fetchers can reach the
+    # aggregator even when the user never opened the Settings wizard.
+    # This DOES NOT persist to config — the wizard remains the single
+    # source of truth for long-term preference.
+    if any(sid in _NEWSNOW_BACKED_CN_SOURCES for sid in enabled):
+        mode = (cfg.get("newsnow.mode") or "off").strip().lower()
+        if mode == "off":
+            cfg["newsnow.mode"] = "public"
+        if not (cfg.get("newsnow.api_url") or "").strip():
+            from finpulse_fetchers.newsnow_base import DEFAULT_NEWSNOW_URL
+
+            cfg["newsnow.api_url"] = DEFAULT_NEWSNOW_URL
 
     since: datetime | None = None
     if since_hours:
@@ -221,14 +272,29 @@ async def ingest(
         "ok": True,
         "since": since.strftime("%Y-%m-%dT%H:%M:%SZ") if since else None,
         "by_source": {},
-        "totals": {"fetched": 0, "inserted": 0, "updated": 0, "failed_sources": 0},
+        "totals": {
+            "fetched": 0,
+            "inserted": 0,
+            "updated": 0,
+            "failed_sources": 0,
+            "sources_total": len(reports),
+            "sources_ok": 0,
+        },
     }
     updates: dict[str, str] = {}
+    # Track whether any hybrid fetcher actually used NewsNow, so we can
+    # refresh the shared ``newsnow.last_fetch_ts`` without needing the
+    # standalone newsnow aggregator source to be enabled.
+    newsnow_public_hit = False
 
     for report in reports:
+        # Hybrid CN fetchers stash their transport on the report so we
+        # can surface a NewsNow / Direct / None badge in the UI drawer.
+        via = report.via or "direct"
         entry: dict[str, Any] = {
             "fetched": len(report.items),
             "duration_ms": round(report.duration_ms, 2),
+            "via": via,
         }
         if report.error:
             entry["error_kind"] = report.error_kind
@@ -244,8 +310,11 @@ async def ingest(
             entry["updated"] = updated
             summary["totals"]["inserted"] += inserted
             summary["totals"]["updated"] += updated
+            summary["totals"]["sources_ok"] += 1
             updates[f"source.{report.source_id}.last_ok"] = _utcnow_iso()
             updates[f"source.{report.source_id}.last_error"] = ""
+            if via == "newsnow":
+                newsnow_public_hit = True
         summary["totals"]["fetched"] += entry["fetched"]
         summary["by_source"][report.source_id] = entry
         # Persist a fresh ``newsnow.last_fetch_ts`` after a successful
@@ -258,6 +327,11 @@ async def ingest(
             and (cfg.get("newsnow.mode") or "off") == "public"
         ):
             updates["newsnow.last_fetch_ts"] = str(int(time.time()))
+
+    # If any CN fetcher hit the public aggregator, bump the cooldown
+    # clock too — the volunteer-run node sees all of those calls.
+    if newsnow_public_hit and (cfg.get("newsnow.mode") or "off") == "public":
+        updates["newsnow.last_fetch_ts"] = str(int(time.time()))
 
     if newsnow_skip_remaining > 0:
         summary["by_source"]["newsnow"] = {

@@ -675,10 +675,23 @@ class Plugin(PluginBase):
                 params={"sources": [source_id], "since_hours": 24},
                 status="running",
             )
-            summary = await self._pipeline.ingest(
-                sources=[source_id], since_hours=24, task_id=task["id"]
-            )
-            return {"ok": True, "task_id": task["id"], "summary": summary}
+            try:
+                summary = await self._pipeline.ingest(
+                    sources=[source_id], since_hours=24, task_id=task["id"]
+                )
+                return {"ok": True, "task_id": task["id"], "summary": summary}
+            except Exception as exc:  # noqa: BLE001
+                from finpulse_errors import map_exception
+
+                kind, msg, hints = map_exception(exc)
+                await self._tm.update_task_safe(
+                    task["id"],
+                    status="failed",
+                    error_kind=kind,
+                    error_message=msg,
+                    error_hints=hints,
+                )
+                raise HTTPException(status_code=500, detail=msg) from exc
 
         @router.get("/articles")
         async def list_articles(
