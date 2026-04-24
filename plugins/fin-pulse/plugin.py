@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Body, HTTPException, Query
+from fastapi.responses import HTMLResponse
 
 from openakita.plugins.api import PluginAPI, PluginBase
 
@@ -463,6 +464,95 @@ class Plugin(PluginBase):
             if row is None:
                 raise HTTPException(status_code=404, detail="not_found")
             return {"ok": True, "article": row}
+
+        @router.post("/digest/run")
+        async def run_digest(
+            payload: dict[str, Any] = Body(default={}),
+        ) -> dict[str, Any]:
+            if self._tm is None or self._pipeline is None:
+                raise HTTPException(status_code=503, detail="pipeline_unavailable")
+            session = payload.get("session") if isinstance(payload, dict) else None
+            if session not in {"morning", "noon", "evening"}:
+                raise HTTPException(
+                    status_code=400,
+                    detail="session must be one of morning|noon|evening",
+                )
+            since_hours = payload.get("since_hours", 12)
+            top_k = payload.get("top_k", 20)
+            lang = payload.get("lang", "zh") or "zh"
+            try:
+                since_hours_int = max(1, min(int(since_hours), 72))
+                top_k_int = max(1, min(int(top_k), 60))
+            except (TypeError, ValueError) as exc:
+                raise HTTPException(
+                    status_code=400, detail=f"invalid numeric arg: {exc}"
+                ) from exc
+            task = await self._tm.create_task(
+                mode="daily_brief",
+                params={
+                    "session": session,
+                    "since_hours": since_hours_int,
+                    "top_k": top_k_int,
+                    "lang": lang,
+                },
+                status="running",
+            )
+            try:
+                result = await self._pipeline.run_daily_brief(
+                    session=session,
+                    since_hours=since_hours_int,
+                    top_k=top_k_int,
+                    lang=lang,
+                    task_id=task["id"],
+                )
+                return {"ok": True, "task_id": task["id"], "digest": result}
+            except Exception as exc:  # noqa: BLE001
+                from finpulse_errors import map_exception
+
+                kind, msg, hints = map_exception(exc)
+                await self._tm.update_task_safe(
+                    task["id"],
+                    status="failed",
+                    error_kind=kind,
+                    error_message=msg,
+                    error_hints=hints,
+                )
+                raise HTTPException(status_code=500, detail=msg) from exc
+
+        @router.get("/digests")
+        async def list_digests(
+            session: str | None = Query(None),
+            offset: int = Query(0, ge=0),
+            limit: int = Query(50, ge=1, le=200),
+        ) -> dict[str, Any]:
+            if self._tm is None:
+                raise HTTPException(status_code=503, detail="task_manager_unavailable")
+            items, total = await self._tm.list_digests(
+                session=session, offset=offset, limit=limit
+            )
+            for item in items:
+                item.pop("html_blob", None)
+                item.pop("markdown_blob", None)
+            return {"ok": True, "items": items, "total": total}
+
+        @router.get("/digests/{digest_id}")
+        async def get_digest(digest_id: str) -> dict[str, Any]:
+            if self._tm is None:
+                raise HTTPException(status_code=503, detail="task_manager_unavailable")
+            row = await self._tm.get_digest(digest_id)
+            if row is None:
+                raise HTTPException(status_code=404, detail="not_found")
+            return {"ok": True, "digest": row}
+
+        @router.get("/digests/{digest_id}/html", response_class=HTMLResponse)
+        async def get_digest_html(digest_id: str) -> HTMLResponse:
+            if self._tm is None:
+                raise HTTPException(status_code=503, detail="task_manager_unavailable")
+            row = await self._tm.get_digest(digest_id)
+            if row is None:
+                raise HTTPException(status_code=404, detail="not_found")
+            html_blob = row.get("html_blob") or ""
+            return HTMLResponse(content=html_blob, media_type="text/html")
 
 
 # ── Utilities ────────────────────────────────────────────────────────

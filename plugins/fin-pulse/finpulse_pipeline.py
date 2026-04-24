@@ -23,7 +23,8 @@ from typing import TYPE_CHECKING, Any
 from finpulse_errors import map_exception
 from finpulse_fetchers import SOURCE_REGISTRY, get_fetcher
 from finpulse_fetchers.base import FetchReport, NormalizedItem
-from finpulse_models import SOURCE_DEFS
+from finpulse_models import SESSIONS, SOURCE_DEFS
+from finpulse_report import build_daily_brief
 
 if TYPE_CHECKING:
     from finpulse_task_manager import FinpulseTaskManager
@@ -220,6 +221,86 @@ async def ingest(
     return summary
 
 
+async def run_daily_brief(
+    tm: FinpulseTaskManager,
+    *,
+    session: str,
+    since_hours: int = 12,
+    top_k: int = 20,
+    lang: str = "zh",
+    task_id: str | None = None,
+    title: str | None = None,
+) -> dict[str, Any]:
+    """Build a daily-brief digest and persist it to the ``digests`` table.
+
+    This deliberately sits above :func:`ingest` — callers are expected
+    to have already ingested fresh articles before triggering a digest,
+    either via the ``pipeline_ingest`` task or the scheduled hook. The
+    function only reads ``articles`` and writes the rendered blob into
+    ``digests``; it does **not** dispatch notifications (that is Phase
+    4b's job).
+
+    ``session`` must be one of :data:`finpulse_models.SESSIONS`. The
+    window defaults to 12h back — morning/noon/evening cadences each
+    look back through the previous session's tail.
+    """
+    if session not in SESSIONS:
+        raise ValueError(f"invalid session {session!r}, expected one of {SESSIONS}")
+
+    top_k = max(1, min(int(top_k), 60))
+    since_hours = max(1, min(int(since_hours), 72))
+    now = datetime.now(timezone.utc)
+    since = datetime.fromtimestamp(
+        now.timestamp() - since_hours * 3600, tz=timezone.utc
+    ).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    rows, total = await tm.list_articles(
+        since=since,
+        sort="score",
+        limit=max(top_k * 3, 60),
+        offset=0,
+    )
+    generated_at = _utcnow_iso()
+    markdown, html_blob, stats = build_daily_brief(
+        rows,
+        session=session,
+        top_k=top_k,
+        lang=lang,
+        generated_at=generated_at,
+        title=title,
+    )
+
+    digest_id = await tm.create_digest(
+        session=session,
+        generated_at=generated_at,
+        title=title,
+        markdown_blob=markdown,
+        html_blob=html_blob,
+        stats=stats.as_dict(),
+        task_id=task_id,
+    )
+
+    result: dict[str, Any] = {
+        "ok": True,
+        "digest_id": digest_id,
+        "session": session,
+        "generated_at": generated_at,
+        "stats": stats.as_dict(),
+        "window": {"since_hours": since_hours, "scanned_total": total},
+    }
+
+    if task_id is not None:
+        await tm.update_task_safe(
+            task_id,
+            status="succeeded",
+            progress=1.0,
+            result=result,
+            completed_at=time.time(),
+            finished_at=_utcnow_iso(),
+        )
+    return result
+
+
 class FinpulsePipeline:
     """Thin wrapper that bundles the pipeline entry points for
     ``plugin.py`` to call. Keeps the plugin module free of direct
@@ -241,9 +322,30 @@ class FinpulsePipeline:
             self._tm, sources=sources, since_hours=since_hours, task_id=task_id
         )
 
+    async def run_daily_brief(
+        self,
+        *,
+        session: str,
+        since_hours: int = 12,
+        top_k: int = 20,
+        lang: str = "zh",
+        task_id: str | None = None,
+        title: str | None = None,
+    ) -> dict[str, Any]:
+        return await run_daily_brief(
+            self._tm,
+            session=session,
+            since_hours=since_hours,
+            top_k=top_k,
+            lang=lang,
+            task_id=task_id,
+            title=title,
+        )
+
 
 __all__ = [
     "FinpulsePipeline",
     "FetchReport",
     "ingest",
+    "run_daily_brief",
 ]
