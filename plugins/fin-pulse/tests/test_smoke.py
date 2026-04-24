@@ -121,3 +121,46 @@ def test_fallback_modes_mirror_models_module() -> None:
     plugin_src = (PLUGIN_DIR / "plugin.py").read_text("utf-8")
     for mode in ("daily_brief", "hot_radar", "ask_news"):
         assert f'"{mode}"' in plugin_src, f"plugin.py missing fallback mode: {mode}"
+
+
+def test_ui_tabs_are_hydrated() -> None:
+    """Phase 6 — each tab body must talk to the REST surface instead of
+    rendering the Phase-1 placeholder. We assert that the hot-path API
+    calls and the NewsNow 3-stage wizard tokens are present.
+    """
+    html = INDEX_HTML.read_text("utf-8")
+
+    # Today tab talks to /articles + /ingest and reacts to article events.
+    assert 'api("GET", "/articles"' in html
+    assert 'api("POST", "/ingest"' in html
+    assert 'article_inserted' in html
+
+    # Digests tab lists + runs + iframes html blobs.
+    assert 'api("GET", "/digests' in html
+    assert 'api("POST", "/digest/run"' in html
+    assert '/digests/' in html and '/html' in html
+
+    # Radar tab exercises the evaluate + config save paths.
+    assert 'api("POST", "/radar/evaluate"' in html
+    assert 'radar_rules' in html
+
+    # Ask tab surfaces the 7 agent tools.
+    for tool in (
+        "fin_pulse_create",
+        "fin_pulse_status",
+        "fin_pulse_list",
+        "fin_pulse_cancel",
+        "fin_pulse_settings_get",
+        "fin_pulse_settings_set",
+        "fin_pulse_search_news",
+    ):
+        assert tool in html, f"Ask tab missing tool: {tool}"
+
+    # Settings tab exposes channels / schedules / NewsNow wizard.
+    assert 'api("GET", "/available-channels"' in html
+    assert 'api("GET", "/schedules"' in html
+    assert 'api("POST", "/schedules"' in html
+    assert 'newsnow.mode' in html and 'newsnow.api_url' in html
+    assert 'settings.newsnow.step1' in html
+    assert 'settings.newsnow.step2' in html
+    assert 'settings.newsnow.step3' in html

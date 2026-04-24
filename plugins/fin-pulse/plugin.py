@@ -475,16 +475,57 @@ class Plugin(PluginBase):
             },
         ]
 
-    def _handle_tool(self, name: str, args: dict, **_: Any) -> Any:
-        """Stub dispatch for Phase 1a — Phase 5 replaces this with a
-        router into ``finpulse_services.query.*``.
+    async def _handle_tool(self, name: str, args: dict, **_: Any) -> Any:
+        """Route an agent tool invocation into ``finpulse_services.query``.
+
+        The host Brain hands us ``(name, arguments)`` and expects a
+        string back; our service layer returns rich dicts so we JSON
+        encode them at the boundary. Every failure is caught so a bad
+        LLM payload never crashes the plugin dispatcher — the envelope
+        always carries ``ok`` and an ``error`` kind instead.
         """
-        return {
-            "ok": False,
-            "error": "not_implemented",
-            "hint": "fin-pulse agent tools land in Phase 5.",
-            "tool": name,
-        }
+
+        if not isinstance(args, dict):
+            args = {}
+        try:
+            from finpulse_services.query import (  # type: ignore
+                build_tool_dispatch,
+                serialize_tool_result,
+            )
+        except ImportError as exc:
+            return json.dumps(
+                {
+                    "ok": False,
+                    "error": "services_unavailable",
+                    "detail": str(exc),
+                    "tool": name,
+                }
+            )
+        dispatch_table = build_tool_dispatch(
+            tm=self._tm, pipeline=self._pipeline, dispatch=self._dispatch
+        )
+        handler = dispatch_table.get(name)
+        if handler is None:
+            return serialize_tool_result(
+                {"ok": False, "error": "unknown_tool", "tool": name}
+            )
+        try:
+            payload = await handler(args)
+        except Exception as exc:  # noqa: BLE001 — envelope every failure
+            try:
+                from finpulse_errors import map_exception  # type: ignore
+
+                kind, msg, hints = map_exception(exc)
+            except Exception:  # noqa: BLE001
+                kind, msg, hints = "unknown", str(exc), []
+            payload = {
+                "ok": False,
+                "error": kind,
+                "message": msg,
+                "hints": hints,
+                "tool": name,
+            }
+        return serialize_tool_result(payload)
 
     # ── FastAPI routes ──────────────────────────────────────────────
 

@@ -213,7 +213,78 @@ const I18N_DICT = {
     "err.stackLabel": "错误堆栈",
     "confirm.ok": "确认",
     "confirm.cancel": "取消",
-    "empty.phase1": "Phase 1 骨架 — 数据源、AI 分析、推送等在后续 Phase 逐步落地",
+    "empty.phase1": "暂无数据，点击刷新或先在设置页配置数据源",
+    "today.filters.title": "筛选",
+    "today.filters.source": "数据源",
+    "today.filters.source.all": "全部",
+    "today.filters.window": "时间范围",
+    "today.filters.window.6h": "近 6 小时",
+    "today.filters.window.24h": "近 24 小时",
+    "today.filters.window.72h": "近 3 天",
+    "today.filters.minScore": "最低 AI 评分",
+    "today.filters.sort.time": "按时间",
+    "today.filters.sort.score": "按 AI 评分",
+    "today.filters.reset": "重置",
+    "today.list.empty": "没有命中当前筛选条件的新闻",
+    "today.list.loading": "加载中…",
+    "today.list.refresh": "刷新",
+    "today.list.ingest": "抓取全部数据源",
+    "today.list.copy": "复制",
+    "today.list.copied": "已复制到剪贴板",
+    "today.list.score": "AI {score}",
+    "digests.title": "早午晚报",
+    "digests.run": "立即生成",
+    "digests.session.morning": "早报",
+    "digests.session.noon": "午报",
+    "digests.session.evening": "晚报",
+    "digests.empty": "尚未生成任何早午晚报",
+    "digests.preview": "预览",
+    "digests.resend": "再推一次",
+    "digests.resend.target": "发送至",
+    "digests.resend.confirm": "确定要将该份早午晚报推送到 {channel}？",
+    "digests.resend.success": "已发送",
+    "digests.resend.fail": "发送失败：{err}",
+    "radar.editor.title": "关键词规则",
+    "radar.editor.hint": "每行一个关键词；`+` 必须、`!` 排除、`@alias` 别名、空行分组、`[GLOBAL_FILTER]` 全局排除",
+    "radar.evaluate": "试运行",
+    "radar.evaluate.loading": "正在评估…",
+    "radar.hits.title": "命中预览",
+    "radar.hits.empty": "未命中任何新闻",
+    "radar.hits.count": "共 {count} 条命中（{since_hours} 小时内）",
+    "radar.save": "保存规则",
+    "radar.saved": "规则已保存到配置",
+    "ask.title": "Agent 工具",
+    "ask.intro": "这些工具会被 OpenAkita 的大脑在对话中自动调用。你也可以在左侧复制自然语言 Prompt，粘贴到主对话窗口直接使用。",
+    "ask.copy.prompt": "复制自然语言 Prompt",
+    "ask.copy.schema": "复制 JSON 样例",
+    "ask.copied": "已复制",
+    "settings.sources.title": "数据源健康",
+    "settings.sources.ingest": "手动抓取",
+    "settings.channels.title": "IM 推送渠道",
+    "settings.channels.none": "未在宿主中注册任何 IM 适配器，推送将不可用。",
+    "settings.channels.send": "发送测试消息",
+    "settings.schedules.title": "定时任务",
+    "settings.schedules.none": "尚未创建任何定时任务",
+    "settings.schedules.create": "新增定时任务",
+    "settings.schedules.delete": "删除",
+    "settings.schedules.daily": "早午晚报",
+    "settings.schedules.radar": "热点雷达",
+    "settings.newsnow.title": "NewsNow 热榜聚合",
+    "settings.newsnow.mode.off": "关闭",
+    "settings.newsnow.mode.public": "公共服务",
+    "settings.newsnow.mode.self_host": "自建",
+    "settings.newsnow.step1": "① 选择模式",
+    "settings.newsnow.step2": "② 填写 API 地址",
+    "settings.newsnow.step3": "③ 测试连接",
+    "settings.newsnow.probe": "测试连接",
+    "settings.newsnow.probe.ok": "连接成功：{n} 条热榜",
+    "settings.newsnow.probe.fail": "连接失败：{err}",
+    "settings.newsnow.warn.public": "公共服务由开源作者自费维护，当前版本 v0.0.39，请合理控制抓取频率。",
+    "settings.newsnow.help.self_host": "> 自建命令示例：\\n> ```bash\\n> docker run -d --name newsnow -p 4444:4444 ourongxing/newsnow:latest\\n> ```\\n> 完成后 API URL 填 `http://127.0.0.1:4444/api/s`。",
+    "settings.llm.title": "AI 大脑（继承宿主 LLM 工厂）",
+    "settings.llm.hint": "fin-pulse 直接复用 OpenAkita 的大脑调用；如需调整 provider / model / 温度，请前往宿主「设置 → 模型」页面修改。",
+    "settings.save": "保存",
+    "settings.saved": "已保存",
   },
   en: {
     "app.title": "Fin Pulse",
@@ -231,7 +302,78 @@ const I18N_DICT = {
     "err.stackLabel": "Stack trace",
     "confirm.ok": "Confirm",
     "confirm.cancel": "Cancel",
-    "empty.phase1": "Phase 1 skeleton — sources, AI filter and dispatch land in later phases",
+    "empty.phase1": "No data yet — click Refresh or configure a data source in Settings",
+    "today.filters.title": "Filters",
+    "today.filters.source": "Source",
+    "today.filters.source.all": "All",
+    "today.filters.window": "Window",
+    "today.filters.window.6h": "Last 6h",
+    "today.filters.window.24h": "Last 24h",
+    "today.filters.window.72h": "Last 3d",
+    "today.filters.minScore": "Min AI score",
+    "today.filters.sort.time": "By time",
+    "today.filters.sort.score": "By score",
+    "today.filters.reset": "Reset",
+    "today.list.empty": "No articles match the current filters",
+    "today.list.loading": "Loading…",
+    "today.list.refresh": "Refresh",
+    "today.list.ingest": "Run ingest now",
+    "today.list.copy": "Copy",
+    "today.list.copied": "Copied to clipboard",
+    "today.list.score": "AI {score}",
+    "digests.title": "Daily Briefs",
+    "digests.run": "Generate now",
+    "digests.session.morning": "Morning",
+    "digests.session.noon": "Noon",
+    "digests.session.evening": "Evening",
+    "digests.empty": "No brief generated yet",
+    "digests.preview": "Preview",
+    "digests.resend": "Resend",
+    "digests.resend.target": "Send to",
+    "digests.resend.confirm": "Resend this brief to {channel}?",
+    "digests.resend.success": "Sent",
+    "digests.resend.fail": "Dispatch failed: {err}",
+    "radar.editor.title": "Keyword rules",
+    "radar.editor.hint": "One keyword per line; `+` must, `!` exclude, `@alias` alias, blank line = group, `[GLOBAL_FILTER]` = global exclude.",
+    "radar.evaluate": "Dry run",
+    "radar.evaluate.loading": "Evaluating…",
+    "radar.hits.title": "Preview hits",
+    "radar.hits.empty": "No hits",
+    "radar.hits.count": "{count} hit(s) within {since_hours}h",
+    "radar.save": "Save rules",
+    "radar.saved": "Rules saved to config",
+    "ask.title": "Agent tools",
+    "ask.intro": "These tools are called automatically by the OpenAkita Brain. You can also copy a natural-language prompt to paste into the main chat window.",
+    "ask.copy.prompt": "Copy NL prompt",
+    "ask.copy.schema": "Copy JSON sample",
+    "ask.copied": "Copied",
+    "settings.sources.title": "Source health",
+    "settings.sources.ingest": "Manual ingest",
+    "settings.channels.title": "IM channels",
+    "settings.channels.none": "No IM adapter registered in the host. Dispatch will be unavailable.",
+    "settings.channels.send": "Send test message",
+    "settings.schedules.title": "Scheduled tasks",
+    "settings.schedules.none": "No scheduled tasks",
+    "settings.schedules.create": "Create schedule",
+    "settings.schedules.delete": "Delete",
+    "settings.schedules.daily": "Daily brief",
+    "settings.schedules.radar": "Hot radar",
+    "settings.newsnow.title": "NewsNow aggregator",
+    "settings.newsnow.mode.off": "Off",
+    "settings.newsnow.mode.public": "Public",
+    "settings.newsnow.mode.self_host": "Self-host",
+    "settings.newsnow.step1": "Step 1 — Mode",
+    "settings.newsnow.step2": "Step 2 — API URL",
+    "settings.newsnow.step3": "Step 3 — Test",
+    "settings.newsnow.probe": "Probe connection",
+    "settings.newsnow.probe.ok": "OK — {n} items",
+    "settings.newsnow.probe.fail": "Failed: {err}",
+    "settings.newsnow.warn.public": "The public service is run by the open-source author at their own cost (current version v0.0.39). Please keep your polling interval reasonable.",
+    "settings.newsnow.help.self_host": "> Self-host command:\\n> ```bash\\n> docker run -d --name newsnow -p 4444:4444 ourongxing/newsnow:latest\\n> ```\\n> Then set API URL to `http://127.0.0.1:4444/api/s`.",
+    "settings.llm.title": "AI Brain (inherits host factory)",
+    "settings.llm.hint": "fin-pulse reuses the OpenAkita brain directly; change provider / model / temperature in the host Settings → Models page.",
+    "settings.save": "Save",
+    "settings.saved": "Saved",
   },
 };
 
@@ -353,57 +495,761 @@ function ConfirmHost() {
   );
 }
 
-/* ── Placeholder tab bodies (Phase 6 hydrates real content) ── */
+/* ── Shared helpers ── */
+function tfmt(template, vars) {
+  return String(template || "").replace(/\{(\w+)\}/g, function (_, k) { return (vars && k in vars) ? vars[k] : "{" + k + "}"; });
+}
+function fmtDate(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return iso;
+  const pad = function (n) { return n < 10 ? "0" + n : "" + n; };
+  return d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate()) + " " + pad(d.getHours()) + ":" + pad(d.getMinutes());
+}
+function hoursAgoISO(hours) {
+  const d = new Date(Date.now() - hours * 3600 * 1000);
+  return d.toISOString().replace(/\.\d+Z$/, "Z");
+}
+function copyText(text) {
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text);
+    } else {
+      const el = document.createElement("textarea");
+      el.value = text; document.body.appendChild(el); el.select();
+      document.execCommand("copy"); document.body.removeChild(el);
+    }
+  } catch (_) {}
+}
+
+/* Known source ids — reflect finpulse_models.SOURCE_DEFS. Keeps the
+   filter dropdown usable even before the first ingest lands. */
+const KNOWN_SOURCES = [
+  { id: "wallstreetcn", name: "华尔街见闻" },
+  { id: "cls_telegraph", name: "财联社电报" },
+  { id: "stcn", name: "证券时报" },
+  { id: "pboc", name: "中国人民银行" },
+  { id: "stats_gov", name: "国家统计局" },
+  { id: "fed_fomc", name: "美联储 FOMC" },
+  { id: "us_treasury", name: "美国财政部" },
+  { id: "sec_edgar", name: "SEC EDGAR" },
+  { id: "newsnow", name: "NewsNow 热榜" },
+];
+
+/* ── Today Tab — live article feed ─────────────────────────────── */
 function TodayTab() {
   const t = useT();
-  const refreshRef = useRef(0);
+  const [items, setItems] = useState([]);
+  const [total, setTotal] = useState(0);
+  const [loading, setLoading] = useState(false);
+  const [filters, setFilters] = useState({ source: "", window: 24, minScore: 0, sort: "time" });
+  const [ingesting, setIngesting] = useState(false);
+
+  const load = useCallback(async function () {
+    setLoading(true);
+    try {
+      const qs = {
+        source_id: filters.source || undefined,
+        since: filters.window ? hoursAgoISO(filters.window) : undefined,
+        min_score: filters.minScore > 0 ? filters.minScore : undefined,
+        sort: filters.sort || "time",
+        limit: 100,
+      };
+      const query = Object.keys(qs)
+        .filter(function (k) { return qs[k] !== undefined && qs[k] !== ""; })
+        .map(function (k) { return encodeURIComponent(k) + "=" + encodeURIComponent(String(qs[k])); })
+        .join("&");
+      const resp = await api("GET", "/articles" + (query ? "?" + query : ""));
+      if (resp && resp.ok) {
+        setItems(resp.items || []);
+        setTotal(resp.total || 0);
+      } else {
+        setItems([]); setTotal(0);
+      }
+    } finally {
+      setLoading(false);
+    }
+  }, [filters]);
+
+  useEffect(function () { load(); }, [load]);
   useEffect(function () {
-    const off1 = onEvent("plugin:fin-pulse:task_update", function (d) { refreshRef.current += 1; });
-    const off2 = onEvent("plugin:fin-pulse:article_inserted", function (d) { refreshRef.current += 1; });
-    const timer = setInterval(function () {
-      /* soft refresh — Phase 2+ hydrates real articles from /articles. */
-    }, 8000);
+    const off1 = onEvent("plugin:fin-pulse:article_inserted", function () { load(); });
+    const off2 = onEvent("plugin:fin-pulse:task_update", function () { load(); });
+    const timer = setInterval(load, 8000);
     return function () { off1(); off2(); clearInterval(timer); };
-  }, []);
+  }, [load]);
+
+  const onIngest = useCallback(async function () {
+    if (ingesting) return;
+    setIngesting(true);
+    try {
+      const resp = await api("POST", "/ingest", { since_hours: 24 });
+      window.oaToast({ level: resp && resp.ok ? "success" : "error",
+        message: resp && resp.ok ? "ingest ok: task " + resp.task_id : "ingest failed" });
+      load();
+    } finally { setIngesting(false); }
+  }, [ingesting, load]);
+
   return (
     <div className="split-layout">
       <div style={{width: 280, flexShrink: 0}}>
         <div className="card">
-          <div className="card-title">{t("tabs.today")}</div>
-          <div className="empty">{t("empty.phase1")}</div>
+          <div className="card-title">{t("today.filters.title")}</div>
+          <div style={{display: "flex", flexDirection: "column", gap: 10}}>
+            <div>
+              <div className="label">{t("today.filters.source")}</div>
+              <select className="input"
+                      value={filters.source}
+                      onChange={function (e) { setFilters(Object.assign({}, filters, {source: e.target.value})); }}>
+                <option value="">{t("today.filters.source.all")}</option>
+                {KNOWN_SOURCES.map(function (s) { return <option key={s.id} value={s.id}>{s.name}</option>; })}
+              </select>
+            </div>
+            <div>
+              <div className="label">{t("today.filters.window")}</div>
+              <div style={{display: "flex", gap: 6, flexWrap: "wrap"}}>
+                {[{h:6,k:"6h"},{h:24,k:"24h"},{h:72,k:"72h"}].map(function (w) {
+                  const active = filters.window === w.h;
+                  return <span key={w.h}
+                               className={"api-pill " + (active ? "" : "api-pill--missing")}
+                               onClick={function () { setFilters(Object.assign({}, filters, {window: w.h})); }}>
+                    {t("today.filters.window." + w.k)}
+                  </span>;
+                })}
+              </div>
+            </div>
+            <div>
+              <div className="label">{t("today.filters.minScore")}</div>
+              <input className="input" type="number" min="0" max="10" step="0.5"
+                     value={filters.minScore}
+                     onChange={function (e) { setFilters(Object.assign({}, filters, {minScore: parseFloat(e.target.value) || 0})); }} />
+            </div>
+            <div>
+              <div className="label">Sort</div>
+              <div style={{display: "flex", gap: 6}}>
+                {[{k:"time"},{k:"score"}].map(function (s) {
+                  const active = filters.sort === s.k;
+                  return <span key={s.k}
+                               className={"api-pill " + (active ? "" : "api-pill--missing")}
+                               onClick={function () { setFilters(Object.assign({}, filters, {sort: s.k})); }}>
+                    {t("today.filters.sort." + s.k)}
+                  </span>;
+                })}
+              </div>
+            </div>
+            <button className="btn btn-sm" onClick={function () { setFilters({source: "", window: 24, minScore: 0, sort: "time"}); }}>
+              {t("today.filters.reset")}
+            </button>
+            <button className="btn btn-primary" disabled={ingesting} onClick={onIngest}>
+              <Ico name="play"/> {ingesting ? t("today.list.loading") : t("today.list.ingest")}
+            </button>
+          </div>
         </div>
       </div>
-      <div style={{flex: 1}}>
+      <div style={{flex: 1, minWidth: 0}}>
         <div className="card">
-          <div className="empty">{t("empty.phase1")}</div>
+          <div style={{display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8}}>
+            <div className="card-title" style={{margin: 0}}>
+              {t("today.list.refresh")} · {total}
+            </div>
+            <button className="btn btn-sm" onClick={load}>
+              <Ico name="refresh"/> {loading ? t("today.list.loading") : t("today.list.refresh")}
+            </button>
+          </div>
+          {loading && items.length === 0 && <div className="empty">{t("today.list.loading")}</div>}
+          {!loading && items.length === 0 && <div className="empty">{t("today.list.empty")}</div>}
+          {items.map(function (it) {
+            const score = (typeof it.ai_score === "number") ? it.ai_score.toFixed(1) : "-";
+            return (
+              <div key={it.id}
+                   style={{padding: "10px 0", borderBottom: "1px solid var(--border)"}}>
+                <div style={{display: "flex", alignItems: "flex-start", gap: 8}}>
+                  <span className="api-pill" style={{flexShrink: 0}} title="ai score">
+                    {tfmt(t("today.list.score"), {score: score})}
+                  </span>
+                  <div style={{flex: 1, minWidth: 0}}>
+                    <a href={it.url} target="_blank" rel="noopener noreferrer"
+                       style={{color: "var(--text)", fontSize: 14, fontWeight: 500, textDecoration: "none", display: "block", wordBreak: "break-word"}}>
+                      {it.title}
+                    </a>
+                    <div style={{display: "flex", gap: 8, fontSize: 11, color: "var(--text-muted)", marginTop: 4}}>
+                      <span>{it.source_id}</span>
+                      <span>·</span>
+                      <span>{fmtDate(it.fetched_at)}</span>
+                    </div>
+                    {it.summary ? (
+                      <div style={{fontSize: 12, color: "var(--text-muted)", marginTop: 6, lineHeight: 1.5}}>
+                        {String(it.summary).slice(0, 220)}
+                      </div>
+                    ) : null}
+                  </div>
+                  <button className="btn btn-sm"
+                          style={{flexShrink: 0}}
+                          onClick={function () {
+                            copyText(it.title + "\n" + it.url);
+                            window.oaToast({level: "success", message: _i18n.t("today.list.copied")});
+                          }}>
+                    <Ico name="copy"/> {t("today.list.copy")}
+                  </button>
+                </div>
+              </div>
+            );
+          })}
         </div>
       </div>
     </div>
   );
 }
+
+/* ── Digests Tab — daily briefs + preview + resend ─────────────── */
 function DigestsTab() {
   const t = useT();
-  return <div className="card"><div className="empty">{t("empty.phase1")}</div></div>;
+  const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [selected, setSelected] = useState(null);
+  const [running, setRunning] = useState(false);
+  const [channels, setChannels] = useState([]);
+
+  const load = useCallback(async function () {
+    setLoading(true);
+    try {
+      const resp = await api("GET", "/digests?limit=50");
+      if (resp && resp.ok) setItems(resp.items || []);
+    } finally { setLoading(false); }
+  }, []);
+  const loadChannels = useCallback(async function () {
+    const resp = await api("GET", "/available-channels");
+    setChannels((resp && resp.channels) || []);
+  }, []);
+  useEffect(function () { load(); loadChannels(); }, [load, loadChannels]);
+
+  const onRun = useCallback(async function (session) {
+    if (running) return;
+    setRunning(true);
+    try {
+      const resp = await api("POST", "/digest/run", {session: session, since_hours: 12, top_k: 20, lang: "zh"});
+      window.oaToast({level: resp && resp.ok ? "success" : "error",
+        message: resp && resp.ok ? "generated " + session : ("failed: " + (resp && resp.detail || ""))});
+      load();
+    } finally { setRunning(false); }
+  }, [running, load]);
+
+  const onResend = useCallback(async function (digest) {
+    if (!channels.length) {
+      window.oaToast({level: "warning", message: "no channel registered"});
+      return;
+    }
+    const channel = channels[0];
+    const chat_id = window.prompt("chat_id for " + channel + "?", "");
+    if (!chat_id) return;
+    const ok = await window.oaConfirm({
+      title: t("digests.resend"),
+      message: tfmt(t("digests.resend.confirm"), {channel: channel + ":" + chat_id}),
+      okText: t("digests.resend"),
+    });
+    if (!ok) return;
+    const resp = await api("POST", "/dispatch/send", {
+      channel: channel, chat_id: chat_id,
+      content: digest.markdown_blob || "",
+      cooldown_s: 0,
+    });
+    if (resp && resp.ok) {
+      window.oaToast({level: "success", message: t("digests.resend.success")});
+    } else {
+      window.oaToast({level: "error",
+        message: tfmt(t("digests.resend.fail"), {err: (resp && resp.dispatch && resp.dispatch.error) || "unknown"})});
+    }
+  }, [channels, t]);
+
+  return (
+    <div>
+      <div className="card">
+        <div style={{display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10}}>
+          <div className="card-title" style={{margin: 0}}>{t("digests.title")}</div>
+          <div style={{display: "flex", gap: 8}}>
+            {["morning", "noon", "evening"].map(function (s) {
+              return <button key={s} className="btn btn-sm" disabled={running}
+                             onClick={function () { onRun(s); }}>
+                <Ico name="play"/> {t("digests.session." + s)}
+              </button>;
+            })}
+          </div>
+        </div>
+        {loading && items.length === 0 && <div className="empty">{t("today.list.loading")}</div>}
+        {!loading && items.length === 0 && <div className="empty">{t("digests.empty")}</div>}
+        <div style={{display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 12}}>
+          {items.map(function (d) {
+            return (
+              <div key={d.id}
+                   className="card"
+                   style={{margin: 0, cursor: "pointer"}}
+                   onClick={function () { setSelected(d); }}>
+                <div style={{display: "flex", justifyContent: "space-between", fontSize: 12, color: "var(--text-muted)"}}>
+                  <span>{t("digests.session." + d.session) || d.session}</span>
+                  <span>{fmtDate(d.generated_at)}</span>
+                </div>
+                <div style={{fontSize: 14, fontWeight: 500, marginTop: 6}}>{d.title || d.session}</div>
+                <div style={{fontSize: 11, color: "var(--text-muted)", marginTop: 4}}>
+                  {(d.stats && (d.stats.total_selected || 0)) || 0} items
+                </div>
+                <div style={{display: "flex", gap: 6, marginTop: 10}}>
+                  <button className="btn btn-sm"
+                          onClick={function (e) { e.stopPropagation(); setSelected(d); }}>
+                    <Ico name="eye"/> {t("digests.preview")}
+                  </button>
+                  <button className="btn btn-sm btn-primary"
+                          onClick={function (e) { e.stopPropagation(); onResend(d); }}>
+                    <Ico name="send"/> {t("digests.resend")}
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+      {selected && (
+        <div className="confirm-mask" onClick={function () { setSelected(null); }}>
+          <div className="confirm-dialog"
+               style={{maxWidth: "92vw", width: 880, maxHeight: "88vh", display: "flex", flexDirection: "column"}}
+               onClick={function (e) { e.stopPropagation(); }}>
+            <div style={{display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10}}>
+              <div className="card-title" style={{margin: 0}}>{selected.title || selected.session}</div>
+              <button className="btn btn-sm" onClick={function () { setSelected(null); }}>×</button>
+            </div>
+            <iframe src={"/api/plugins/fin-pulse/digests/" + selected.id + "/html"}
+                    title="digest-preview"
+                    style={{flex: 1, width: "100%", minHeight: 400, border: "1px solid var(--border)", borderRadius: 6, background: "#fff"}}/>
+          </div>
+        </div>
+      )}
+    </div>
+  );
 }
+
+/* ── Radar Tab — rule editor + live hit preview ────────────────── */
 function RadarTab() {
   const t = useT();
+  const [rulesText, setRulesText] = useState("");
+  const [hits, setHits] = useState([]);
+  const [meta, setMeta] = useState({total: 0, since_hours: 24});
+  const [loading, setLoading] = useState(false);
+  const [sinceHours, setSinceHours] = useState(24);
+
+  /* Preload stored rules if any */
   useEffect(function () {
-    const timer = setInterval(function () { /* Phase 4 evaluates rules via /radar/evaluate */ }, 4000);
-    return function () { clearInterval(timer); };
+    (async function () {
+      const resp = await api("GET", "/config");
+      if (resp && resp.ok) {
+        setRulesText(String((resp.config || {})["radar_rules"] || ""));
+      }
+    })();
   }, []);
-  return <div className="card"><div className="empty">{t("empty.phase1")}</div></div>;
+
+  const onEvaluate = useCallback(async function () {
+    setLoading(true);
+    try {
+      const resp = await api("POST", "/radar/evaluate", {
+        rules_text: rulesText,
+        since_hours: sinceHours,
+        limit: 100,
+      });
+      if (resp && resp.ok) {
+        setHits(resp.items || resp.hits || []);
+        setMeta({total: (resp.items || resp.hits || []).length, since_hours: sinceHours});
+      } else {
+        setHits([]);
+        window.oaToast({level: "error", message: "evaluate failed: " + (resp && resp.detail || "")});
+      }
+    } finally { setLoading(false); }
+  }, [rulesText, sinceHours]);
+
+  const onSave = useCallback(async function () {
+    const resp = await api("PUT", "/config", {updates: {radar_rules: rulesText}});
+    if (resp && resp.ok) window.oaToast({level: "success", message: t("radar.saved")});
+    else window.oaToast({level: "error", message: "save failed"});
+  }, [rulesText, t]);
+
+  return (
+    <div className="split-layout">
+      <div style={{width: 420, flexShrink: 0}}>
+        <div className="card">
+          <div className="card-title">{t("radar.editor.title")}</div>
+          <div style={{fontSize: 11, color: "var(--text-muted)", marginBottom: 8}}>{t("radar.editor.hint")}</div>
+          <textarea
+            className="input"
+            style={{minHeight: 260, fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", fontSize: 12}}
+            value={rulesText}
+            onChange={function (e) { setRulesText(e.target.value); }}
+            placeholder={"+美联储\n+降息\n!传闻\n\n+特朗普\n+关税"}/>
+          <div style={{display: "flex", gap: 8, marginTop: 10}}>
+            <select className="input" style={{width: 120}}
+                    value={sinceHours}
+                    onChange={function (e) { setSinceHours(parseInt(e.target.value, 10) || 24); }}>
+              <option value={6}>6h</option>
+              <option value={24}>24h</option>
+              <option value={72}>72h</option>
+              <option value={168}>7d</option>
+            </select>
+            <button className="btn btn-primary" disabled={loading} onClick={onEvaluate}>
+              <Ico name="play"/> {loading ? t("radar.evaluate.loading") : t("radar.evaluate")}
+            </button>
+            <button className="btn btn-sm" onClick={onSave}>
+              <Ico name="save"/> {t("radar.save")}
+            </button>
+          </div>
+        </div>
+      </div>
+      <div style={{flex: 1, minWidth: 0}}>
+        <div className="card">
+          <div className="card-title">
+            {t("radar.hits.title")} — {tfmt(t("radar.hits.count"), {count: meta.total, since_hours: meta.since_hours})}
+          </div>
+          {loading && hits.length === 0 && <div className="empty">{t("radar.evaluate.loading")}</div>}
+          {!loading && hits.length === 0 && <div className="empty">{t("radar.hits.empty")}</div>}
+          {hits.map(function (h) {
+            return (
+              <div key={h.id || h.url}
+                   style={{padding: "8px 0", borderBottom: "1px solid var(--border)"}}>
+                <a href={h.url} target="_blank" rel="noopener noreferrer"
+                   style={{color: "var(--text)", fontSize: 13, fontWeight: 500, textDecoration: "none"}}>
+                  {h.title}
+                </a>
+                <div style={{fontSize: 11, color: "var(--text-muted)", marginTop: 4}}>
+                  {h.source_id} · {fmtDate(h.fetched_at)}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
 }
+
+/* ── Ask Tab — 7 agent tools reference ─────────────────────────── */
+const ASK_TOOLS = [
+  {
+    name: "fin_pulse_create",
+    desc_zh: "创建新任务（ingest / daily_brief / hot_radar）",
+    sample: {mode: "daily_brief", session: "morning", since_hours: 12, top_k: 20},
+    prompt_zh: "帮我用 fin-pulse 生成今早的财经早报（session=morning, top_k=20, lang=zh）",
+  },
+  {
+    name: "fin_pulse_status",
+    desc_zh: "查询任务状态",
+    sample: {task_id: "fp-xxxx"},
+    prompt_zh: "查询 fin-pulse 任务 fp-xxxx 当前状态",
+  },
+  {
+    name: "fin_pulse_list",
+    desc_zh: "列出最近任务",
+    sample: {mode: "daily_brief", status: "succeeded", limit: 10},
+    prompt_zh: "列出最近 10 条 fin-pulse 成功的早午晚报任务",
+  },
+  {
+    name: "fin_pulse_cancel",
+    desc_zh: "取消运行中的任务",
+    sample: {task_id: "fp-xxxx"},
+    prompt_zh: "取消 fin-pulse 任务 fp-xxxx",
+  },
+  {
+    name: "fin_pulse_settings_get",
+    desc_zh: "读取配置（webhook/api_key 自动脱敏）",
+    sample: {},
+    prompt_zh: "读取 fin-pulse 当前配置",
+  },
+  {
+    name: "fin_pulse_settings_set",
+    desc_zh: "写入配置",
+    sample: {updates: {radar_rules: "+美联储\n+降息"}},
+    prompt_zh: "将 fin-pulse 的雷达规则设置为「+美联储 +降息」",
+  },
+  {
+    name: "fin_pulse_search_news",
+    desc_zh: "按关键词/源/时间检索新闻",
+    sample: {q: "美联储", days: 1, min_score: 6, limit: 20},
+    prompt_zh: "找今天和美联储相关、AI 评分 ≥ 6 的财经新闻",
+  },
+];
+
 function AskTab() {
-  const t = useT();
-  return <div className="card"><div className="empty">{t("empty.phase1")}</div></div>;
-}
-function SettingsTab() {
   const t = useT();
   return (
     <div>
       <div className="card">
-        <div className="card-title">{t("tabs.settings")}</div>
-        <div className="empty">{t("empty.phase1")}</div>
+        <div className="card-title">{t("ask.title")}</div>
+        <div style={{fontSize: 12, color: "var(--text-muted)"}}>{t("ask.intro")}</div>
+      </div>
+      <div style={{display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(360px, 1fr))", gap: 12}}>
+        {ASK_TOOLS.map(function (tool) {
+          return (
+            <div key={tool.name} className="card" style={{margin: 0}}>
+              <div style={{display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6}}>
+                <code style={{fontSize: 13, fontWeight: 600, color: "var(--primary)"}}>{tool.name}</code>
+              </div>
+              <div style={{fontSize: 12, color: "var(--text-muted)", marginBottom: 8}}>{tool.desc_zh}</div>
+              <pre style={{background: "var(--bg-hover)", padding: "8px 10px", borderRadius: 6, fontSize: 11, overflowX: "auto", margin: 0}}>
+                {JSON.stringify(tool.sample, null, 2)}
+              </pre>
+              <div style={{display: "flex", gap: 6, marginTop: 10}}>
+                <button className="btn btn-sm"
+                        onClick={function () {
+                          copyText(tool.prompt_zh);
+                          window.oaToast({level: "success", message: _i18n.t("ask.copied")});
+                        }}>
+                  <Ico name="copy"/> {t("ask.copy.prompt")}
+                </button>
+                <button className="btn btn-sm"
+                        onClick={function () {
+                          copyText(JSON.stringify({name: tool.name, arguments: tool.sample}, null, 2));
+                          window.oaToast({level: "success", message: _i18n.t("ask.copied")});
+                        }}>
+                  <Ico name="copy"/> {t("ask.copy.schema")}
+                </button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function SettingsTab() {
+  return <SettingsForm/>;
+}
+
+/* ── Settings Form — 5 sections including NewsNow 3-stage wizard ── */
+function SettingsForm() {
+  const t = useT();
+  const [config, setConfig] = useState({});
+  const [loaded, setLoaded] = useState(false);
+  const [channels, setChannels] = useState([]);
+  const [schedules, setSchedules] = useState([]);
+  const [probeMsg, setProbeMsg] = useState("");
+  const [savingKey, setSavingKey] = useState("");
+
+  const reloadAll = useCallback(async function () {
+    const [cfg, ch, sched] = await Promise.all([
+      api("GET", "/config"),
+      api("GET", "/available-channels"),
+      api("GET", "/schedules"),
+    ]);
+    setConfig((cfg && cfg.config) || {});
+    setChannels((ch && ch.channels) || []);
+    setSchedules((sched && sched.items) || []);
+    setLoaded(true);
+  }, []);
+  useEffect(function () { reloadAll(); }, [reloadAll]);
+
+  const setCfgField = function (key, value) {
+    setConfig(function (prev) { return Object.assign({}, prev, {[key]: value}); });
+  };
+  const persist = useCallback(async function (updates) {
+    const resp = await api("PUT", "/config", {updates: updates});
+    if (resp && resp.ok) {
+      window.oaToast({level: "success", message: t("settings.saved")});
+    } else {
+      window.oaToast({level: "error", message: "save failed"});
+    }
+  }, [t]);
+
+  const onProbeNewsNow = useCallback(async function () {
+    setProbeMsg("…");
+    const resp = await api("POST", "/ingest/source/newsnow");
+    if (resp && resp.ok) {
+      const n = (resp.summary && resp.summary.inserted) || (resp.summary && resp.summary.received) || 0;
+      setProbeMsg(tfmt(t("settings.newsnow.probe.ok"), {n: n}));
+    } else {
+      setProbeMsg(tfmt(t("settings.newsnow.probe.fail"), {err: (resp && resp.detail) || "unknown"}));
+    }
+  }, [t]);
+
+  const onSendTest = useCallback(async function (channel) {
+    const chat_id = window.prompt("chat_id for " + channel, "");
+    if (!chat_id) return;
+    const resp = await api("POST", "/dispatch/send", {
+      channel: channel, chat_id: chat_id,
+      content: "[fin-pulse] channel test — " + new Date().toISOString(),
+      cooldown_s: 0,
+    });
+    window.oaToast({
+      level: resp && resp.ok ? "success" : "error",
+      message: resp && resp.ok ? "sent" : "failed: " + (resp && resp.dispatch && resp.dispatch.error || ""),
+    });
+  }, []);
+
+  const onDeleteSchedule = useCallback(async function (sched) {
+    const ok = await window.oaConfirm({
+      title: t("settings.schedules.delete"),
+      message: sched.name || sched.id,
+      okText: t("settings.schedules.delete"),
+      danger: true,
+    });
+    if (!ok) return;
+    await api("DELETE", "/schedules/" + encodeURIComponent(sched.id));
+    reloadAll();
+  }, [t, reloadAll]);
+
+  const onCreateSchedule = useCallback(async function () {
+    const mode = window.prompt("mode (daily_brief / hot_radar)", "daily_brief") || "";
+    if (!mode) return;
+    const channel = window.prompt("channel", channels[0] || "feishu") || "";
+    const chat_id = window.prompt("chat_id", "") || "";
+    const cron = window.prompt("cron (minute hour day month weekday)", "0 8 * * *") || "";
+    const body = {mode: mode, channel: channel, chat_id: chat_id, cron: cron};
+    if (mode === "daily_brief") {
+      body.session = window.prompt("session (morning/noon/evening)", "morning") || "morning";
+    } else {
+      body.rules_text = window.prompt("radar rules_text", "+美联储") || "";
+    }
+    const resp = await api("POST", "/schedules", body);
+    if (resp && resp.ok) {
+      window.oaToast({level: "success", message: "scheduled " + resp.id});
+    } else {
+      window.oaToast({level: "error", message: "failed: " + ((resp && resp.detail) || "")});
+    }
+    reloadAll();
+  }, [channels, reloadAll]);
+
+  if (!loaded) return <div className="card"><div className="empty">{t("today.list.loading")}</div></div>;
+
+  const newsnowMode = String(config["newsnow.mode"] || "off");
+  const newsnowUrl = String(config["newsnow.api_url"] || "");
+
+  return (
+    <div>
+      <div className="card">
+        <div className="card-title">{t("settings.sources.title")}</div>
+        <div style={{display: "flex", flexWrap: "wrap", gap: 8}}>
+          {KNOWN_SOURCES.map(function (s) {
+            const state = String(config["source." + s.id + ".last_error"] || "");
+            const ok = !state;
+            return (
+              <span key={s.id}
+                    className={"api-pill " + (ok ? "" : "api-pill--missing")}
+                    title={state || "last_ok"}>
+                {s.name}
+              </span>
+            );
+          })}
+        </div>
+      </div>
+
+      <div className="card">
+        <div className="card-title">{t("settings.channels.title")}</div>
+        {channels.length === 0 ? (
+          <div className="empty">{t("settings.channels.none")}</div>
+        ) : (
+          <div style={{display: "flex", flexWrap: "wrap", gap: 8}}>
+            {channels.map(function (ch) {
+              return (
+                <div key={ch} style={{display: "flex", alignItems: "center", gap: 6}}>
+                  <span className="api-pill">{ch}</span>
+                  <button className="btn btn-sm" onClick={function () { onSendTest(ch); }}>
+                    <Ico name="send"/> {t("settings.channels.send")}
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      <div className="card">
+        <div style={{display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10}}>
+          <div className="card-title" style={{margin: 0}}>{t("settings.schedules.title")}</div>
+          <button className="btn btn-sm btn-primary" onClick={onCreateSchedule}>
+            <Ico name="plus"/> {t("settings.schedules.create")}
+          </button>
+        </div>
+        {schedules.length === 0 ? (
+          <div className="empty">{t("settings.schedules.none")}</div>
+        ) : (
+          <div>
+            {schedules.map(function (s) {
+              return (
+                <div key={s.id}
+                     style={{display: "flex", alignItems: "center", gap: 8, padding: "8px 0", borderBottom: "1px solid var(--border)"}}>
+                  <span className="api-pill">{s.name || s.id}</span>
+                  <span style={{fontSize: 11, color: "var(--text-muted)"}}>{s.cron || s.cron_expression || ""}</span>
+                  <span style={{flex: 1}}/>
+                  <button className="btn btn-sm btn-danger" onClick={function () { onDeleteSchedule(s); }}>
+                    <Ico name="trash"/> {t("settings.schedules.delete")}
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      <div className="card">
+        <div className="card-title">{t("settings.newsnow.title")}</div>
+        <div style={{marginBottom: 10}}>
+          <div className="label">{t("settings.newsnow.step1")}</div>
+          <div style={{display: "flex", gap: 6}}>
+            {["off", "public", "self_host"].map(function (m) {
+              const active = newsnowMode === m;
+              return <span key={m}
+                           className={"api-pill " + (active ? "" : "api-pill--missing")}
+                           onClick={function () { setCfgField("newsnow.mode", m); }}>
+                {t("settings.newsnow.mode." + m)}
+              </span>;
+            })}
+          </div>
+          {newsnowMode === "public" && (
+            <div className="oa-config-banner" role="alert" style={{marginTop: 10, background: "rgba(245,158,11,.12)", border: "1px solid rgba(245,158,11,.24)"}}>
+              <span className="oa-icon oa-config-banner__icon"><Ico name="warn"/></span>
+              <div className="oa-config-banner__text" style={{fontSize: 12}}>
+                {t("settings.newsnow.warn.public")}
+              </div>
+            </div>
+          )}
+        </div>
+
+        {newsnowMode !== "off" && (
+          <div style={{marginBottom: 10}}>
+            <div className="label">{t("settings.newsnow.step2")}</div>
+            <div className="field-wrap">
+              <input className="input"
+                     type="text"
+                     placeholder={newsnowMode === "self_host" ? "http://127.0.0.1:4444/api/s" : "https://newsnow-public.example.com/api/s"}
+                     value={newsnowUrl}
+                     onChange={function (e) { setCfgField("newsnow.api_url", e.target.value); }}/>
+            </div>
+            {newsnowMode === "self_host" && (
+              <pre style={{background: "var(--bg-hover)", padding: 10, borderRadius: 6, fontSize: 11, marginTop: 8, overflowX: "auto"}}>
+                {t("settings.newsnow.help.self_host").replace(/\\n/g, "\n")}
+              </pre>
+            )}
+          </div>
+        )}
+
+        {newsnowMode !== "off" && (
+          <div>
+            <div className="label">{t("settings.newsnow.step3")}</div>
+            <div style={{display: "flex", gap: 8, alignItems: "center"}}>
+              <button className="btn btn-primary"
+                      disabled={savingKey !== ""}
+                      onClick={async function () {
+                        setSavingKey("newsnow");
+                        try {
+                          await persist({"newsnow.mode": newsnowMode, "newsnow.api_url": newsnowUrl});
+                          await onProbeNewsNow();
+                        } finally { setSavingKey(""); }
+                      }}>
+                <Ico name="play"/> {t("settings.newsnow.probe")}
+              </button>
+              <span style={{fontSize: 12, color: "var(--text-muted)"}}>{probeMsg}</span>
+            </div>
+          </div>
+        )}
+      </div>
+
+      <div className="card">
+        <div className="card-title">{t("settings.llm.title")}</div>
+        <div style={{fontSize: 12, color: "var(--text-muted)"}}>{t("settings.llm.hint")}</div>
       </div>
     </div>
   );
