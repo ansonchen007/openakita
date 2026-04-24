@@ -22,8 +22,11 @@ Phase-1a commit stays loadable even before Phase 1b lands.
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import logging
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -124,6 +127,27 @@ class Plugin(PluginBase):
             )
             self._dispatch = None
 
+        # Phase 4c — on_schedule hook binding. The match filter keeps us
+        # from being woken up by other plugins' schedules; once bound,
+        # the host Scheduler will call us every time a cron/once/interval
+        # trigger fires for a ``fin-pulse:`` task. We register only when
+        # the pipeline is ready so the hook never touches a None.
+        self._hook_registered = False
+        if self._pipeline is not None:
+            try:
+                api.register_hook(
+                    "on_schedule",
+                    self._on_schedule,
+                    match=_is_finpulse_schedule,
+                )
+                self._hook_registered = True
+            except Exception as exc:  # noqa: BLE001 — defensive boundary
+                api.log(
+                    f"register_hook(on_schedule) failed — scheduled digests "
+                    f"will not fire automatically: {exc}",
+                    "warning",
+                )
+
         # Step 3 — FastAPI router (21 routes eventually; the skeleton
         # registers the read-only /health, /modes and /config endpoints
         # so the loader contract is satisfied immediately).
@@ -172,6 +196,149 @@ class Plugin(PluginBase):
                 await self._tm.close()
             except Exception as exc:  # noqa: BLE001
                 logger.warning("fin-pulse task manager close error: %s", exc)
+
+    # ── Schedule hook (Phase 4c) ────────────────────────────────────
+
+    async def _on_schedule(self, **kwargs: Any) -> dict[str, Any]:
+        """Called by the host Scheduler every time a ``fin-pulse:`` task
+        fires. ``task.prompt`` carries a JSON-encoded mode payload of
+        the shape::
+
+            [fin-pulse] {"mode":"daily_brief","session":"morning",
+                         "channel":"feishu","chat_id":"oc_xxx"}
+
+        For daily-brief mode we render through :meth:`run_daily_brief`
+        then push the HTML blob via :class:`DispatchService`. Hot-radar
+        mode skips the render step and calls :meth:`run_hot_radar`
+        directly with the stored rule text.
+
+        We never raise — the scheduler suppresses the task on the
+        third consecutive failure so silent-downgrade with a log entry
+        is the safest default.
+        """
+        task = kwargs.get("task")
+        execution = kwargs.get("execution")
+        if task is None or self._pipeline is None:
+            return {"ok": False, "reason": "pipeline_unavailable"}
+        try:
+            payload = _parse_schedule_prompt(getattr(task, "prompt", "") or "")
+        except ValueError as exc:
+            logger.warning(
+                "fin-pulse: schedule %s prompt parse failed: %s", task.id, exc
+            )
+            return {"ok": False, "reason": "prompt_parse_failed", "error": str(exc)}
+        mode = payload.get("mode")
+        channel = str(payload.get("channel") or "").strip()
+        chat_id = str(payload.get("chat_id") or "").strip()
+        if not channel or not chat_id:
+            logger.warning(
+                "fin-pulse: schedule %s missing channel/chat_id payload", task.id
+            )
+            return {"ok": False, "reason": "missing_target"}
+
+        try:
+            if mode == "daily_brief":
+                return await self._run_scheduled_digest(payload, channel, chat_id)
+            if mode == "hot_radar":
+                return await self._run_scheduled_radar(payload, channel, chat_id)
+        except Exception as exc:  # noqa: BLE001 — fatal hook boundary
+            logger.exception(
+                "fin-pulse: schedule %s (%s) failed: %s",
+                getattr(task, "id", "?"),
+                mode,
+                exc,
+            )
+            return {"ok": False, "reason": "run_failed", "error": str(exc)}
+
+        logger.info(
+            "fin-pulse: schedule %s ignored — unknown mode %r (execution=%s)",
+            getattr(task, "id", "?"),
+            mode,
+            getattr(execution, "id", None),
+        )
+        return {"ok": False, "reason": "unknown_mode", "mode": mode}
+
+    async def _run_scheduled_digest(
+        self, payload: dict[str, Any], channel: str, chat_id: str
+    ) -> dict[str, Any]:
+        session = str(payload.get("session") or "morning")
+        if session not in {"morning", "noon", "evening"}:
+            return {"ok": False, "reason": "invalid_session", "session": session}
+        since_hours = int(payload.get("since_hours", 12) or 12)
+        top_k = int(payload.get("top_k", 20) or 20)
+        lang = str(payload.get("lang") or "zh")
+        internal_task = await self._tm.create_task(
+            mode="daily_brief",
+            params={
+                "session": session,
+                "since_hours": since_hours,
+                "top_k": top_k,
+                "lang": lang,
+                "scheduled": True,
+                "channel": channel,
+                "chat_id": chat_id,
+            },
+            status="running",
+        )
+        result = await self._pipeline.run_daily_brief(
+            session=session,
+            since_hours=max(1, min(since_hours, 72)),
+            top_k=max(1, min(top_k, 60)),
+            lang=lang,
+            task_id=internal_task["id"],
+        )
+        dispatched: dict[str, Any] | None = None
+        if self._dispatch is not None:
+            md = result.get("markdown") or ""
+            dispatched_res = await self._dispatch.send(
+                channel=channel,
+                chat_id=chat_id,
+                content=md,
+                cooldown_key=f"daily:{session}:{_today_utc_ymd()}",
+                cooldown_s=60 * 60 * 6,  # 6h dedupe per session/day
+                dedupe_by_content=False,
+            )
+            dispatched = dispatched_res.as_dict()
+        return {"ok": True, "digest": result, "dispatched": dispatched}
+
+    async def _run_scheduled_radar(
+        self, payload: dict[str, Any], channel: str, chat_id: str
+    ) -> dict[str, Any]:
+        rules_text = payload.get("rules_text") or payload.get("rules") or ""
+        if not isinstance(rules_text, str) or not rules_text.strip():
+            return {"ok": False, "reason": "missing_rules"}
+        if self._dispatch is None:
+            return {"ok": False, "reason": "dispatch_unavailable"}
+        since_hours = int(payload.get("since_hours", 24) or 24)
+        limit = int(payload.get("limit", 100) or 100)
+        min_score = payload.get("min_score")
+        cooldown_s = float(payload.get("cooldown_s", 600) or 600)
+        title = payload.get("title")
+        internal_task = await self._tm.create_task(
+            mode="hot_radar",
+            params={
+                "rules_text": rules_text,
+                "targets": [{"channel": channel, "chat_id": chat_id}],
+                "since_hours": since_hours,
+                "limit": limit,
+                "min_score": min_score,
+                "cooldown_s": cooldown_s,
+                "scheduled": True,
+            },
+            status="running",
+        )
+        result = await self._pipeline.run_hot_radar(
+            self._dispatch,
+            rules_text=rules_text,
+            targets=[{"channel": channel, "chat_id": chat_id}],
+            since_hours=max(1, min(since_hours, 168)),
+            limit=max(1, min(limit, 500)),
+            min_score=float(min_score) if min_score is not None else None,
+            title=title if isinstance(title, str) else None,
+            cooldown_s=cooldown_s,
+            task_id=internal_task["id"],
+        )
+        return {"ok": True, "radar": result}
 
     # ── Agent tools (Phase 5 fills in the body) ─────────────────────
 
@@ -687,6 +854,120 @@ class Plugin(PluginBase):
             )
             return {"ok": result.ok, "dispatch": result.as_dict()}
 
+        # ── Schedules ───────────────────────────────────────────────
+
+        @router.get("/schedules")
+        async def list_schedules() -> dict[str, Any]:
+            scheduler = _get_active_scheduler()
+            if scheduler is None:
+                return {"ok": True, "items": [], "scheduler_ready": False}
+            tasks = scheduler.list_tasks()
+            items = [
+                _serialize_schedule(t)
+                for t in tasks
+                if (getattr(t, "name", "") or "").startswith("fin-pulse:")
+            ]
+            return {"ok": True, "items": items, "scheduler_ready": True}
+
+        @router.post("/schedules")
+        async def create_schedule(
+            payload: dict[str, Any] = Body(...),
+        ) -> dict[str, Any]:
+            scheduler = _get_active_scheduler()
+            if scheduler is None:
+                raise HTTPException(status_code=503, detail="scheduler_unavailable")
+            mode = str(payload.get("mode") or "daily_brief").strip() or "daily_brief"
+            if mode not in {"daily_brief", "hot_radar"}:
+                raise HTTPException(
+                    status_code=400,
+                    detail="mode must be daily_brief or hot_radar",
+                )
+            cron = payload.get("cron") or payload.get("cron_expression")
+            if not isinstance(cron, str) or not cron.strip():
+                raise HTTPException(status_code=400, detail="cron expression required")
+            channel = str(payload.get("channel") or "").strip()
+            chat_id = str(payload.get("chat_id") or "").strip()
+            if not channel or not chat_id:
+                raise HTTPException(
+                    status_code=400, detail="channel and chat_id are required"
+                )
+            body: dict[str, Any] = {
+                "mode": mode,
+                "channel": channel,
+                "chat_id": chat_id,
+            }
+            name_suffix: str
+            description: str
+            if mode == "daily_brief":
+                session = str(payload.get("session") or "morning")
+                if session not in {"morning", "noon", "evening"}:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="session must be morning|noon|evening",
+                    )
+                body["session"] = session
+                body["since_hours"] = int(payload.get("since_hours", 12) or 12)
+                body["top_k"] = int(payload.get("top_k", 20) or 20)
+                body["lang"] = str(payload.get("lang") or "zh")
+                name_suffix = session
+                description = f"fin-pulse {session} brief → {channel}:{chat_id}"
+            else:
+                rules_text = payload.get("rules_text") or ""
+                if not isinstance(rules_text, str) or not rules_text.strip():
+                    raise HTTPException(status_code=400, detail="rules_text required for hot_radar")
+                body["rules_text"] = rules_text
+                body["since_hours"] = int(payload.get("since_hours", 24) or 24)
+                body["limit"] = int(payload.get("limit", 100) or 100)
+                body["cooldown_s"] = float(payload.get("cooldown_s", 600) or 600)
+                title = payload.get("title")
+                if isinstance(title, str):
+                    body["title"] = title
+                radar_key = _radar_key(rules_text)
+                name_suffix = f"radar:{radar_key}"
+                description = f"fin-pulse radar {radar_key} → {channel}:{chat_id}"
+
+            try:
+                from openakita.scheduler.task import ScheduledTask  # type: ignore
+            except ImportError as exc:
+                raise HTTPException(
+                    status_code=503,
+                    detail=f"scheduler module unavailable: {exc}",
+                ) from exc
+
+            task = ScheduledTask.create_cron(
+                name=f"fin-pulse:{name_suffix}",
+                description=description,
+                cron_expression=cron.strip(),
+                prompt="[fin-pulse] " + json.dumps(body, ensure_ascii=False),
+                channel_id=channel,
+                chat_id=chat_id,
+                silent=True,  # fin-pulse handles its own notification
+                metadata={"plugin_id": PLUGIN_ID, "mode": mode},
+            )
+            try:
+                task_id = await scheduler.add_task(task)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            return {"ok": True, "id": task_id, "schedule": _serialize_schedule(task)}
+
+        @router.delete("/schedules/{schedule_id}")
+        async def delete_schedule(schedule_id: str) -> dict[str, Any]:
+            scheduler = _get_active_scheduler()
+            if scheduler is None:
+                raise HTTPException(status_code=503, detail="scheduler_unavailable")
+            existing = scheduler.get_task(schedule_id)
+            if existing is None:
+                raise HTTPException(status_code=404, detail="not_found")
+            if not (getattr(existing, "name", "") or "").startswith("fin-pulse:"):
+                raise HTTPException(
+                    status_code=403,
+                    detail="refusing to delete schedule not owned by fin-pulse",
+                )
+            outcome = await scheduler.remove_task(schedule_id)
+            if outcome != "ok":
+                raise HTTPException(status_code=400, detail=outcome)
+            return {"ok": True, "id": schedule_id, "deleted": True}
+
         @router.get("/available-channels")
         async def available_channels() -> dict[str, Any]:
             """Expose the list of adapter names the host gateway
@@ -746,6 +1027,109 @@ def _redact_secrets(cfg: dict[str, str]) -> dict[str, str]:
         else:
             redacted[k] = v
     return redacted
+
+
+# ── Schedule plumbing ────────────────────────────────────────────────
+
+_SCHEDULE_PROMPT_PREFIX = "[fin-pulse] "
+
+
+def _is_finpulse_schedule(**kwargs: Any) -> bool:
+    """Match predicate for the ``on_schedule`` hook — only fire when
+    the task is ours. Checks both the ``name`` prefix (authoritative)
+    and the ``prompt`` prefix (used by natural-language creation paths
+    that might not set the name).
+    """
+    task = kwargs.get("task")
+    if task is None:
+        return False
+    name = getattr(task, "name", "") or ""
+    if name.startswith("fin-pulse:"):
+        return True
+    prompt = getattr(task, "prompt", "") or ""
+    return prompt.startswith(_SCHEDULE_PROMPT_PREFIX)
+
+
+def _parse_schedule_prompt(prompt: str) -> dict[str, Any]:
+    """Strip the ``[fin-pulse] `` prefix and ``json.loads`` the rest.
+
+    Accepts an already-stripped JSON body too so tooling that emits
+    ``{"mode":...}`` directly still works.
+    """
+    text = (prompt or "").strip()
+    if text.startswith(_SCHEDULE_PROMPT_PREFIX):
+        text = text[len(_SCHEDULE_PROMPT_PREFIX):]
+    if not text:
+        raise ValueError("empty prompt")
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"not json: {exc}") from exc
+    if not isinstance(data, dict):
+        raise ValueError("prompt must decode to an object")
+    return data
+
+
+def _get_active_scheduler() -> Any:
+    """Fetch the host's active :class:`TaskScheduler` singleton. Returns
+    ``None`` when the host hasn't brought the scheduler up yet (common
+    in headless test harnesses).
+    """
+    try:
+        from openakita.scheduler import get_active_scheduler  # type: ignore
+    except ImportError:
+        return None
+    try:
+        return get_active_scheduler()
+    except Exception:  # noqa: BLE001 — host boot-order defensive
+        return None
+
+
+def _serialize_schedule(task: Any) -> dict[str, Any]:
+    """Shape a :class:`ScheduledTask` into the JSON the UI expects.
+
+    We deliberately only expose the fields fin-pulse cares about so
+    rogue scheduler extensions can't leak fields (e.g. agent_profile_id)
+    into the plugin API contract.
+    """
+    prompt = getattr(task, "prompt", "") or ""
+    try:
+        meta = _parse_schedule_prompt(prompt)
+    except ValueError:
+        meta = {}
+    next_run = getattr(task, "next_run", None)
+    trigger_config = getattr(task, "trigger_config", {}) or {}
+    cron = ""
+    if isinstance(trigger_config, dict):
+        cron = str(trigger_config.get("cron") or "")
+    return {
+        "id": getattr(task, "id", ""),
+        "name": getattr(task, "name", ""),
+        "description": getattr(task, "description", ""),
+        "cron": cron,
+        "enabled": bool(getattr(task, "enabled", True)),
+        "status": str(getattr(task, "status", "")),
+        "next_run": next_run.isoformat() if hasattr(next_run, "isoformat") else None,
+        "run_count": int(getattr(task, "run_count", 0)),
+        "fail_count": int(getattr(task, "fail_count", 0)),
+        "channel": getattr(task, "channel_id", None),
+        "chat_id": getattr(task, "chat_id", None),
+        "mode": meta.get("mode"),
+        "session": meta.get("session"),
+    }
+
+
+def _radar_key(rules_text: str) -> str:
+    """Short 8-char hash of a rule body — used to mint stable schedule
+    names so Settings UI shows ``fin-pulse:radar:a1b2c3d4`` rather than
+    the raw rule blob.
+    """
+    digest = hashlib.sha256((rules_text or "").encode("utf-8")).hexdigest()
+    return digest[:8]
+
+
+def _today_utc_ymd() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
 
 __all__ = ["Plugin", "PLUGIN_ID", "PLUGIN_VERSION"]
