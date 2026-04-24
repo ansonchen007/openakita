@@ -45,6 +45,7 @@ All paths are rooted under ``/api/plugins/omni-post/``.
 from __future__ import annotations
 
 import asyncio
+import json
 import base64
 import logging
 from datetime import UTC
@@ -56,6 +57,8 @@ from omni_post_adapters import load_selector_bundle
 from omni_post_assets import UploadPipeline
 from omni_post_cookies import CookieEncryptError, CookiePool
 from omni_post_engine_mp import MultiPostCompatEngine
+from omni_post_mdrm import OmniPostMdrmAdapter
+from omni_post_selfheal import SelfHealTicker
 from omni_post_engine_pw import PlaywrightEngine
 from omni_post_models import (
     DEFAULT_SETTINGS,
@@ -112,6 +115,8 @@ class OmniPostPlugin(PluginBase):
         self._receipts_dir: Path | None = None
         self._active_tasks: set[asyncio.Task[Any]] = set()
         self._scheduler: ScheduleTicker | None = None
+        self._selfheal: SelfHealTicker | None = None
+        self._mdrm: OmniPostMdrmAdapter | None = None
 
     def on_load(self, api: PluginAPI) -> None:
         self._api = api
@@ -167,6 +172,17 @@ class OmniPostPlugin(PluginBase):
             poll_seconds=float(self._settings.get("scheduler_poll_seconds", 30.0)),
         )
 
+        self._mdrm = OmniPostMdrmAdapter(api, plugin_id=PLUGIN_ID)
+
+        if bool(self._settings.get("enable_selfheal", True)):
+            self._selfheal = SelfHealTicker(
+                selectors_by_platform=self._collect_selector_bundle(),
+                task_manager=self._tm,
+                probe_fn=self._default_selector_probe,
+                notifier=self._default_selfheal_notifier,
+                interval_hours=float(self._settings.get("selfheal_interval_hours", 24.0)),
+            )
+
         api.spawn_task(self._async_bootstrap(), name="omni-post:bootstrap")
 
         router = self._build_router()
@@ -192,11 +208,17 @@ class OmniPostPlugin(PluginBase):
             self._upload.sweep_stale_uploads(older_than_seconds=3600)
         if self._scheduler is not None:
             self._scheduler.start()
+        if self._selfheal is not None:
+            self._selfheal.start(
+                spawn=lambda coro, name=None: self._spawn(coro, name=name),
+            )
 
     def on_unload(self) -> Any:
         async def _close() -> None:
             if self._scheduler is not None:
                 await self._scheduler.stop()
+            if self._selfheal is not None:
+                await self._selfheal.stop()
             for t in list(self._active_tasks):
                 if not t.done():
                     t.cancel()
@@ -1007,6 +1029,7 @@ class OmniPostPlugin(PluginBase):
             api=self._api,
             receipts_dir=self._receipts_dir,
             mp_engine=self._mp_engine,
+            mdrm=self._mdrm,
         )
 
     def _spawn(self, coro, name: str | None = None) -> None:
@@ -1015,6 +1038,73 @@ class OmniPostPlugin(PluginBase):
         task = self._api.spawn_task(coro, name=name or "omni-post:publish")
         self._active_tasks.add(task)
         task.add_done_callback(self._active_tasks.discard)
+
+    def _collect_selector_bundle(self) -> dict[str, dict[str, Any]]:
+        """Load every platform's selector bundle as a flat dict.
+
+        Used by :class:`SelfHealTicker` so we don't have to ship a
+        second copy of the selector files. Returns
+        ``{platform_id: {selector_key: spec, ...}, ...}`` and silently
+        skips platforms whose JSON we can't parse — the probe cycle
+        logs per-platform errors anyway.
+        """
+        out: dict[str, dict[str, Any]] = {}
+        if self._selectors_dir is None:
+            return out
+        if not self._selectors_dir.exists():
+            return out
+        for path in self._selectors_dir.glob("*.json"):
+            pid = path.stem
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+            except Exception:  # noqa: BLE001
+                continue
+            selectors = data.get("selectors") if isinstance(data, dict) else None
+            if isinstance(selectors, dict) and selectors:
+                out[pid] = dict(selectors)
+        return out
+
+    async def _default_selector_probe(
+        self, platform: str, key: str, spec: Any
+    ) -> bool:
+        """Synthetic probe used when Playwright is not available.
+
+        We treat any non-empty ``spec`` string (or dict containing a
+        ``primary`` / ``css`` key) as "resolvable" by default. When the
+        user flips ``enable_playwright_probe`` on, a real DOM probe
+        lives in :mod:`omni_post_health` and is wired in by a future
+        patch; for now we keep the hook so the cycle runs and records
+        health stats without spawning a browser per selector.
+        """
+        if isinstance(spec, str):
+            return bool(spec.strip())
+        if isinstance(spec, dict):
+            primary = spec.get("primary") or spec.get("css") or spec.get("xpath")
+            return bool(primary)
+        return False
+
+    async def _default_selfheal_notifier(
+        self, platform: str, payload: dict[str, Any]
+    ) -> None:
+        """Broadcast a structured UI event whenever a platform is rotting.
+
+        A real IM channel (Slack / DingTalk / Feishu) plugs in by
+        subscribing to ``omni-post.selector_alert`` — we don't hard-wire
+        any particular vendor from here so that the plugin stays
+        transport-agnostic.
+        """
+        if self._api is None:
+            return
+        try:
+            self._api.broadcast_ui_event(
+                "selector_alert",
+                {
+                    "platform": platform,
+                    **payload,
+                },
+            )
+        except Exception:  # noqa: BLE001
+            pass
 
     async def _probe_account_health(self, account_id: str) -> str:
         """Run a cookie health probe and persist the verdict.

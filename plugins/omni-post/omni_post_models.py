@@ -525,6 +525,9 @@ class SettingsUpdateRequest(BaseModel):
     mp_trusted_domain: str | None = None
     enable_playwright_probe: bool | None = None
     probe_timeout_ms: int | None = Field(default=None, ge=1000, le=60_000)
+    enable_selfheal: bool | None = None
+    selfheal_interval_hours: float | None = Field(default=None, ge=1.0, le=168.0)
+    scheduler_poll_seconds: float | None = Field(default=None, ge=5.0, le=600.0)
 
 
 # ─── Default config (merged on first load) ───────────────────────────────
@@ -554,6 +557,9 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     # decrypt check stays the default.
     "enable_playwright_probe": False,
     "probe_timeout_ms": 15_000,
+    "enable_selfheal": True,
+    "selfheal_interval_hours": 24.0,
+    "scheduler_poll_seconds": 30.0,
 }
 
 

@@ -105,6 +105,9 @@ class PipelineDeps:
     # MultiPost compat engine for ``engine=mp``; None in tests that
     # only exercise the Playwright path.
     mp_engine: Any | None = None
+    # MDRM adapter for publish-memory writes. Optional; when missing
+    # the pipeline just skips the memory write.
+    mdrm: Any | None = None
 
 
 async def run_publish_task(deps: PipelineDeps, task_id: str) -> dict[str, Any]:
@@ -557,13 +560,63 @@ async def _write_publish_memory(
     success: bool,
     error: str | None = None,
 ) -> None:
+    """Send a publish breadcrumb to the MDRM adapter when available.
+
+    The pipeline never fails a task because of MDRM problems: we log at
+    DEBUG and return. A three-tier fallback keeps the surface tiny:
+
+    1. Prefer the dedicated :class:`OmniPostMdrmAdapter` on ``deps.mdrm``
+       — this is the canonical path that speaks to
+       ``api.get_memory_manager()``.
+    2. Fall back to the legacy ``api.write_memory(node)`` hook some
+       hosts expose directly (kept for backward-compat with the v0.6
+       SDK).
+    3. If neither is available, silently skip.
+    """
+
+    from datetime import datetime
+
+    duration_ms: int | None = None
+    started = task.get("started_at")
+    finished = _now_iso()
+    try:
+        if started:
+            s = datetime.fromisoformat(str(started).replace("Z", "+00:00"))
+            f = datetime.fromisoformat(finished.replace("Z", "+00:00"))
+            duration_ms = max(0, int((f - s).total_seconds() * 1000))
+    except Exception:  # noqa: BLE001
+        duration_ms = None
+
+    adapter = getattr(deps, "mdrm", None)
+    if adapter is not None:
+        try:
+            from omni_post_mdrm import PublishMemoryRecord
+
+            published_url = getattr(outcome, "published_url", None) if outcome else None
+            asset_kind = (asset_info or {}).get("kind") if asset_info else None
+            record = PublishMemoryRecord(
+                task_id=str(task["id"]),
+                platform=str(task["platform"]),
+                account_id=str(task["account_id"]),
+                success=success,
+                ts_utc=datetime.now(UTC),
+                engine=str(task.get("engine") or "pw"),
+                error_kind=error,
+                asset_kind=asset_kind,
+                duration_ms=duration_ms,
+                published_url=published_url,
+            )
+            result = await adapter.write_publish_memory(record)
+            logger.debug("omni-post: mdrm write %s", result)
+            return
+        except Exception as e:  # noqa: BLE001
+            logger.debug("omni-post: mdrm write skipped: %s", e)
+
     api = deps.api
     if api is None or not hasattr(api, "write_memory"):
         return
     try:
-        from datetime import datetime
-
-        iso_now = _now_iso()
+        iso_now = finished
         hour_bucket = datetime.now().strftime("%H")
         weekday = datetime.now().strftime("%a")
         node = {
