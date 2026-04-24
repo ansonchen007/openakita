@@ -231,6 +231,8 @@
     .fp-pill__btn   { font-size: 11px; cursor: pointer; background: transparent;
                        border: none; color: inherit; text-decoration: underline;
                        padding: 0; margin-left: 2px; }
+    .fp-pill__reason { display: inline-flex; align-items: center; gap: 4px;
+                       font-size: 11px; opacity: .85; font-style: italic; }
     .fp-drawer__error {
       width: 100%; font-size: 11.5px; color: var(--danger);
       background: rgba(239,68,68,.06); border: 1px dashed rgba(239,68,68,.28);
@@ -420,6 +422,11 @@ const I18N_DICT = {
     "today.drawer.status.error": "失败",
     "today.drawer.source_single": "只抓取：{source}",
     "today.drawer.show_error": "错误详情",
+    "today.drawer.via_reason.prefix": "备注：",
+    "today.drawer.via_reason.newsnow_cloudflare_blocked": "NewsNow 被 Cloudflare 拦截，已回退到直连",
+    "today.drawer.via_reason.newsnow_invalid_source_id": "NewsNow 不支持此来源，已回退到直连",
+    "today.drawer.via_reason.newsnow_http": "NewsNow 返回异常状态，已回退到直连",
+    "today.drawer.via_reason.newsnow_error": "NewsNow 请求失败，已回退到直连",
     "digests.title": "早午晚报",
     "digests.hint": "点击右上方「早报 / 午报 / 晚报」即可生成对应时段的财经速报；已生成的会出现在下方卡片，可预览或一键再推送到 IM 通道。",
     "digests.run": "立即生成",
@@ -610,6 +617,11 @@ const I18N_DICT = {
     "today.drawer.status.error": "failed",
     "today.drawer.source_single": "Single source: {source}",
     "today.drawer.show_error": "Error detail",
+    "today.drawer.via_reason.prefix": "Note: ",
+    "today.drawer.via_reason.newsnow_cloudflare_blocked": "NewsNow blocked by Cloudflare — fell back to direct",
+    "today.drawer.via_reason.newsnow_invalid_source_id": "NewsNow does not host this source — fell back to direct",
+    "today.drawer.via_reason.newsnow_http": "NewsNow returned an unexpected HTTP status — fell back to direct",
+    "today.drawer.via_reason.newsnow_error": "NewsNow request failed — fell back to direct",
     "digests.title": "Daily Briefs",
     "digests.hint": "Click Morning / Noon / Evening above to generate a brief for that slot. Generated briefs show up below — preview them or resend to any IM channel with one click.",
     "digests.run": "Generate now",
@@ -1088,6 +1100,26 @@ function _viaKey(row) {
   if (v === "none") return "none";
   return "direct";
 }
+/* Map the fetcher-side ``via_reason`` string (e.g.
+   ``newsnow:cloudflare_blocked``) to a user-facing label.
+   Unknown kinds fall back to the raw string so a new backend
+   kind never regresses into "(empty)". */
+function _viaReasonLabel(t, raw) {
+  const s = String(raw || "").trim();
+  if (!s) return "";
+  const parts = s.split(":");
+  const head = (parts[0] || "").toLowerCase();
+  const tail = (parts[1] || "").toLowerCase();
+  if (head !== "newsnow") return s;
+  const knownKinds = {
+    "cloudflare_blocked": "today.drawer.via_reason.newsnow_cloudflare_blocked",
+    "invalid_source_id": "today.drawer.via_reason.newsnow_invalid_source_id",
+  };
+  if (knownKinds[tail]) return t(knownKinds[tail]);
+  if (tail.indexOf("http_") === 0) return t("today.drawer.via_reason.newsnow_http");
+  if (tail.indexOf("error") === 0) return t("today.drawer.via_reason.newsnow_error");
+  return s;
+}
 
 function IngestDrawer(props) {
   const t = useT();
@@ -1143,12 +1175,19 @@ function IngestDrawer(props) {
           }
           const expanded = expandedId === id;
           const hasError = !!(row.error || row.error_kind);
+          const viaReason = _viaReasonLabel(t, row.via_reason);
           return (
             <span key={id} className={cls} title={label}>
               <span className="fp-pill__via">{t("today.drawer.via." + viaKey)}</span>
               <span>{label}</span>
               <span className="fp-pill__sep">·</span>
               <span>{statusText}</span>
+              {viaReason && (
+                <span className="fp-pill__reason" title={row.via_reason || ""}>
+                  <span className="fp-pill__sep">·</span>
+                  <span>{viaReason}</span>
+                </span>
+              )}
               {hasError && (
                 <button className="fp-pill__btn" type="button"
                         onClick={function () { setExpandedId(expanded ? "" : id); }}>
