@@ -13,6 +13,7 @@ import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
+import { ProviderIcon } from "@/components/ProviderIcon";
 
 type AgentProfile = {
   id: string;
@@ -1268,7 +1269,10 @@ export function AgentManagerView({
                   <SelectItem value="_auto_">{t("agentManager.preferredEndpointAuto")}</SelectItem>
                   {availableModels.map((m) => (
                     <SelectItem key={m.name} value={m.name} disabled={m.status !== "healthy"}>
-                      {m.name} ({m.model}){m.status !== "healthy" ? " ⚠" : ""}
+                      <span className="inline-flex items-center gap-2 align-middle">
+                        <ProviderIcon slug={m.provider} size={14} title={m.provider} />
+                        <span>{m.name} ({m.model}){m.status !== "healthy" ? " ⚠" : ""}</span>
+                      </span>
                     </SelectItem>
                   ))}
                 </SelectContent>

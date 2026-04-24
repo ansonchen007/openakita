@@ -31,6 +31,7 @@ import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
 import { SearchSelect } from "../components/SearchSelect";
 import { ProviderSearchSelect } from "../components/ProviderSearchSelect";
+import { ProviderIcon } from "../components/ProviderIcon";
 import type { EnvMap, ProviderInfo, ListedModel, EndpointDraft } from "../types";
 
 export interface LLMViewProps {
@@ -1126,7 +1127,10 @@ export function LLMView(props: LLMViewProps) {
               {savedEndpoints.map((e) => (
                 <TableRow key={e.name} className={e.enabled === false ? "opacity-45" : undefined}>
                   <TableCell className="font-semibold">
-                    {e.name}
+                    <span className="inline-flex items-center gap-2 align-middle">
+                      <ProviderIcon slug={e.provider} size={18} title={e.provider} />
+                      <span>{e.name}</span>
+                    </span>
                     {savedEndpoints[0]?.name === e.name && e.enabled !== false && <span className="ml-1.5 text-[10px] font-extrabold text-primary">{t("llm.primary")}</span>}
                     {e.enabled === false && <span className="ml-1.5 text-[10px] font-bold text-muted-foreground">{t("llm.disabled")}</span>}
                   </TableCell>
@@ -1177,7 +1181,10 @@ export function LLMView(props: LLMViewProps) {
               {savedCompilerEndpoints.map((e) => (
                 <TableRow key={e.name} className={e.enabled === false ? "opacity-45" : undefined}>
                   <TableCell className="font-semibold">
-                    {e.name}
+                    <span className="inline-flex items-center gap-2 align-middle">
+                      <ProviderIcon slug={e.provider} size={18} title={e.provider} />
+                      <span>{e.name}</span>
+                    </span>
                     {e.enabled === false && <span className="ml-1.5 text-[10px] font-bold text-muted-foreground">{t("llm.disabled")}</span>}
                   </TableCell>
                   <TableCell className="text-muted-foreground">{e.model}</TableCell>
@@ -1224,7 +1231,10 @@ export function LLMView(props: LLMViewProps) {
               {savedSttEndpoints.map((e) => (
                 <TableRow key={e.name} className={e.enabled === false ? "opacity-45" : undefined}>
                   <TableCell className="font-semibold">
-                    {e.name}
+                    <span className="inline-flex items-center gap-2 align-middle">
+                      <ProviderIcon slug={e.provider} size={18} title={e.provider} />
+                      <span>{e.name}</span>
+                    </span>
                     {e.enabled === false && <span className="ml-1.5 text-[10px] font-bold text-muted-foreground">{t("llm.disabled")}</span>}
                   </TableCell>
                   <TableCell className="text-muted-foreground">{e.model}</TableCell>

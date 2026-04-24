@@ -7,6 +7,7 @@ import { useTranslation } from "react-i18next";
 import { setLanguage } from "../i18n";
 import { AgentIcon } from "../components/AgentIcon";
 import { ConfirmDialog } from "../components/ConfirmDialog";
+import { ProviderIcon } from "../components/ProviderIcon";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import { setThemePref } from "../theme";
@@ -4354,6 +4355,9 @@ export function ChatView({
                         onClick={() => { setSelectedEndpoint(ep.name); setModelMenuOpen(false); }}
                       >
                         <span style={{ display: "inline-block", width: 8, height: 8, borderRadius: "50%", background: dotColor, marginRight: 6 }} />
+                        <span style={{ display: "inline-flex", alignItems: "center", marginRight: 6 }}>
+                          <ProviderIcon slug={ep.provider} size={14} title={ep.provider} />
+                        </span>
                         <span style={{ fontWeight: 600 }}>{ep.model}</span>
                         <span style={{ fontSize: 11, opacity: 0.5, marginLeft: 6 }}>{ep.name}</span>
                       </div>

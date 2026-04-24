@@ -4,6 +4,14 @@ import { useTranslation } from "react-i18next";
 import { ChevronDownIcon, CheckIcon } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
+import { ProviderIcon } from "@/components/ProviderIcon";
+
+export interface ProviderSelectOption {
+  value: string;
+  label: string;
+  /** Optional override slug for icon lookup. Defaults to `value` (which is the provider slug). */
+  iconSlug?: string;
+}
 
 export function ProviderSearchSelect({
   value,
@@ -15,10 +23,10 @@ export function ProviderSearchSelect({
 }: {
   value: string;
   onChange: (v: string) => void;
-  options: { value: string; label: string }[];
+  options: ProviderSelectOption[];
   placeholder?: string;
   disabled?: boolean;
-  extraOptions?: { value: string; label: string }[];
+  extraOptions?: ProviderSelectOption[];
 }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
@@ -119,16 +127,31 @@ export function ProviderSearchSelect({
     return () => document.removeEventListener("mousedown", handler, true);
   }, [showDrop, closeMenu]);
 
-  const selectItem = (opt: { value: string; label: string }) => {
+  const selectItem = (opt: ProviderSelectOption) => {
     onChange(opt.value);
     setSearch("");
     setOpen(false);
     setIsFocused(false);
   };
 
+  const selectedOption = useMemo(
+    () => allOptions.find((o) => o.value === value),
+    [allOptions, value],
+  );
+  const selectedIconSlug = selectedOption?.iconSlug ?? selectedOption?.value ?? value;
+  const showSelectedIcon = !!selectedOption && !isFocused;
+
   return (
     <div ref={rootRef} data-slot="provider-select" className="relative">
       <div className="relative">
+        {showSelectedIcon && (
+          <span
+            className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 flex items-center justify-center text-foreground/80"
+            aria-hidden
+          >
+            <ProviderIcon slug={selectedIconSlug} size={16} />
+          </span>
+        )}
         <Input
           ref={inputRef}
           value={displayValue}
@@ -159,7 +182,7 @@ export function ProviderSearchSelect({
             }
           }}
           disabled={disabled}
-          className="pr-9"
+          className={cn("pr-9", showSelectedIcon && "pl-8")}
         />
         <button
           type="button"
@@ -212,10 +235,11 @@ export function ProviderSearchSelect({
                   onMouseDown={(e) => e.preventDefault()}
                   onClick={() => selectItem(opt)}
                   className={cn(
-                    "relative flex w-full items-center rounded-sm py-1.5 pl-2 pr-8 text-sm cursor-pointer select-none outline-hidden",
+                    "relative flex w-full items-center gap-2 rounded-sm py-1.5 pl-2 pr-8 text-sm cursor-pointer select-none outline-hidden",
                     idx === hoverIdx ? "bg-accent text-accent-foreground" : "text-popover-foreground",
                   )}
                 >
+                  <ProviderIcon slug={opt.iconSlug ?? opt.value} size={16} className="text-current" />
                   <span className="truncate">{opt.label}</span>
                   <span className="absolute right-2 flex size-3.5 items-center justify-center">
                     {opt.value === value && <CheckIcon className="size-4" />}

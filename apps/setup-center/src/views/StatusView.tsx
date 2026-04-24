@@ -17,6 +17,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
 import { TroubleshootPanel } from "../components/TroubleshootPanel";
+import { ProviderIcon } from "../components/ProviderIcon";
 import type { EnvMap, WorkspaceSummary, ViewId } from "../types";
 import type { UpdateInfo } from "../platform";
 
@@ -420,7 +421,10 @@ export function StatusView(props: StatusViewProps) {
               return (
                 <TableRow key={e.name} className={e.enabled === false ? "opacity-45" : ""}>
                   <TableCell className="py-2.5 font-semibold">
-                    {e.name}
+                    <span className="inline-flex items-center gap-2 align-middle">
+                      <ProviderIcon slug={e.provider} size={16} title={e.provider} />
+                      <span>{e.name}</span>
+                    </span>
                     {e.enabled === false && <span className="ml-1.5 text-muted-foreground text-[10px] font-bold">{t("llm.disabled")}</span>}
                   </TableCell>
                   <TableCell className="py-2.5 text-muted-foreground text-xs">{e.model}</TableCell>
