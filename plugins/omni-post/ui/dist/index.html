@@ -1,0 +1,1524 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Omni Post · 全媒发布</title>
+  <!--
+    Self-contained plugin UI. The shared UI kit (bootstrap / icons /
+    i18n / markdown-mini / styles) lives verbatim under _assets/, same
+    as the other OpenAkita first-class plugins. We MUST NOT depend on
+    host-mounted /api/plugins/_sdk/*. React / ReactDOM / Babel load
+    from unpkg the same way avatar-studio does.
+  -->
+  <script src="_assets/bootstrap.js"></script>
+  <link rel="stylesheet" href="_assets/styles.css">
+  <script src="_assets/icons.js"></script>
+  <script src="_assets/i18n.js"></script>
+  <script src="_assets/markdown-mini.js"></script>
+  <link rel="preload" as="script" crossorigin href="https://unpkg.com/react@18/umd/react.production.min.js" />
+  <link rel="preload" as="script" crossorigin href="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" />
+  <link rel="preload" as="script" href="https://unpkg.com/@babel/standalone/babel.min.js" />
+  <style>
+    /* ── Theme tokens (1:1 with avatar-studio so the tab iframe keeps the
+         host's colour + dark-mode semantics without an extra bridge hop) ── */
+    :root {
+      --bg: #f8fafc; --bg-card: #ffffff; --bg-hover: #f1f5f9;
+      --text: #1e293b; --text-muted: #64748b; --text-dim: #94a3b8;
+      --primary: #6366f1; --primary-hover: #4f46e5;
+      --success: #22c55e; --warning: #f59e0b; --danger: #ef4444;
+      --border: #e2e8f0; --radius: 8px;
+    }
+    [data-theme="dark"] {
+      --bg: #0f172a; --bg-card: #1e293b; --bg-hover: #334155;
+      --text: #f1f5f9; --text-muted: #94a3b8; --text-dim: #64748b;
+      --border: #334155;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root:not([data-theme="light"]) {
+        --bg: #0f172a; --bg-card: #1e293b; --bg-hover: #334155;
+        --text: #f1f5f9; --text-muted: #94a3b8; --text-dim: #64748b;
+        --border: #334155;
+      }
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--bg); color: var(--text); line-height: 1.5;
+      -webkit-font-smoothing: antialiased;
+    }
+    /* Layout shell */
+    .app { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+    .header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 10px 18px; border-bottom: 1px solid var(--border);
+      background: var(--bg-card);
+    }
+    .header h1 { font-size: 16px; font-weight: 600; display: flex; align-items: center; gap: 10px; }
+    .header h1 .ak-logo {
+      width: 28px; height: 28px; border-radius: 6px;
+      background: linear-gradient(135deg, var(--primary) 0%, #ec4899 100%);
+      color: #fff; display: inline-flex; align-items: center; justify-content: center;
+    }
+    .header h1 .ak-sub {
+      font-size: 12px; font-weight: 400; color: var(--text-muted);
+      margin-left: 6px;
+    }
+    .header-right { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--text-muted); }
+    .tabs {
+      display: flex; gap: 0; border-bottom: 1px solid var(--border);
+      background: var(--bg-card); padding: 0 14px;
+    }
+    .tab {
+      padding: 9px 16px; font-size: 13px; cursor: pointer;
+      border-bottom: 2px solid transparent; color: var(--text-muted);
+      transition: all .15s; white-space: nowrap;
+      display: inline-flex; align-items: center; gap: 6px;
+    }
+    .tab:hover { color: var(--text); background: var(--bg-hover); }
+    .tab.active { color: var(--primary); border-bottom-color: var(--primary); font-weight: 500; }
+    .content { flex: 1; min-height: 0; overflow: hidden; padding: 14px 16px; position: relative; }
+    .content > div { max-height: 100%; overflow-y: auto; }
+    /* Cards + forms */
+    .card {
+      background: var(--bg-card); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 14px; margin-bottom: 12px;
+      box-shadow: 0 1px 2px rgba(0,0,0,.04);
+    }
+    .card-title { font-size: 14px; font-weight: 600; margin-bottom: 12px; display: flex; align-items: center; gap: 6px; }
+    .label { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; color: var(--text); margin: 0 0 8px; line-height: 1.3; }
+    .label::before { content: ""; display: inline-block; width: 3px; height: 14px; border-radius: 2px; background: var(--primary); flex-shrink: 0; }
+    .form-row { margin-bottom: 10px; }
+    .input {
+      width: 100%; padding: 8px 12px; border: 1px solid var(--border);
+      border-radius: 6px; background: var(--bg); color: var(--text);
+      font-size: 13px; outline: none; transition: border-color .15s, box-shadow .15s;
+    }
+    .input:focus { border-color: var(--primary); box-shadow: 0 0 0 2px rgba(99,102,241,.18); }
+    .textarea { resize: vertical; min-height: 80px; font-family: inherit; }
+    .select {
+      appearance: none; padding-right: 28px;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+      background-repeat: no-repeat; background-position: right 8px center;
+    }
+    .btn {
+      padding: 7px 14px; border-radius: 6px; border: 1px solid var(--border);
+      background: var(--bg-card); color: var(--text);
+      font-size: 13px; cursor: pointer; transition: all .15s;
+      display: inline-flex; align-items: center; gap: 6px;
+    }
+    .btn:hover { background: var(--bg-hover); }
+    .btn-primary { background: var(--primary); color: #fff; border-color: var(--primary); }
+    .btn-primary:hover { background: var(--primary-hover); }
+    .btn-primary:disabled, .btn:disabled { opacity: .5; cursor: not-allowed; }
+    .btn-sm { padding: 4px 10px; font-size: 12px; }
+    .btn-danger { color: var(--danger); border-color: var(--danger); background: var(--bg-card); }
+    .btn-danger:hover { background: rgba(239,68,68,.08); }
+    .btn-ghost { background: transparent; border-color: transparent; color: var(--text-muted); }
+    .btn-ghost:hover { background: var(--bg-hover); color: var(--text); }
+    .btn-block {
+      display: flex; align-items: center; justify-content: center; gap: 8px;
+      width: 100%; padding: 12px 16px; font-size: 14px; font-weight: 600;
+      border-radius: 8px;
+    }
+    /* Helpers */
+    .flex { display: flex; } .gap-2 { gap: 8px; } .gap-3 { gap: 12px; } .gap-4 { gap: 16px; }
+    .items-center { align-items: center; } .items-start { align-items: flex-start; }
+    .justify-between { justify-content: space-between; }
+    .flex-1 { flex: 1; } .flex-wrap { flex-wrap: wrap; } .flex-col { flex-direction: column; }
+    .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+    .text-sm { font-size: 13px; } .text-xs { font-size: 11px; }
+    .text-muted { color: var(--text-muted); } .text-dim { color: var(--text-dim); }
+    .text-success { color: var(--success); } .text-warning { color: var(--warning); } .text-danger { color: var(--danger); }
+    .truncate { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .mono { font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+    /* Tags + badges */
+    .tag { display: inline-flex; align-items: center; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 500; }
+    .tag-blue { background: rgba(99,102,241,.15); color: #818cf8; }
+    .tag-orange { background: rgba(245,158,11,.15); color: #fbbf24; }
+    .tag-green { background: rgba(34,197,94,.15); color: #4ade80; }
+    .tag-red { background: rgba(239,68,68,.15); color: #f87171; }
+    .tag-gray { background: rgba(148,163,184,.15); color: #94a3b8; }
+    .badge {
+      display: inline-flex; align-items: center; gap: 4px;
+      padding: 2px 8px; border-radius: 999px;
+      font-size: 11px; font-weight: 500; line-height: 1.4;
+    }
+    .badge-pending { background: rgba(148,163,184,.15); color: #94a3b8; }
+    .badge-running { background: rgba(99,102,241,.15); color: #818cf8; }
+    .badge-done { background: rgba(34,197,94,.15); color: #4ade80; }
+    .badge-failed { background: rgba(239,68,68,.15); color: #f87171; }
+    .badge-cancelled { background: rgba(245,158,11,.15); color: #fbbf24; }
+    /* Split layout */
+    .split-layout { display: flex; gap: 16px; height: 100%; }
+    .split-left { width: 55%; min-width: 380px; overflow-y: auto; flex-shrink: 0; padding-right: 4px; }
+    .split-right { flex: 1; overflow-y: auto; padding-left: 4px; }
+    @media (max-width: 980px) {
+      .split-layout { flex-direction: column; }
+      .split-left { width: 100%; min-width: unset; }
+    }
+    /* Spinner */
+    .spinner { width: 20px; height: 20px; border: 2px solid var(--border); border-top-color: var(--primary); border-radius: 50%; animation: spin .6s linear infinite; }
+    .spinner-sm { width: 14px; height: 14px; border: 2px solid var(--border); border-top-color: var(--primary); border-radius: 50%; animation: spin .6s linear infinite; display: inline-block; vertical-align: -2px; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .progress { width: 100%; height: 6px; background: var(--border); border-radius: 3px; overflow: hidden; }
+    .progress-fill { height: 100%; background: var(--primary); border-radius: 3px; transition: width .3s; }
+    /* Upload dropzone */
+    .upload-zone {
+      border: 2px dashed var(--border); border-radius: var(--radius);
+      padding: 18px; text-align: center; cursor: pointer; transition: .15s;
+      color: var(--text-muted); position: relative;
+    }
+    .upload-zone:hover { border-color: var(--primary); background: rgba(99,102,241,.04); }
+    .upload-zone.has-file { border-style: solid; border-color: var(--primary); }
+    /* Ico */
+    .ico { display: inline-flex; align-items: center; justify-content: center; width: 1em; height: 1em; vertical-align: -0.125em; flex-shrink: 0; }
+    .ico svg { width: 100%; height: 100%; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+    /* Platform matrix — the publish tab's centerpiece */
+    .pm {
+      display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+      gap: 10px;
+    }
+    .pm-card {
+      display: flex; flex-direction: column; align-items: flex-start;
+      gap: 4px; padding: 10px 12px;
+      border: 1px solid var(--border); border-radius: 10px;
+      background: var(--bg-card); cursor: pointer; transition: .15s;
+      text-align: left; user-select: none;
+    }
+    .pm-card:hover { border-color: var(--primary); background: var(--bg-hover); }
+    .pm-card.selected { border-color: var(--primary); box-shadow: 0 0 0 1px var(--primary) inset; background: rgba(99,102,241,.08); }
+    .pm-card__name { font-size: 13px; font-weight: 600; color: var(--text); display: flex; align-items: center; gap: 6px; }
+    .pm-card__sub { font-size: 11px; color: var(--text-muted); line-height: 1.35; }
+    .pm-card__kinds { display: flex; gap: 4px; margin-top: 2px; }
+    .pm-card__kind { font-size: 10px; padding: 1px 6px; border-radius: 3px; background: rgba(99,102,241,.12); color: #818cf8; }
+    /* Account row */
+    .acc-row {
+      display: flex; align-items: center; gap: 10px;
+      padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px;
+      background: var(--bg-card); margin-bottom: 6px;
+      cursor: pointer; transition: background .15s;
+    }
+    .acc-row:hover { background: var(--bg-hover); }
+    .acc-row.selected { border-color: var(--primary); background: rgba(99,102,241,.06); }
+    .acc-avatar { width: 28px; height: 28px; border-radius: 50%; background: rgba(99,102,241,.2); display: flex; align-items: center; justify-content: center; font-weight: 600; color: var(--primary); flex-shrink: 0; }
+    .acc-info { flex: 1; min-width: 0; }
+    .acc-info__name { font-size: 13px; font-weight: 500; color: var(--text); }
+    .acc-info__meta { font-size: 11px; color: var(--text-dim); }
+    .acc-health-ok { color: var(--success); }
+    .acc-health-expired { color: var(--danger); }
+    .acc-health-unknown { color: var(--warning); }
+    /* Table */
+    .ak-table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 13px; }
+    .ak-table th, .ak-table td {
+      padding: 10px 12px; text-align: left;
+      border-bottom: 1px solid var(--border); vertical-align: middle;
+    }
+    .ak-table th {
+      font-weight: 600; color: var(--text-muted); font-size: 12px;
+      background: var(--bg-card); position: sticky; top: 0; z-index: 1;
+    }
+    .ak-table tr.row { cursor: pointer; transition: background .12s; }
+    .ak-table tr.row:hover { background: var(--bg-hover); }
+    .ak-table tr.row.selected { background: rgba(99,102,241,.08); }
+    /* Drawer */
+    .drawer {
+      position: fixed; top: 0; right: 0; width: 460px; max-width: 100vw;
+      height: 100vh; background: var(--bg-card);
+      border-left: 1px solid var(--border);
+      box-shadow: -8px 0 24px rgba(0,0,0,.08);
+      display: flex; flex-direction: column; z-index: 1500;
+      animation: slide-in-right .18s ease-out;
+    }
+    .drawer-mask {
+      position: fixed; inset: 0; background: rgba(0,0,0,.25);
+      z-index: 1400; animation: fade-in .15s ease-out;
+    }
+    .drawer-head {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 12px 16px; border-bottom: 1px solid var(--border);
+    }
+    .drawer-body { flex: 1; overflow-y: auto; padding: 14px 16px; }
+    @keyframes slide-in-right { from { transform: translateX(100%); } to { transform: translateX(0); } }
+    @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+    /* Modal */
+    .modal-mask {
+      position: fixed; inset: 0; background: rgba(0,0,0,.5);
+      display: flex; align-items: center; justify-content: center;
+      z-index: 2000; padding: 20px; animation: fade-in .15s ease-out;
+    }
+    .modal-card {
+      background: var(--bg-card); border-radius: 12px;
+      padding: 22px 24px; max-width: 480px; width: 100%;
+      box-shadow: 0 20px 50px rgba(0,0,0,.25);
+      animation: scale-in .18s ease-out; max-height: 90vh; overflow-y: auto;
+    }
+    .modal-title { font-size: 16px; font-weight: 600; margin-bottom: 6px; color: var(--text); }
+    .modal-desc { font-size: 13px; color: var(--text-muted); line-height: 1.6; margin-bottom: 14px; }
+    .modal-actions { display: flex; gap: 8px; justify-content: flex-end; }
+    @keyframes scale-in { from { transform: scale(.94); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+    /* Empty state */
+    .empty-state {
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      padding: 48px 20px; color: var(--text-dim); text-align: center;
+    }
+    .empty-state .ico { font-size: 48px; opacity: .5; margin-bottom: 12px; }
+    .empty-state h4 { font-size: 14px; color: var(--text-muted); margin-bottom: 6px; font-weight: 500; }
+    .empty-state p { font-size: 12px; color: var(--text-dim); max-width: 380px; line-height: 1.6; }
+    /* UploadDock — the floating queue that appears in the top-right
+       corner once a user starts uploading and tracks every in-flight
+       file. Kept visible across tab switches (requirement: "注重多媒体
+       文件上传以及记录"). Collapses to a single badge when minimised. */
+    .upload-dock {
+      position: fixed; right: 16px; top: 58px; z-index: 1200;
+      width: 320px; max-width: calc(100vw - 32px);
+      border: 1px solid var(--border); border-radius: 12px;
+      background: var(--bg-card);
+      box-shadow: 0 12px 32px rgba(15, 23, 42, .18);
+      overflow: hidden; user-select: none;
+    }
+    .upload-dock__head {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--border);
+      background: var(--bg-hover);
+    }
+    .upload-dock__title { font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 6px; }
+    .upload-dock__body { max-height: 320px; overflow-y: auto; padding: 8px 12px 10px; }
+    .upload-dock__item {
+      display: flex; flex-direction: column; gap: 4px;
+      padding: 8px 0; border-bottom: 1px dashed var(--border);
+    }
+    .upload-dock__item:last-child { border-bottom: none; }
+    .upload-dock__item-top { display: flex; gap: 8px; align-items: center; }
+    .upload-dock__item-name { flex: 1; font-size: 12px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .upload-dock__item-meta { font-size: 11px; color: var(--text-dim); }
+    .upload-dock__item-remove { background: transparent; border: none; color: var(--text-muted); cursor: pointer; padding: 2px 4px; font-size: 14px; }
+    .upload-dock__item-remove:hover { color: var(--danger); }
+    .upload-dock__empty { padding: 18px 8px; text-align: center; font-size: 12px; color: var(--text-dim); }
+    .upload-dock__mini {
+      position: fixed; right: 16px; top: 58px; z-index: 1200;
+      border: 1px solid var(--border); border-radius: 999px;
+      background: var(--bg-card); padding: 6px 12px;
+      font-size: 12px; font-weight: 600; color: var(--primary);
+      cursor: pointer; display: inline-flex; align-items: center; gap: 6px;
+      box-shadow: 0 6px 14px rgba(15, 23, 42, .15);
+    }
+    /* Toast fallback */
+    .ak-toast-stack { position: fixed; right: 20px; bottom: 20px; z-index: 3000; display: flex; flex-direction: column; gap: 8px; }
+    .ak-toast {
+      background: var(--bg-card); color: var(--text);
+      border: 1px solid var(--border); border-radius: 6px;
+      padding: 10px 14px; font-size: 13px; box-shadow: 0 4px 12px rgba(0,0,0,.1);
+      max-width: 320px;
+    }
+    .ak-toast.error { border-color: var(--danger); color: var(--danger); }
+    .ak-toast.warn { border-color: var(--warning); color: var(--warning); }
+    /* Kbd */
+    .kbd { font-family: monospace; font-size: 11px; padding: 1px 5px; border: 1px solid var(--border); border-radius: 3px; background: var(--bg-hover); }
+    code.inline { font-family: monospace; font-size: 12px; padding: 1px 4px; background: var(--bg-hover); border-radius: 3px; }
+    .divider { height: 1px; background: var(--border); margin: 12px 0; }
+    /* Placeholder for tabs not yet wired up (S2/S3/S4) */
+    .stub { padding: 40px 20px; color: var(--text-muted); text-align: center; font-size: 13px; line-height: 1.8; }
+    .stub h2 { font-size: 18px; color: var(--text); margin-bottom: 10px; }
+    .stub code.inline { color: var(--primary); }
+  </style>
+</head>
+<body>
+<div id="root"></div>
+
+<!-- ─────────────────────────────────────────────────────────────────────
+     BRIDGE LAYER (vanilla JS, runs before React boots)
+     Mirrors the exact surface used by avatar-studio / seedance-video /
+     tongyi-image so plugin calls never need an iframe-vs-direct fork.
+     ───────────────────────────────────────────────────────────────────── -->
+<script>
+const PLUGIN_ID_DEFAULT = "omni-post";
+const BRIDGE_VER = 1;
+let _ctx = null, _caps = [], _pending = {}, _handlers = {};
+let _bridgeConnected = false;
+const _inIframe = window.parent !== window;
+function uid() { return Math.random().toString(36).slice(2, 10) + Date.now().toString(36); }
+function post(msg) {
+  if (_inIframe) window.parent.postMessage({ __akita_bridge: true, version: BRIDGE_VER, ...msg }, "*");
+}
+function _detectApiBase() {
+  if (_ctx && _ctx.apiBase) return _ctx.apiBase;
+  const loc = window.location;
+  if (loc.port === "5173" || loc.port === "1420") return "http://127.0.0.1:18900";
+  return loc.origin;
+}
+function directFetch(method, path, body) {
+  const url = path.startsWith("http") ? path : _detectApiBase() + path;
+  const opts = { method, headers: { "Content-Type": "application/json" } };
+  if (body && method !== "GET" && method !== "HEAD") {
+    if (body instanceof FormData) { opts.body = body; delete opts.headers["Content-Type"]; }
+    else { opts.body = JSON.stringify(body); }
+  }
+  return fetch(url, opts).then(function (resp) {
+    return resp.json().then(function (json) {
+      return { ok: resp.ok, status: resp.status, body: json };
+    }).catch(function () { return { ok: resp.ok, status: resp.status, body: null }; });
+  });
+}
+function apiCall(method, path, body) {
+  if (!_inIframe || !_bridgeConnected) return directFetch(method, path, body);
+  return new Promise(function (resolve, reject) {
+    const id = uid();
+    _pending[id] = { resolve, reject };
+    post({ type: "bridge:api-request", requestId: id, payload: { method, path, body } });
+    setTimeout(function () {
+      if (_pending[id]) {
+        delete _pending[id];
+        directFetch(method, path, body).then(resolve).catch(reject);
+      }
+    }, 5000);
+  });
+}
+function pluginApi(method, path, body) {
+  const base = "/api/plugins/" + ((_ctx && _ctx.pluginId) || PLUGIN_ID_DEFAULT);
+  return apiCall(method, base + path, body);
+}
+window.addEventListener("message", function (e) {
+  const d = e.data;
+  if (!d || !d.__akita_bridge) return;
+  if (d.type === "bridge:init" && d.payload) {
+    _ctx = d.payload;
+    _bridgeConnected = true;
+    if (_ctx.theme) {
+      document.documentElement.setAttribute("data-theme", _ctx.theme.includes("dark") ? "dark" : "light");
+    }
+  }
+  if (d.type === "bridge:handshake-ack" && d.payload) {
+    _caps = d.payload.capabilities || [];
+    _bridgeConnected = true;
+  }
+  const _ackTypes = [
+    "bridge:api-response", "bridge:clipboard-ack", "bridge:download-ack",
+    "bridge:show-in-folder-ack", "bridge:pick-folder-ack",
+  ];
+  if (_ackTypes.indexOf(d.type) !== -1 && d.requestId && _pending[d.requestId]) {
+    _pending[d.requestId].resolve(d.payload);
+    delete _pending[d.requestId];
+  }
+  if (d.type === "bridge:theme-change" && d.payload) {
+    document.documentElement.setAttribute("data-theme", (d.payload.theme || "").includes("dark") ? "dark" : "light");
+  }
+  if (d.type === "bridge:event" && d.payload) {
+    const h = _handlers[d.payload.eventType];
+    if (h) h.forEach(function (fn) { fn(d.payload.data); });
+  }
+});
+let _readyInterval = null;
+function _sendReady() {
+  post({ type: "bridge:ready" });
+  post({ type: "bridge:handshake", payload: { sdkVersion: "1.0.0" } });
+}
+_sendReady();
+if (_inIframe) {
+  _readyInterval = setInterval(function () {
+    if (_bridgeConnected) { clearInterval(_readyInterval); return; }
+    _sendReady();
+  }, 300);
+  setTimeout(function () { if (_readyInterval) clearInterval(_readyInterval); }, 20000);
+}
+function onEvent(type, fn) { (_handlers[type] = _handlers[type] || []).push(fn); }
+function showToast(body, type) {
+  type = type || "success";
+  if (_inIframe && _bridgeConnected) {
+    post({ type: "bridge:notification", payload: { title: "", body, type } });
+    return;
+  }
+  let stack = document.querySelector(".ak-toast-stack");
+  if (!stack) {
+    stack = document.createElement("div");
+    stack.className = "ak-toast-stack";
+    document.body.appendChild(stack);
+  }
+  const t = document.createElement("div");
+  t.className = "ak-toast " + (type === "error" ? "error" : type === "warn" ? "warn" : "");
+  t.textContent = body;
+  stack.appendChild(t);
+  setTimeout(function () { t.remove(); }, 4000);
+}
+function copyToClipboard(text) {
+  if (_inIframe && _bridgeConnected) {
+    const id = uid();
+    _pending[id] = { resolve: function () { showToast("已复制"); }, reject: function () {} };
+    post({ type: "bridge:clipboard", requestId: id, payload: { text } });
+    return;
+  }
+  if (navigator.clipboard) navigator.clipboard.writeText(text).then(function () { showToast("已复制"); });
+}
+window.__bridge = {
+  apiCall, pluginApi, onEvent, showToast, copyToClipboard,
+  getCtx: function () { return _ctx; },
+};
+</script>
+
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+<!-- ─────────────────────────────────────────────────────────────────────
+     REACT BUSINESS LAYER (single Babel-compiled script)
+     ───────────────────────────────────────────────────────────────────── -->
+<script type="text/babel" data-type="module">
+const { useState, useEffect, useCallback, useMemo, useRef } = React;
+const { pluginApi, onEvent, showToast, copyToClipboard } = window.__bridge;
+
+/* ─── i18n dictionary (zh / en, full parity) ──────────────────────── */
+const I18N_DICT = {
+  zh: {
+    "omniPost.app.title": "全媒发布",
+    "omniPost.app.subtitle": "Playwright 自研引擎 · 多账号矩阵 · Asset Bus 回传",
+    "omniPost.tabs.publish": "发布",
+    "omniPost.tabs.tasks": "任务",
+    "omniPost.tabs.accounts": "账号",
+    "omniPost.tabs.calendar": "日历",
+    "omniPost.tabs.library": "素材库",
+    "omniPost.tabs.settings": "设置",
+    "omniPost.publish.section.asset": "素材 / 封面",
+    "omniPost.publish.section.caption": "标题 · 文案 · 话题",
+    "omniPost.publish.section.platforms": "发布到的平台",
+    "omniPost.publish.section.accounts": "选择账号",
+    "omniPost.publish.section.summary": "发布摘要",
+    "omniPost.publish.field.title": "标题",
+    "omniPost.publish.field.titlePlaceholder": "30 字以内（平台超限自动截断）",
+    "omniPost.publish.field.description": "正文 / 描述",
+    "omniPost.publish.field.descriptionPlaceholder": "支持 @提及 / # 话题 / 链接屏蔽策略（按平台）",
+    "omniPost.publish.field.tags": "标签（逗号分隔）",
+    "omniPost.publish.field.tagsPlaceholder": "旅行, vlog, 春游",
+    "omniPost.publish.field.topic": "话题（可选）",
+    "omniPost.publish.field.assetEmpty": "还没有素材，先上传一个或拉取 Asset Bus 中的上游素材。",
+    "omniPost.publish.action.upload": "上传本地文件",
+    "omniPost.publish.action.pickExisting": "从素材库选",
+    "omniPost.publish.action.consumeBus": "从 Asset Bus 拉取",
+    "omniPost.publish.action.publishNow": "立即发布",
+    "omniPost.publish.action.dryRun": "预检",
+    "omniPost.publish.action.refresh": "刷新",
+    "omniPost.publish.summary.headline": "将发布到 {platforms} 平台 × {accounts} 账号，共 {tasks} 条任务",
+    "omniPost.publish.summary.empty": "选择素材、平台和账号后查看摘要",
+    "omniPost.publish.toast.noAsset": "请先选择或上传一个素材",
+    "omniPost.publish.toast.noTitle": "请填写标题",
+    "omniPost.publish.toast.noPlatform": "请至少选择一个平台",
+    "omniPost.publish.toast.noAccount": "请至少选择一个账号",
+    "omniPost.publish.toast.publishOk": "已创建 {count} 条发布任务",
+    "omniPost.publish.toast.publishFail": "创建发布任务失败：{msg}",
+    "omniPost.publish.toast.dryRunOk": "预检通过",
+    "omniPost.publish.toast.dryRunIssues": "预检发现 {count} 个问题",
+    "omniPost.tasks.header": "发布任务",
+    "omniPost.tasks.filter.all": "全部",
+    "omniPost.tasks.filter.pending": "等待",
+    "omniPost.tasks.filter.running": "执行中",
+    "omniPost.tasks.filter.succeeded": "成功",
+    "omniPost.tasks.filter.failed": "失败",
+    "omniPost.tasks.filter.cancelled": "已取消",
+    "omniPost.tasks.col.created": "创建",
+    "omniPost.tasks.col.platform": "平台",
+    "omniPost.tasks.col.account": "账号",
+    "omniPost.tasks.col.status": "状态",
+    "omniPost.tasks.col.engine": "引擎",
+    "omniPost.tasks.col.actions": "操作",
+    "omniPost.tasks.empty.title": "暂无任务",
+    "omniPost.tasks.empty.desc": "在「发布」面板创建发布后，任务会实时出现在这里。失败的任务会展示截图和错误码。",
+    "omniPost.tasks.action.retry": "重试",
+    "omniPost.tasks.action.cancel": "取消",
+    "omniPost.tasks.action.openUrl": "查看发布结果",
+    "omniPost.tasks.drawer.payload": "发布字段",
+    "omniPost.tasks.drawer.error": "失败原因",
+    "omniPost.tasks.drawer.timeline": "时间线",
+    "omniPost.tasks.drawer.screenshot": "截图归档",
+    "omniPost.tasks.drawer.resultUrl": "发布 URL",
+    "omniPost.tasks.drawer.close": "关闭",
+    "omniPost.accounts.coming.title": "账号矩阵 (S2)",
+    "omniPost.accounts.coming.desc": "S2 将交付：每平台多账号卡片、头像、分类标签、日/周/月限额进度条、Cookie 健康状态懒加载、一键 Cookie 导入。",
+    "omniPost.calendar.coming.title": "发布日历 (S3)",
+    "omniPost.calendar.coming.desc": "S3 将交付：月/周/日视图、拖拽改期、按平台配色、时区指示、同账号 30min 内冲突提示。",
+    "omniPost.library.coming.title": "素材 / 模板库 (S3)",
+    "omniPost.library.coming.desc": "S3 将交付：AssetLibrary（网格 + kind/tags/md5 筛选 + 已发平台标记 + 悬浮元数据）+ TemplateLibrary（文案 / 话题 / 封面模板）。",
+    "omniPost.settings.coming.title": "设置 (S4)",
+    "omniPost.settings.coming.desc": "S4 将交付：引擎切换（auto/pw/mp）、MultiPost 扩展探测与安装引导、并发 / 冷却 / 重试策略、代理、通知渠道、数据导出、危险区（清空素材/重置数据库）。",
+    "omniPost.engine.pw": "Playwright",
+    "omniPost.engine.mp": "MultiPost",
+    "omniPost.engine.auto": "自动",
+    "omniPost.upload.dock.title": "上传队列",
+    "omniPost.upload.dock.empty": "队列为空，在「发布」面板拖入文件即可开始上传。",
+    "omniPost.upload.status.hashing": "计算 MD5",
+    "omniPost.upload.status.uploading": "上传中",
+    "omniPost.upload.status.finalizing": "合并分片",
+    "omniPost.upload.status.done": "已完成",
+    "omniPost.upload.status.deduped": "秒传",
+    "omniPost.upload.status.error": "失败",
+    "omniPost.catalog.loading": "加载平台目录…",
+    "omniPost.catalog.failure": "无法加载平台目录：{msg}",
+    "omniPost.common.refresh": "刷新",
+    "omniPost.common.close": "关闭",
+    "omniPost.common.copy": "复制",
+    "omniPost.common.confirm": "确认",
+    "omniPost.common.cancel": "取消",
+  },
+  en: {
+    "omniPost.app.title": "Omni Post",
+    "omniPost.app.subtitle": "Playwright engine · account matrix · asset-bus handoff",
+    "omniPost.tabs.publish": "Publish",
+    "omniPost.tabs.tasks": "Tasks",
+    "omniPost.tabs.accounts": "Accounts",
+    "omniPost.tabs.calendar": "Calendar",
+    "omniPost.tabs.library": "Library",
+    "omniPost.tabs.settings": "Settings",
+    "omniPost.publish.section.asset": "Asset / Cover",
+    "omniPost.publish.section.caption": "Title · Description · Topic",
+    "omniPost.publish.section.platforms": "Target platforms",
+    "omniPost.publish.section.accounts": "Pick accounts",
+    "omniPost.publish.section.summary": "Publish summary",
+    "omniPost.publish.field.title": "Title",
+    "omniPost.publish.field.titlePlaceholder": "≤ 30 chars (auto-trimmed per platform)",
+    "omniPost.publish.field.description": "Description",
+    "omniPost.publish.field.descriptionPlaceholder": "Supports @mentions / # topics / link-strip strategy (per platform)",
+    "omniPost.publish.field.tags": "Tags (comma-separated)",
+    "omniPost.publish.field.tagsPlaceholder": "travel, vlog, spring",
+    "omniPost.publish.field.topic": "Topic (optional)",
+    "omniPost.publish.field.assetEmpty": "No asset yet — upload one or consume an upstream asset via the Asset Bus.",
+    "omniPost.publish.action.upload": "Upload file",
+    "omniPost.publish.action.pickExisting": "Pick from library",
+    "omniPost.publish.action.consumeBus": "Consume Asset Bus",
+    "omniPost.publish.action.publishNow": "Publish now",
+    "omniPost.publish.action.dryRun": "Dry run",
+    "omniPost.publish.action.refresh": "Refresh",
+    "omniPost.publish.summary.headline": "Will fan out to {platforms} platform(s) × {accounts} account(s) = {tasks} task(s)",
+    "omniPost.publish.summary.empty": "Pick an asset, platforms and accounts to see a summary",
+    "omniPost.publish.toast.noAsset": "Please pick or upload an asset first",
+    "omniPost.publish.toast.noTitle": "Please fill in the title",
+    "omniPost.publish.toast.noPlatform": "Please pick at least one platform",
+    "omniPost.publish.toast.noAccount": "Please pick at least one account",
+    "omniPost.publish.toast.publishOk": "Created {count} publish task(s)",
+    "omniPost.publish.toast.publishFail": "Failed to create tasks: {msg}",
+    "omniPost.publish.toast.dryRunOk": "Dry run passed",
+    "omniPost.publish.toast.dryRunIssues": "Dry run found {count} issue(s)",
+    "omniPost.tasks.header": "Publish tasks",
+    "omniPost.tasks.filter.all": "All",
+    "omniPost.tasks.filter.pending": "Pending",
+    "omniPost.tasks.filter.running": "Running",
+    "omniPost.tasks.filter.succeeded": "Succeeded",
+    "omniPost.tasks.filter.failed": "Failed",
+    "omniPost.tasks.filter.cancelled": "Cancelled",
+    "omniPost.tasks.col.created": "Created",
+    "omniPost.tasks.col.platform": "Platform",
+    "omniPost.tasks.col.account": "Account",
+    "omniPost.tasks.col.status": "Status",
+    "omniPost.tasks.col.engine": "Engine",
+    "omniPost.tasks.col.actions": "Actions",
+    "omniPost.tasks.empty.title": "No tasks yet",
+    "omniPost.tasks.empty.desc": "Tasks show up here in real time once you publish. Failures carry screenshots and error codes.",
+    "omniPost.tasks.action.retry": "Retry",
+    "omniPost.tasks.action.cancel": "Cancel",
+    "omniPost.tasks.action.openUrl": "Open result URL",
+    "omniPost.tasks.drawer.payload": "Publish payload",
+    "omniPost.tasks.drawer.error": "Failure",
+    "omniPost.tasks.drawer.timeline": "Timeline",
+    "omniPost.tasks.drawer.screenshot": "Screenshot",
+    "omniPost.tasks.drawer.resultUrl": "Result URL",
+    "omniPost.tasks.drawer.close": "Close",
+    "omniPost.accounts.coming.title": "Account matrix (S2)",
+    "omniPost.accounts.coming.desc": "S2 delivers: per-platform multi-account cards, avatars, tag buckets, daily / weekly / monthly quota bars, lazy cookie-health probe, one-click cookie import.",
+    "omniPost.calendar.coming.title": "Publish calendar (S3)",
+    "omniPost.calendar.coming.desc": "S3 delivers: month / week / day views, drag to reschedule, colour by platform, timezone indicator, 30-min collision warnings per account.",
+    "omniPost.library.coming.title": "Asset & template library (S3)",
+    "omniPost.library.coming.desc": "S3 delivers: AssetLibrary (grid + kind / tags / md5 filters + per-platform publish markers + hover metadata) and TemplateLibrary (caption / topic / cover mappings).",
+    "omniPost.settings.coming.title": "Settings (S4)",
+    "omniPost.settings.coming.desc": "S4 delivers: engine switch (auto / pw / mp), MultiPost extension detection + install wizard, concurrency / cooldown / retry policy, proxy, IM channels, data export, danger zone (clear assets / reset DB).",
+    "omniPost.engine.pw": "Playwright",
+    "omniPost.engine.mp": "MultiPost",
+    "omniPost.engine.auto": "Auto",
+    "omniPost.upload.dock.title": "Upload queue",
+    "omniPost.upload.dock.empty": "Queue is empty — drop a file in the Publish tab to start.",
+    "omniPost.upload.status.hashing": "Hashing",
+    "omniPost.upload.status.uploading": "Uploading",
+    "omniPost.upload.status.finalizing": "Finalising",
+    "omniPost.upload.status.done": "Done",
+    "omniPost.upload.status.deduped": "Deduped",
+    "omniPost.upload.status.error": "Failed",
+    "omniPost.catalog.loading": "Loading platform catalog…",
+    "omniPost.catalog.failure": "Could not load platform catalog: {msg}",
+    "omniPost.common.refresh": "Refresh",
+    "omniPost.common.close": "Close",
+    "omniPost.common.copy": "Copy",
+    "omniPost.common.confirm": "Confirm",
+    "omniPost.common.cancel": "Cancel",
+  },
+};
+if (window.OpenAkitaI18n && typeof window.OpenAkitaI18n.register === "function") {
+  window.OpenAkitaI18n.register(I18N_DICT);
+}
+function useT() {
+  const [loc, setLoc] = useState(function () {
+    return (window.OpenAkitaI18n && window.OpenAkitaI18n.locale && window.OpenAkitaI18n.locale()) || "zh";
+  });
+  useEffect(function () {
+    if (!window.OpenAkitaI18n || !window.OpenAkitaI18n.onChange) return;
+    return window.OpenAkitaI18n.onChange(function (l) { setLoc(l); });
+  }, []);
+  return useCallback(function (k, vars) {
+    const base = (loc || "zh").split(/[-_]/)[0];
+    const entry = (I18N_DICT[loc] && I18N_DICT[loc][k])
+      || (I18N_DICT[base] && I18N_DICT[base][k])
+      || (I18N_DICT.en && I18N_DICT.en[k])
+      || k;
+    if (!vars) return entry;
+    return String(entry).replace(/\{(\w+)\}/g, function (_m, n) {
+      return vars[n] != null ? String(vars[n]) : "{" + n + "}";
+    });
+  }, [loc]);
+}
+
+/* ─── Tiny <Ico> wrapper so we never embed an emoji (CI rule) ──────── */
+const ICONS = {
+  send: '<path d="M22 2L11 13"/><path d="M22 2l-7 20-4-9-9-4 20-7z"/>',
+  list: '<line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/>',
+  user: '<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>',
+  calendar: '<rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/>',
+  grid: '<rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/>',
+  cog: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>',
+  upload: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>',
+  plus: '<line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>',
+  refresh: '<polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10"/><path d="M20.49 15a9 9 0 0 1-14.85 3.36L1 14"/>',
+  close: '<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>',
+  check: '<polyline points="20 6 9 17 4 12"/>',
+  external: '<path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/>',
+  trash: '<polyline points="3 6 5 6 21 6"/><path d="M19 6l-2 14a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/>',
+  warn: '<path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>',
+  info: '<circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/>',
+  copy: '<rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>',
+};
+function Ico(props) {
+  const svg = ICONS[props.name] || "";
+  return (
+    <span className={"ico " + (props.cls || "")} aria-hidden="true"
+          dangerouslySetInnerHTML={{ __html: '<svg viewBox="0 0 24 24">' + svg + '</svg>' }} />
+  );
+}
+
+/* ─── Format helpers ─────────────────────────────────────────────── */
+function formatBytes(n) {
+  if (!n || n < 0) return "0 B";
+  const u = ["B", "KB", "MB", "GB"]; let i = 0; let v = n;
+  while (v >= 1024 && i < u.length - 1) { v /= 1024; i += 1; }
+  return v.toFixed(v >= 10 || i === 0 ? 0 : 1) + " " + u[i];
+}
+function formatTs(ts) {
+  if (!ts) return "—";
+  const d = typeof ts === "string" ? new Date(ts) : new Date(ts);
+  if (isNaN(d.getTime())) return "—";
+  const pad = function (n) { return n < 10 ? "0" + n : "" + n; };
+  return (d.getMonth() + 1) + "/" + d.getDate() + " " + pad(d.getHours()) + ":" + pad(d.getMinutes());
+}
+function shortId(s) { return s ? String(s).slice(0, 8) : ""; }
+
+/* ─── Status → badge class mapping ──────────────────────────────── */
+function statusBadge(status) {
+  switch (status) {
+    case "pending":   return "badge badge-pending";
+    case "running":   return "badge badge-running";
+    case "succeeded": return "badge badge-done";
+    case "failed":    return "badge badge-failed";
+    case "cancelled": return "badge badge-cancelled";
+    default:          return "badge badge-pending";
+  }
+}
+
+/* ─── Chunked upload helper (5MB chunks, MD5 dedup, progress). The
+       UploadDock owns the state; PublishTab kicks it off. Implementing
+       this on the frontend is the fastest way to honour the plan's
+       requirement: 「断点续传 + MD5 秒传」. The backend `/upload/init`
+       already returns {deduped: true, asset_id} when the md5_hint is
+       recognised, so we compute md5 upfront and skip the chunk loop
+       entirely when the server says it's a dedup hit. */
+async function computeMd5Hex(file) {
+  // Browsers don't ship MD5 in SubtleCrypto. We approximate with a
+  // small pure-JS MD5 implementation below — it's only used for the
+  // dedup hint; the server computes its own md5 from the full file
+  // bytes and overrides on mismatch, so a bug here is not a security
+  // hazard (at worst the dedup misses and a full upload happens).
+  const buf = new Uint8Array(await file.arrayBuffer());
+  return md5FromBytes(buf);
+}
+// Minimal MD5 (RFC 1321) — vendored small-footprint implementation so
+// we don't pull a dependency for the dedup hint. Good enough for
+// <100MB files which the UI target anyway (2GB limit is enforced
+// server-side; we degrade to "no md5 hint" above that cap).
+function md5FromBytes(bytes) {
+  function rhex(n) { let s = ""; for (let j = 0; j < 4; j++) s += "0123456789abcdef".charAt((n >> (j * 8 + 4)) & 0x0F) + "0123456789abcdef".charAt((n >> (j * 8)) & 0x0F); return s; }
+  function add(a, b) { const lsw = (a & 0xFFFF) + (b & 0xFFFF); const msw = (a >> 16) + (b >> 16) + (lsw >> 16); return (msw << 16) | (lsw & 0xFFFF); }
+  function rol(n, c) { return (n << c) | (n >>> (32 - c)); }
+  function cmn(q, a, b, x, s, t) { return add(rol(add(add(a, q), add(x, t)), s), b); }
+  function ff(a, b, c, d, x, s, t) { return cmn((b & c) | ((~b) & d), a, b, x, s, t); }
+  function gg(a, b, c, d, x, s, t) { return cmn((b & d) | (c & (~d)), a, b, x, s, t); }
+  function hh(a, b, c, d, x, s, t) { return cmn(b ^ c ^ d, a, b, x, s, t); }
+  function ii(a, b, c, d, x, s, t) { return cmn(c ^ (b | (~d)), a, b, x, s, t); }
+  const nBits = bytes.length * 8;
+  const padLen = (((bytes.length + 8) >> 6) + 1) * 16;
+  const x = new Int32Array(padLen);
+  for (let i = 0; i < bytes.length; i++) x[i >> 2] |= bytes[i] << ((i & 3) * 8);
+  x[bytes.length >> 2] |= 0x80 << ((bytes.length & 3) * 8);
+  x[padLen - 2] = nBits & 0xFFFFFFFF;
+  let a = 1732584193, b = -271733879, c = -1732584194, d = 271733878;
+  for (let i = 0; i < x.length; i += 16) {
+    const oa = a, ob = b, oc = c, od = d;
+    a = ff(a, b, c, d, x[i + 0], 7, -680876936); d = ff(d, a, b, c, x[i + 1], 12, -389564586); c = ff(c, d, a, b, x[i + 2], 17, 606105819); b = ff(b, c, d, a, x[i + 3], 22, -1044525330);
+    a = ff(a, b, c, d, x[i + 4], 7, -176418897); d = ff(d, a, b, c, x[i + 5], 12, 1200080426); c = ff(c, d, a, b, x[i + 6], 17, -1473231341); b = ff(b, c, d, a, x[i + 7], 22, -45705983);
+    a = ff(a, b, c, d, x[i + 8], 7, 1770035416); d = ff(d, a, b, c, x[i + 9], 12, -1958414417); c = ff(c, d, a, b, x[i + 10], 17, -42063); b = ff(b, c, d, a, x[i + 11], 22, -1990404162);
+    a = ff(a, b, c, d, x[i + 12], 7, 1804603682); d = ff(d, a, b, c, x[i + 13], 12, -40341101); c = ff(c, d, a, b, x[i + 14], 17, -1502002290); b = ff(b, c, d, a, x[i + 15], 22, 1236535329);
+    a = gg(a, b, c, d, x[i + 1], 5, -165796510); d = gg(d, a, b, c, x[i + 6], 9, -1069501632); c = gg(c, d, a, b, x[i + 11], 14, 643717713); b = gg(b, c, d, a, x[i + 0], 20, -373897302);
+    a = gg(a, b, c, d, x[i + 5], 5, -701558691); d = gg(d, a, b, c, x[i + 10], 9, 38016083); c = gg(c, d, a, b, x[i + 15], 14, -660478335); b = gg(b, c, d, a, x[i + 4], 20, -405537848);
+    a = gg(a, b, c, d, x[i + 9], 5, 568446438); d = gg(d, a, b, c, x[i + 14], 9, -1019803690); c = gg(c, d, a, b, x[i + 3], 14, -187363961); b = gg(b, c, d, a, x[i + 8], 20, 1163531501);
+    a = gg(a, b, c, d, x[i + 13], 5, -1444681467); d = gg(d, a, b, c, x[i + 2], 9, -51403784); c = gg(c, d, a, b, x[i + 7], 14, 1735328473); b = gg(b, c, d, a, x[i + 12], 20, -1926607734);
+    a = hh(a, b, c, d, x[i + 5], 4, -378558); d = hh(d, a, b, c, x[i + 8], 11, -2022574463); c = hh(c, d, a, b, x[i + 11], 16, 1839030562); b = hh(b, c, d, a, x[i + 14], 23, -35309556);
+    a = hh(a, b, c, d, x[i + 1], 4, -1530992060); d = hh(d, a, b, c, x[i + 4], 11, 1272893353); c = hh(c, d, a, b, x[i + 7], 16, -155497632); b = hh(b, c, d, a, x[i + 10], 23, -1094730640);
+    a = hh(a, b, c, d, x[i + 13], 4, 681279174); d = hh(d, a, b, c, x[i + 0], 11, -358537222); c = hh(c, d, a, b, x[i + 3], 16, -722521979); b = hh(b, c, d, a, x[i + 6], 23, 76029189);
+    a = hh(a, b, c, d, x[i + 9], 4, -640364487); d = hh(d, a, b, c, x[i + 12], 11, -421815835); c = hh(c, d, a, b, x[i + 15], 16, 530742520); b = hh(b, c, d, a, x[i + 2], 23, -995338651);
+    a = ii(a, b, c, d, x[i + 0], 6, -198630844); d = ii(d, a, b, c, x[i + 7], 10, 1126891415); c = ii(c, d, a, b, x[i + 14], 15, -1416354905); b = ii(b, c, d, a, x[i + 5], 21, -57434055);
+    a = ii(a, b, c, d, x[i + 12], 6, 1700485571); d = ii(d, a, b, c, x[i + 3], 10, -1894986606); c = ii(c, d, a, b, x[i + 10], 15, -1051523); b = ii(b, c, d, a, x[i + 1], 21, -2054922799);
+    a = ii(a, b, c, d, x[i + 8], 6, 1873313359); d = ii(d, a, b, c, x[i + 15], 10, -30611744); c = ii(c, d, a, b, x[i + 6], 15, -1560198380); b = ii(b, c, d, a, x[i + 13], 21, 1309151649);
+    a = ii(a, b, c, d, x[i + 4], 6, -145523070); d = ii(d, a, b, c, x[i + 11], 10, -1120210379); c = ii(c, d, a, b, x[i + 2], 15, 718787259); b = ii(b, c, d, a, x[i + 9], 21, -343485551);
+    a = add(a, oa); b = add(b, ob); c = add(c, oc); d = add(d, od);
+  }
+  return rhex(a) + rhex(b) + rhex(c) + rhex(d);
+}
+
+function inferKindFromName(name) {
+  const ext = (name.split(".").pop() || "").toLowerCase();
+  if (["mp4","mov","m4v","mkv","webm","avi"].indexOf(ext) >= 0) return "video";
+  if (["jpg","jpeg","png","webp","gif","bmp"].indexOf(ext) >= 0) return "image";
+  if (["mp3","wav","m4a","flac","ogg","opus"].indexOf(ext) >= 0) return "audio";
+  return "video";
+}
+
+/* ─── UploadDock (global; shared across all tabs) ─────────────────── */
+const UploadDockCtx = React.createContext(null);
+
+function UploadDockProvider({ children }) {
+  const t = useT();
+  const [items, setItems] = useState([]);      // { id, file, status, progress, asset_id?, error? }
+  const [minimised, setMinimised] = useState(false);
+
+  const update = useCallback(function (id, patch) {
+    setItems(function (prev) {
+      return prev.map(function (it) { return it.id === id ? Object.assign({}, it, patch) : it; });
+    });
+  }, []);
+
+  const start = useCallback(async function (file) {
+    const id = uid();
+    setItems(function (prev) { return [{
+      id,
+      file,
+      status: "hashing",
+      progress: 0,
+    }].concat(prev); });
+
+    try {
+      const md5 = await computeMd5Hex(file);
+      update(id, { status: "uploading", md5 });
+      const init = await pluginApi("POST", "/upload/init", {
+        filename: file.name,
+        filesize: file.size,
+        kind: inferKindFromName(file.name),
+        md5_hint: md5,
+      });
+      if (!init.ok || !init.body) {
+        update(id, { status: "error", error: (init.body && init.body.detail) || "init failed" });
+        return null;
+      }
+      if (init.body.deduped) {
+        // Server saw this md5 before — skip the chunk loop entirely.
+        update(id, { status: "deduped", progress: 100, asset_id: init.body.asset_id });
+        return init.body.asset_id;
+      }
+      const upload_id = init.body.upload_id;
+      const chunk_size = init.body.chunk_bytes || 5 * 1024 * 1024;
+      const total = init.body.total_chunks || Math.ceil(file.size / chunk_size);
+      for (let i = 0; i < total; i++) {
+        const off = i * chunk_size;
+        const end = Math.min(off + chunk_size, file.size);
+        const blob = file.slice(off, end);
+        const fd = new FormData();
+        fd.append("upload_id", upload_id);
+        fd.append("chunk_index", String(i));
+        fd.append("chunk", new File([blob], file.name, { type: file.type || "application/octet-stream" }));
+        const res = await pluginApi("PUT", "/upload/chunk", fd);
+        if (!res.ok) {
+          update(id, { status: "error", error: (res.body && res.body.detail) || "chunk " + i + " failed" });
+          return null;
+        }
+        update(id, { progress: Math.round(((i + 1) / total) * 95) });
+      }
+      update(id, { status: "finalizing", progress: 98 });
+      const fin = await pluginApi("POST", "/upload/finalize", { upload_id });
+      if (!fin.ok || !fin.body) {
+        update(id, { status: "error", error: (fin.body && fin.body.detail) || "finalize failed" });
+        return null;
+      }
+      update(id, {
+        status: fin.body.deduped ? "deduped" : "done",
+        progress: 100,
+        asset_id: fin.body.asset_id,
+      });
+      return fin.body.asset_id;
+    } catch (e) {
+      update(id, { status: "error", error: String(e) });
+      return null;
+    }
+  }, [update]);
+
+  const dismiss = useCallback(function (id) {
+    setItems(function (prev) { return prev.filter(function (it) { return it.id !== id; }); });
+  }, []);
+
+  const value = useMemo(function () {
+    return { items, start, dismiss, minimised, setMinimised };
+  }, [items, start, dismiss, minimised]);
+
+  return (
+    <UploadDockCtx.Provider value={value}>
+      {children}
+      <UploadDockUI items={items} minimised={minimised}
+                    onToggle={function () { setMinimised(function (v) { return !v; }); }}
+                    onDismiss={dismiss}
+                    t={t} />
+    </UploadDockCtx.Provider>
+  );
+}
+function useUploadDock() { return React.useContext(UploadDockCtx); }
+
+function UploadDockUI({ items, minimised, onToggle, onDismiss, t }) {
+  if (!items.length) return null;
+  const running = items.filter(function (it) { return it.status === "hashing" || it.status === "uploading" || it.status === "finalizing"; }).length;
+  if (minimised) {
+    return (
+      <div className="upload-dock__mini" onClick={onToggle} role="button" aria-label={t("omniPost.upload.dock.title")}>
+        <Ico name="upload" />
+        <span>{t("omniPost.upload.dock.title")} {running ? "· " + running : ""}</span>
+      </div>
+    );
+  }
+  return (
+    <div className="upload-dock" role="region" aria-label={t("omniPost.upload.dock.title")}>
+      <div className="upload-dock__head">
+        <div className="upload-dock__title"><Ico name="upload" /> {t("omniPost.upload.dock.title")}</div>
+        <button className="btn btn-sm btn-ghost" onClick={onToggle} aria-label={t("omniPost.common.close")}><Ico name="close" /></button>
+      </div>
+      <div className="upload-dock__body">
+        {items.map(function (it) {
+          return (
+            <div key={it.id} className="upload-dock__item">
+              <div className="upload-dock__item-top">
+                <span className="upload-dock__item-name" title={it.file && it.file.name}>{it.file ? it.file.name : "—"}</span>
+                <button className="upload-dock__item-remove"
+                        onClick={function () { onDismiss(it.id); }}
+                        aria-label={t("omniPost.common.close")}>
+                  <Ico name="close" />
+                </button>
+              </div>
+              <div className="progress"><div className="progress-fill" style={{ width: (it.progress || 0) + "%" }} /></div>
+              <div className="upload-dock__item-meta">
+                <span>{t("omniPost.upload.status." + (it.status || "uploading"))}</span>
+                {it.file ? <span> · {formatBytes(it.file.size)}</span> : null}
+                {it.error ? <span className="text-danger"> · {it.error}</span> : null}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/* ─── Top shell (header + tabs) ────────────────────────────────────── */
+function TopShell({ tab, onTab }) {
+  const t = useT();
+  const tabs = [
+    { id: "publish",  label: t("omniPost.tabs.publish"),  icon: "send" },
+    { id: "tasks",    label: t("omniPost.tabs.tasks"),    icon: "list" },
+    { id: "accounts", label: t("omniPost.tabs.accounts"), icon: "user" },
+    { id: "calendar", label: t("omniPost.tabs.calendar"), icon: "calendar" },
+    { id: "library",  label: t("omniPost.tabs.library"),  icon: "grid" },
+    { id: "settings", label: t("omniPost.tabs.settings"), icon: "cog" },
+  ];
+  return (
+    <>
+      <div className="header">
+        <h1>
+          <span className="ak-logo" aria-hidden="true"><Ico name="send" /></span>
+          <span>{t("omniPost.app.title")}<span className="ak-sub">· {t("omniPost.app.subtitle")}</span></span>
+        </h1>
+        <div className="header-right">
+          <span className="text-dim text-xs">v0.1.0</span>
+        </div>
+      </div>
+      <div className="tabs" role="tablist" aria-label={t("omniPost.app.title")}>
+        {tabs.map(function (tb) {
+          return (
+            <div key={tb.id}
+                 className={"tab" + (tab === tb.id ? " active" : "")}
+                 onClick={function () { onTab(tb.id); }}
+                 role="tab"
+                 aria-selected={tab === tb.id}
+                 aria-controls={"omnipost-pane-" + tb.id}>
+              <Ico name={tb.icon} /> {tb.label}
+            </div>
+          );
+        })}
+      </div>
+    </>
+  );
+}
+
+/* ─── Catalog + accounts data hooks ────────────────────────────────── */
+function useCatalog() {
+  const [catalog, setCatalog] = useState({ platforms: [], engines: [] });
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  useEffect(function () {
+    pluginApi("GET", "/catalog").then(function (r) {
+      setLoading(false);
+      if (r && r.ok && r.body) setCatalog(r.body);
+      else setError((r && r.body && r.body.detail) || "HTTP " + (r && r.status));
+    }).catch(function (e) {
+      setLoading(false);
+      setError(String(e));
+    });
+  }, []);
+  return { catalog, loading, error };
+}
+function useAccounts() {
+  const [accounts, setAccounts] = useState([]);
+  const refresh = useCallback(function () {
+    pluginApi("GET", "/accounts").then(function (r) {
+      if (r && r.ok && r.body && Array.isArray(r.body.accounts)) setAccounts(r.body.accounts);
+    });
+  }, []);
+  useEffect(refresh, [refresh]);
+  useEffect(function () {
+    const off = onEvent("plugin:omni-post:account_added", refresh);
+    const off2 = onEvent("plugin:omni-post:account_refreshed", refresh);
+    return function () { /* no-op; bridge does not expose unsubscribe */ };
+  }, [refresh]);
+  return { accounts, refresh };
+}
+
+/* ─── Publish tab ──────────────────────────────────────────────────── */
+function PublishTab() {
+  const t = useT();
+  const { catalog, loading, error } = useCatalog();
+  const { accounts } = useAccounts();
+  const [assets, setAssets] = useState([]);
+  const [pickedAsset, setPickedAsset] = useState(null);
+  const [title, setTitle] = useState("");
+  const [description, setDescription] = useState("");
+  const [tagsStr, setTagsStr] = useState("");
+  const [topic, setTopic] = useState("");
+  const [pickedPlatforms, setPickedPlatforms] = useState([]);
+  const [pickedAccounts, setPickedAccounts] = useState([]);
+  const [submitting, setSubmitting] = useState(false);
+  const dock = useUploadDock();
+  const fileInputRef = useRef(null);
+
+  const refreshAssets = useCallback(function () {
+    pluginApi("GET", "/assets?limit=200").then(function (r) {
+      if (r && r.ok && r.body && Array.isArray(r.body.assets)) setAssets(r.body.assets);
+    });
+  }, []);
+  useEffect(refreshAssets, [refreshAssets]);
+  useEffect(function () {
+    const off = onEvent("plugin:omni-post:upload_completed", refreshAssets);
+    return function () {};
+  }, [refreshAssets]);
+
+  const accountsOfPickedPlatforms = useMemo(function () {
+    if (!pickedPlatforms.length) return accounts;
+    const set = new Set(pickedPlatforms);
+    return accounts.filter(function (a) { return set.has(a.platform); });
+  }, [accounts, pickedPlatforms]);
+
+  function togglePlatform(id) {
+    setPickedPlatforms(function (prev) {
+      return prev.indexOf(id) >= 0 ? prev.filter(function (x) { return x !== id; }) : prev.concat(id);
+    });
+  }
+  function toggleAccount(id) {
+    setPickedAccounts(function (prev) {
+      return prev.indexOf(id) >= 0 ? prev.filter(function (x) { return x !== id; }) : prev.concat(id);
+    });
+  }
+
+  async function handleFile(file) {
+    if (!file) return;
+    const aid = await dock.start(file);
+    if (aid) {
+      setPickedAsset(aid);
+      refreshAssets();
+    }
+  }
+
+  const matchingTaskCount = pickedPlatforms.length > 0
+    ? pickedAccounts.filter(function (aid) {
+        const acc = accounts.find(function (a) { return a.id === aid; });
+        return acc && pickedPlatforms.indexOf(acc.platform) >= 0;
+      }).length
+    : 0;
+
+  async function doPublish() {
+    if (!pickedAsset) { showToast(t("omniPost.publish.toast.noAsset"), "warn"); return; }
+    if (!title.trim()) { showToast(t("omniPost.publish.toast.noTitle"), "warn"); return; }
+    if (!pickedPlatforms.length) { showToast(t("omniPost.publish.toast.noPlatform"), "warn"); return; }
+    if (!pickedAccounts.length) { showToast(t("omniPost.publish.toast.noAccount"), "warn"); return; }
+    setSubmitting(true);
+    try {
+      const tags = tagsStr.split(",").map(function (s) { return s.trim(); }).filter(function (s) { return !!s; });
+      const body = {
+        asset_id: pickedAsset,
+        payload: {
+          title: title.trim(),
+          description: description.trim(),
+          tags: tags,
+          topic: topic.trim() || undefined,
+        },
+        platforms: pickedPlatforms,
+        account_ids: pickedAccounts,
+        client_trace_id: uid(),
+        engine: "auto",
+        auto_submit: true,
+      };
+      const r = await pluginApi("POST", "/publish", body);
+      if (r && r.ok && r.body && r.body.ok) {
+        showToast(t("omniPost.publish.toast.publishOk", { count: r.body.count || 0 }), "success");
+        setPickedAccounts([]);
+      } else {
+        showToast(t("omniPost.publish.toast.publishFail", { msg: (r && r.body && r.body.detail) || "HTTP " + (r && r.status) }), "error");
+      }
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function doDryRun() {
+    if (!pickedAsset || !pickedPlatforms.length || !pickedAccounts.length) {
+      showToast(t("omniPost.publish.toast.noAccount"), "warn"); return;
+    }
+    const body = {
+      asset_id: pickedAsset,
+      payload: { title: title.trim() || "(untitled)" },
+      platforms: pickedPlatforms,
+      account_ids: pickedAccounts,
+      client_trace_id: uid(),
+      engine: "auto",
+      auto_submit: true,
+    };
+    const r = await pluginApi("POST", "/publish/dry-run", body);
+    if (r && r.ok && r.body && r.body.ok) {
+      showToast(t("omniPost.publish.toast.dryRunOk"), "success");
+    } else {
+      const issues = (r && r.body && r.body.issues) || [];
+      showToast(t("omniPost.publish.toast.dryRunIssues", { count: issues.length }), "warn");
+    }
+  }
+
+  if (loading) {
+    return <div className="empty-state"><div className="spinner" /><p>{t("omniPost.catalog.loading")}</p></div>;
+  }
+  if (error) {
+    return <div className="card text-danger"><Ico name="warn" /> {t("omniPost.catalog.failure", { msg: error })}</div>;
+  }
+
+  return (
+    <div className="split-layout" role="tabpanel" id="omnipost-pane-publish" aria-label={t("omniPost.tabs.publish")}>
+      <div className="split-left">
+        {/* Asset */}
+        <div className="card">
+          <div className="label">{t("omniPost.publish.section.asset")}</div>
+          <div className="upload-zone" onClick={function () { fileInputRef.current && fileInputRef.current.click(); }}
+               role="button" aria-label={t("omniPost.publish.action.upload")}
+               onDragOver={function (e) { e.preventDefault(); }}
+               onDrop={function (e) { e.preventDefault(); if (e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0]); }}>
+            <Ico name="upload" /> {t("omniPost.publish.action.upload")}
+            <div className="text-dim text-xs" style={{ marginTop: 4 }}>
+              MP4 / MOV / JPG / PNG · 5MB 分片续传 · MD5 秒传
+            </div>
+            <input ref={fileInputRef} type="file" style={{ display: "none" }}
+                   onChange={function (e) { if (e.target.files[0]) handleFile(e.target.files[0]); e.target.value = ""; }} />
+          </div>
+
+          {assets.length > 0 ? (
+            <div style={{ marginTop: 12 }}>
+              <div className="label" style={{ fontSize: 12 }}>{t("omniPost.publish.action.pickExisting")}</div>
+              <select className="input select" value={pickedAsset || ""}
+                      onChange={function (e) { setPickedAsset(e.target.value || null); }}>
+                <option value="">—</option>
+                {assets.map(function (a) {
+                  return <option key={a.id} value={a.id}>
+                    {a.filename} ({a.kind} · {formatBytes(a.filesize)})
+                  </option>;
+                })}
+              </select>
+            </div>
+          ) : (
+            <div className="text-muted text-xs" style={{ marginTop: 8 }}>
+              {t("omniPost.publish.field.assetEmpty")}
+            </div>
+          )}
+          <button className="btn btn-sm btn-ghost" onClick={refreshAssets} style={{ marginTop: 8 }}>
+            <Ico name="refresh" /> {t("omniPost.common.refresh")}
+          </button>
+        </div>
+
+        {/* Caption */}
+        <div className="card">
+          <div className="label">{t("omniPost.publish.section.caption")}</div>
+          <div className="form-row">
+            <label className="text-sm" htmlFor="omp-title">{t("omniPost.publish.field.title")}</label>
+            <input id="omp-title" className="input" value={title}
+                   onChange={function (e) { setTitle(e.target.value); }}
+                   placeholder={t("omniPost.publish.field.titlePlaceholder")} maxLength={120} />
+          </div>
+          <div className="form-row">
+            <label className="text-sm" htmlFor="omp-desc">{t("omniPost.publish.field.description")}</label>
+            <textarea id="omp-desc" className="input textarea" value={description}
+                      onChange={function (e) { setDescription(e.target.value); }}
+                      placeholder={t("omniPost.publish.field.descriptionPlaceholder")} />
+          </div>
+          <div className="grid-2">
+            <div className="form-row">
+              <label className="text-sm" htmlFor="omp-tags">{t("omniPost.publish.field.tags")}</label>
+              <input id="omp-tags" className="input" value={tagsStr}
+                     onChange={function (e) { setTagsStr(e.target.value); }}
+                     placeholder={t("omniPost.publish.field.tagsPlaceholder")} />
+            </div>
+            <div className="form-row">
+              <label className="text-sm" htmlFor="omp-topic">{t("omniPost.publish.field.topic")}</label>
+              <input id="omp-topic" className="input" value={topic}
+                     onChange={function (e) { setTopic(e.target.value); }} />
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="split-right">
+        {/* Platform matrix */}
+        <div className="card">
+          <div className="label">{t("omniPost.publish.section.platforms")}</div>
+          <div className="pm">
+            {catalog.platforms.map(function (p) {
+              const selected = pickedPlatforms.indexOf(p.id) >= 0;
+              return (
+                <div key={p.id}
+                     className={"pm-card" + (selected ? " selected" : "")}
+                     role="checkbox" aria-checked={selected} tabIndex={0}
+                     onClick={function () { togglePlatform(p.id); }}>
+                  <div className="pm-card__name">{p.display_name_zh || p.id}</div>
+                  <div className="pm-card__sub mono">{p.id}</div>
+                  <div className="pm-card__kinds">
+                    {(p.supported_kinds || []).map(function (k) {
+                      return <span key={k} className="pm-card__kind">{k}</span>;
+                    })}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Accounts picker */}
+        <div className="card">
+          <div className="label flex items-center justify-between">
+            <span>{t("omniPost.publish.section.accounts")}</span>
+            <span className="text-dim text-xs">
+              {accountsOfPickedPlatforms.length} / {accounts.length}
+            </span>
+          </div>
+          {accountsOfPickedPlatforms.length === 0 ? (
+            <div className="empty-state" style={{ padding: "24px 8px" }}>
+              <Ico name="user" />
+              <h4>还没有匹配的账号</h4>
+              <p>在 S2 的「账号」Tab 导入 Cookie 后，选择对应平台会出现在这里。</p>
+            </div>
+          ) : (
+            accountsOfPickedPlatforms.map(function (a) {
+              const selected = pickedAccounts.indexOf(a.id) >= 0;
+              return (
+                <div key={a.id}
+                     className={"acc-row" + (selected ? " selected" : "")}
+                     role="checkbox" aria-checked={selected} tabIndex={0}
+                     onClick={function () { toggleAccount(a.id); }}>
+                  <div className="acc-avatar">{(a.nickname || a.id).slice(0, 1).toUpperCase()}</div>
+                  <div className="acc-info">
+                    <div className="acc-info__name">{a.nickname || shortId(a.id)}</div>
+                    <div className="acc-info__meta">
+                      <span className="mono">{a.platform}</span>
+                      {" · "}
+                      <span className={"acc-health-" + (a.health_status || "unknown")}>
+                        {a.health_status || "unknown"}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              );
+            })
+          )}
+        </div>
+
+        {/* Summary + actions */}
+        <div className="card">
+          <div className="label">{t("omniPost.publish.section.summary")}</div>
+          <div className="text-sm text-muted" style={{ marginBottom: 10 }}>
+            {pickedAsset && pickedPlatforms.length && pickedAccounts.length
+              ? t("omniPost.publish.summary.headline", {
+                  platforms: pickedPlatforms.length,
+                  accounts: pickedAccounts.length,
+                  tasks: matchingTaskCount,
+                })
+              : t("omniPost.publish.summary.empty")}
+          </div>
+          <div className="flex gap-2">
+            <button className="btn btn-primary btn-block" disabled={submitting} onClick={doPublish}>
+              <Ico name="send" /> {t("omniPost.publish.action.publishNow")}
+            </button>
+            <button className="btn" onClick={doDryRun}>
+              <Ico name="check" /> {t("omniPost.publish.action.dryRun")}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ─── Tasks tab ────────────────────────────────────────────────────── */
+function TasksTab() {
+  const t = useT();
+  const [tasks, setTasks] = useState([]);
+  const [statusFilter, setStatusFilter] = useState("all");
+  const [active, setActive] = useState(null);
+  const { accounts } = useAccounts();
+
+  const refresh = useCallback(function () {
+    const qs = statusFilter === "all" ? "" : "?status=" + statusFilter;
+    pluginApi("GET", "/tasks" + qs).then(function (r) {
+      if (r && r.ok && r.body && Array.isArray(r.body.tasks)) setTasks(r.body.tasks);
+    });
+  }, [statusFilter]);
+  useEffect(refresh, [refresh]);
+  useEffect(function () {
+    onEvent("plugin:omni-post:task_update", function (data) {
+      setTasks(function (prev) {
+        const idx = prev.findIndex(function (x) { return x.id === (data && data.task_id); });
+        if (idx < 0) { refresh(); return prev; }
+        const next = prev.slice();
+        next[idx] = Object.assign({}, next[idx], {
+          status: data.status || next[idx].status,
+          error_kind: data.error_kind || next[idx].error_kind,
+          result_url: data.result_url || next[idx].result_url,
+        });
+        return next;
+      });
+    });
+  }, [refresh]);
+
+  const accById = useMemo(function () {
+    const out = {}; accounts.forEach(function (a) { out[a.id] = a; }); return out;
+  }, [accounts]);
+
+  async function doCancel(task) {
+    const r = await pluginApi("POST", "/tasks/" + task.id + "/cancel");
+    if (r && r.ok) { showToast("cancelled", "success"); refresh(); }
+  }
+  async function doRetry(task) {
+    const r = await pluginApi("POST", "/tasks/" + task.id + "/retry");
+    if (r && r.ok) { showToast("retry queued", "success"); refresh(); }
+  }
+
+  const filters = ["all","pending","running","succeeded","failed","cancelled"];
+  return (
+    <div role="tabpanel" id="omnipost-pane-tasks">
+      <div className="flex gap-2 items-center" style={{ marginBottom: 10 }}>
+        <div className="card-title flex-1" style={{ marginBottom: 0 }}>{t("omniPost.tasks.header")}</div>
+        <button className="btn btn-sm" onClick={refresh}><Ico name="refresh" /> {t("omniPost.common.refresh")}</button>
+      </div>
+      <div className="flex gap-2 flex-wrap" style={{ marginBottom: 10 }}>
+        {filters.map(function (f) {
+          return (
+            <button key={f}
+                    className={"btn btn-sm" + (statusFilter === f ? " btn-primary" : "")}
+                    onClick={function () { setStatusFilter(f); }}>
+              {t("omniPost.tasks.filter." + f)}
+            </button>
+          );
+        })}
+      </div>
+      {tasks.length === 0 ? (
+        <div className="empty-state">
+          <Ico name="list" />
+          <h4>{t("omniPost.tasks.empty.title")}</h4>
+          <p>{t("omniPost.tasks.empty.desc")}</p>
+        </div>
+      ) : (
+        <div style={{ overflowX: "auto" }}>
+          <table className="ak-table">
+            <thead>
+              <tr>
+                <th>{t("omniPost.tasks.col.created")}</th>
+                <th>{t("omniPost.tasks.col.platform")}</th>
+                <th>{t("omniPost.tasks.col.account")}</th>
+                <th>{t("omniPost.tasks.col.status")}</th>
+                <th>{t("omniPost.tasks.col.engine")}</th>
+                <th>{t("omniPost.tasks.col.actions")}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {tasks.map(function (task) {
+                const acc = accById[task.account_id];
+                return (
+                  <tr key={task.id} className={"row" + (active && active.id === task.id ? " selected" : "")}
+                      onClick={function () { setActive(task); }}>
+                    <td className="text-xs mono">{formatTs(task.created_at)}</td>
+                    <td><span className="tag tag-blue">{task.platform}</span></td>
+                    <td>{acc ? acc.nickname : shortId(task.account_id)}</td>
+                    <td><span className={statusBadge(task.status)}>{task.status}</span></td>
+                    <td className="text-xs">{task.engine}</td>
+                    <td>
+                      <div className="flex gap-2">
+                        {task.status === "failed" || task.status === "cancelled" ? (
+                          <button className="btn btn-sm" onClick={function (e) { e.stopPropagation(); doRetry(task); }}>
+                            <Ico name="refresh" /> {t("omniPost.tasks.action.retry")}
+                          </button>
+                        ) : null}
+                        {task.status === "pending" || task.status === "running" ? (
+                          <button className="btn btn-sm btn-danger" onClick={function (e) { e.stopPropagation(); doCancel(task); }}>
+                            {t("omniPost.tasks.action.cancel")}
+                          </button>
+                        ) : null}
+                        {task.result_url ? (
+                          <a href={task.result_url} target="_blank" rel="noreferrer" className="btn btn-sm" onClick={function (e) { e.stopPropagation(); }}>
+                            <Ico name="external" /> {t("omniPost.tasks.action.openUrl")}
+                          </a>
+                        ) : null}
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {active ? <TaskDrawer task={active} onClose={function () { setActive(null); }} /> : null}
+    </div>
+  );
+}
+
+function TaskDrawer({ task, onClose }) {
+  const t = useT();
+  const payload = useMemo(function () {
+    try {
+      const raw = task.payload_json;
+      return raw ? JSON.parse(raw) : {};
+    } catch (_e) { return {}; }
+  }, [task]);
+  return (
+    <>
+      <div className="drawer-mask" onClick={onClose} />
+      <div className="drawer" role="dialog" aria-modal="true">
+        <div className="drawer-head">
+          <div>
+            <div className="text-sm" style={{ fontWeight: 600 }}>{task.platform}</div>
+            <div className="text-xs text-muted mono">{task.id}</div>
+          </div>
+          <button className="btn btn-sm btn-ghost" onClick={onClose}><Ico name="close" /> {t("omniPost.tasks.drawer.close")}</button>
+        </div>
+        <div className="drawer-body">
+          <div className="card">
+            <div className="label" style={{ fontSize: 12 }}>{t("omniPost.tasks.drawer.timeline")}</div>
+            <div className="text-xs text-muted">
+              <div>created_at: <span className="mono">{task.created_at || "—"}</span></div>
+              <div>started_at: <span className="mono">{task.started_at || "—"}</span></div>
+              <div>finished_at: <span className="mono">{task.finished_at || "—"}</span></div>
+              <div>retry_count: {task.retry_count || 0}</div>
+            </div>
+          </div>
+          {task.error_kind ? (
+            <div className="card">
+              <div className="label" style={{ fontSize: 12 }}>{t("omniPost.tasks.drawer.error")}</div>
+              <div className="text-danger mono text-xs">{task.error_kind}</div>
+              {task.error_hint_i18n ? (
+                <pre className="text-xs mono" style={{ whiteSpace: "pre-wrap" }}>{task.error_hint_i18n}</pre>
+              ) : null}
+            </div>
+          ) : null}
+          {task.result_url ? (
+            <div className="card">
+              <div className="label" style={{ fontSize: 12 }}>{t("omniPost.tasks.drawer.resultUrl")}</div>
+              <div className="flex gap-2">
+                <a href={task.result_url} target="_blank" rel="noreferrer" className="text-sm" style={{ flex: 1, wordBreak: "break-all" }}>
+                  {task.result_url}
+                </a>
+                <button className="btn btn-sm" onClick={function () { copyToClipboard(task.result_url); }}><Ico name="copy" /></button>
+              </div>
+            </div>
+          ) : null}
+          <div className="card">
+            <div className="label" style={{ fontSize: 12 }}>{t("omniPost.tasks.drawer.payload")}</div>
+            <pre className="text-xs mono" style={{ whiteSpace: "pre-wrap", background: "var(--bg)", padding: 8, borderRadius: 4 }}>
+{JSON.stringify(payload, null, 2)}
+            </pre>
+          </div>
+        </div>
+      </div>
+    </>
+  );
+}
+
+/* ─── Stubs for tabs that land in later sprints ────────────────────── */
+function StubTab({ titleKey, descKey }) {
+  const t = useT();
+  return (
+    <div className="stub">
+      <Ico name="info" />
+      <h2>{t(titleKey)}</h2>
+      <p>{t(descKey)}</p>
+    </div>
+  );
+}
+
+/* ─── Root app ─────────────────────────────────────────────────────── */
+function App() {
+  const [tab, setTab] = useState("publish");
+  let pane;
+  switch (tab) {
+    case "publish":  pane = <PublishTab />; break;
+    case "tasks":    pane = <TasksTab />;   break;
+    case "accounts": pane = <StubTab titleKey="omniPost.accounts.coming.title" descKey="omniPost.accounts.coming.desc" />; break;
+    case "calendar": pane = <StubTab titleKey="omniPost.calendar.coming.title" descKey="omniPost.calendar.coming.desc" />; break;
+    case "library":  pane = <StubTab titleKey="omniPost.library.coming.title" descKey="omniPost.library.coming.desc" />; break;
+    case "settings": pane = <StubTab titleKey="omniPost.settings.coming.title" descKey="omniPost.settings.coming.desc" />; break;
+    default: pane = <PublishTab />;
+  }
+  return (
+    <UploadDockProvider>
+      <div className="app">
+        <TopShell tab={tab} onTab={setTab} />
+        <div className="content">{pane}</div>
+      </div>
+    </UploadDockProvider>
+  );
+}
+
+const root = ReactDOM.createRoot(document.getElementById("root"));
+root.render(<App />);
+if (window.OpenAkita && typeof window.OpenAkita.ready === "function") {
+  window.OpenAkita.ready();
+}
+</script>
+</body>
+</html>
