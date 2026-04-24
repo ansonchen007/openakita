@@ -428,22 +428,7 @@ class OmniPostPlugin(PluginBase):
 
         @router.post("/accounts/{account_id}/refresh")
         async def refresh_account(account_id: str) -> dict:
-            self._require_tm()
-            self._require_cookie_pool()
-            assert self._tm is not None
-            assert self._cookie_pool is not None
-            account = await self._tm.get_account(account_id)
-            if account is None:
-                raise HTTPException(404, "account not found")
-            try:
-                _ = self._cookie_pool.open(account["cookie_cipher"])
-                verdict = "ok"
-            except CookieEncryptError:
-                verdict = "cookie_expired"
-            await self._tm.update_account_safe(
-                account_id,
-                {"health_status": verdict, "last_health_check": _now_iso()},
-            )
+            verdict = await self._probe_account_health(account_id)
             if self._api is not None:
                 self._api.broadcast_ui_event(
                     "account_refreshed",
@@ -639,24 +624,7 @@ class OmniPostPlugin(PluginBase):
             assert self._tm is not None
             return {"ok": await self._tm.delete_account(arguments["account_id"])}
         if name == "omni_post_refresh_account":
-            self._require_tm()
-            self._require_cookie_pool()
-            assert self._tm is not None
-            assert self._cookie_pool is not None
-            acc = await self._tm.get_account(arguments["account_id"])
-            if acc is None:
-                raise OmniPostError(
-                    ErrorKind.NOT_FOUND, f"account {arguments['account_id']} not found"
-                )
-            try:
-                self._cookie_pool.open(acc["cookie_cipher"])
-                verdict = "ok"
-            except CookieEncryptError:
-                verdict = "cookie_expired"
-            await self._tm.update_account_safe(
-                arguments["account_id"],
-                {"health_status": verdict, "last_health_check": _now_iso()},
-            )
+            verdict = await self._probe_account_health(arguments["account_id"])
             return {"account_id": arguments["account_id"], "health_status": verdict}
         if name == "omni_post_list_assets":
             self._require_tm()
@@ -727,6 +695,47 @@ class OmniPostPlugin(PluginBase):
         task = self._api.spawn_task(coro, name="omni-post:publish")
         self._active_tasks.add(task)
         task.add_done_callback(self._active_tasks.discard)
+
+    async def _probe_account_health(self, account_id: str) -> str:
+        """Run a cookie health probe and persist the verdict.
+
+        Uses the cheap decrypt check by default; when ``enable_playwright_probe``
+        is on in settings, builds a real Playwright probe via
+        :func:`omni_post_health.build_playwright_probe`. Callers get one
+        of ``ok`` / ``cookie_expired`` / ``unknown``.
+        """
+
+        self._require_tm()
+        self._require_cookie_pool()
+        assert self._tm is not None
+        assert self._cookie_pool is not None
+        account = await self._tm.get_account(account_id)
+        if account is None:
+            raise HTTPException(404, "account not found")
+
+        probe_enabled = bool(self._settings.get("enable_playwright_probe", False))
+        if probe_enabled and self._engine is not None and self._selectors_dir is not None:
+            from omni_post_health import build_playwright_probe
+
+            probe_fn = build_playwright_probe(
+                engine=self._engine,
+                selectors_dir=self._selectors_dir,
+                platform_id=account["platform"],
+                timeout_ms=int(self._settings.get("probe_timeout_ms", 15_000)),
+            )
+            verdict = await self._cookie_pool.probe_lazy(account, probe_fn=probe_fn)
+        else:
+            try:
+                _ = self._cookie_pool.open(account["cookie_cipher"])
+                verdict = "ok"
+            except CookieEncryptError:
+                verdict = "cookie_expired"
+
+        await self._tm.update_account_safe(
+            account_id,
+            {"health_status": verdict, "last_health_check": _now_iso()},
+        )
+        return verdict
 
     def _require_tm(self) -> None:
         if self._tm is None:

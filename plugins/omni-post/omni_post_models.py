@@ -487,6 +487,8 @@ class SettingsUpdateRequest(BaseModel):
     max_asset_size_bytes: int | None = Field(default=None, ge=0)
     mp_extension_min_version: str | None = None
     mp_trusted_domain: str | None = None
+    enable_playwright_probe: bool | None = None
+    probe_timeout_ms: int | None = Field(default=None, ge=1000, le=60_000)
 
 
 # ─── Default config (merged on first load) ───────────────────────────────
@@ -511,6 +513,11 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "max_asset_size_bytes": 2 * 1024 * 1024 * 1024,
     "mp_extension_min_version": "1.3.8",
     "mp_trusted_domain": "localhost",
+    # Playwright-backed cookie probe is OPT-IN (issue #207): opening a
+    # real browser on every refresh is expensive and noisy, so the cheap
+    # decrypt check stays the default.
+    "enable_playwright_probe": False,
+    "probe_timeout_ms": 15_000,
 }
 
 

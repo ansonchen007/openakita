@@ -339,7 +339,13 @@ def _safe_int(value: str) -> int:
 
 
 _COOKIE_TOKEN_PATTERN = re.compile(
-    r"(cookie|set-cookie|authorization|token)\s*[:=]\s*[^;\s]+",
+    # Two forms:
+    #   key: value[; …]        — matches headers with simple token values
+    #   key: Bearer <token>    — matches Authorization: Bearer xxxxx
+    # Both are scrubbed to `[REDACTED]`. We match greedily up to the
+    # next semicolon or end-of-line so neither whitespace-delimited JWTs
+    # nor compact cookies survive.
+    r"(cookie|set-cookie|authorization|token)\s*[:=]\s*(?:Bearer\s+)?[^;\r\n]+",
     re.IGNORECASE,
 )
 
