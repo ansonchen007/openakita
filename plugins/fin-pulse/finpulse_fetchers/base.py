@@ -123,6 +123,13 @@ class NormalizedItem:
 class FetchReport:
     """Outcome of a single fetcher invocation — consumed by the pipeline
     to update ``config['source.{id}.last_ok']`` / ``last_error``.
+
+    ``via`` records which transport actually served the items — hybrid
+    CN fetchers (``wallstreetcn`` / ``cls`` / ``eastmoney`` / ``xueqiu``)
+    try the NewsNow aggregator first and fall back to direct scraping,
+    so the pipeline surfaces that choice to the UI. Valid values:
+    ``"newsnow"`` / ``"direct"`` / ``"none"`` (empty fetch); the
+    default is ``"direct"`` for legacy single-path fetchers.
     """
 
     source_id: str
@@ -130,6 +137,7 @@ class FetchReport:
     error: str | None = None
     error_kind: str | None = None
     duration_ms: float = 0.0
+    via: str = "direct"
 
 
 class BaseFetcher(abc.ABC):

@@ -1,16 +1,19 @@
-"""EastMoney (东方财富) — public news API.
+"""EastMoney (东方财富) — NewsNow-first with API fallback.
 
-EastMoney exposes a JSONP-style news list. We hit the ``newsapi`` JSON
-variant which returns an array under ``LsjzList`` (or ``list``
-depending on the parameter set).
+Primary path reads through the NewsNow aggregator (``?id=eastmoney``)
+which TrendRadar has proved reliable across upstream shape changes.
+The legacy ``np-listapi.eastmoney.com`` JSON/JSONP endpoint stays as
+a graceful-degradation branch for firewalled installs.
 """
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from finpulse_fetchers._http import fetch_json, make_client
 from finpulse_fetchers.base import BaseFetcher, NormalizedItem
+from finpulse_fetchers.newsnow_base import fetch_from_newsnow
 
 
 _ENDPOINT = (
@@ -18,11 +21,43 @@ _ENDPOINT = (
     "?cb=&client=web&mTypeAndCode=&type=1&column=&pageSize=30&pageIndex=1&_="
 )
 
+logger = logging.getLogger(__name__)
+
 
 class EastmoneyFetcher(BaseFetcher):
     source_id = "eastmoney"
+    NEWSNOW_PLATFORM_ID = "eastmoney"
+
+    def __init__(
+        self, *, config: dict[str, str] | None = None, timeout_sec: float = 15.0
+    ) -> None:
+        super().__init__(config=config, timeout_sec=timeout_sec)
+        self._last_via: str = "none"
 
     async def fetch(self, **_: Any) -> list[NormalizedItem]:
+        try:
+            primary = await fetch_from_newsnow(
+                platform_id=self.NEWSNOW_PLATFORM_ID,
+                source_id=self.source_id,
+                config=self._config,
+                timeout_sec=self._timeout_sec,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.info("eastmoney via newsnow failed, will try direct: %s", exc)
+            primary = []
+        if primary:
+            self._last_via = "newsnow"
+            return primary
+
+        if (self._config.get("source.eastmoney.fallback_direct") or "true").lower() == "false":
+            self._last_via = "none"
+            return []
+
+        direct = await self._fetch_direct()
+        self._last_via = "direct" if direct else "none"
+        return direct
+
+    async def _fetch_direct(self) -> list[NormalizedItem]:
         async with make_client(timeout=self._timeout_sec) as client:
             try:
                 data = await fetch_json(client, _ENDPOINT)
