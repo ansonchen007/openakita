@@ -920,8 +920,15 @@ class ReasoningEngine:
         _tool_call_counter: dict[str, int] = {}
         _MAX_SAME_TOOL_PER_TASK = 5
 
+        _CONTENT_SAFETY_MINIMAL_PROMPT = (
+            "你是 OpenAkita，一个 AI 助手。"
+            "始终使用与用户当前消息相同的语言回复。"
+        )
+
         def _build_effective_system_prompt() -> str:
-            """动态追加活跃 Plan"""
+            """动态追加活跃 Plan；内容安全降级时返回最小提示词"""
+            if getattr(state, "_content_safety_minimal_prompt", False):
+                return _CONTENT_SAFETY_MINIMAL_PROMPT
             try:
                 from ..tools.handlers.plan import get_active_todo_prompt
 
@@ -2236,7 +2243,14 @@ class ReasoningEngine:
             # === 动态 System Prompt（追加活跃 Plan） ===
             _base_sp = base_system_prompt or system_prompt
 
+            _CONTENT_SAFETY_MINIMAL_PROMPT_STREAM = (
+                "你是 OpenAkita，一个 AI 助手。"
+                "始终使用与用户当前消息相同的语言回复。"
+            )
+
             def _build_effective_prompt() -> str:
+                if getattr(state, "_content_safety_minimal_prompt", False):
+                    return _CONTENT_SAFETY_MINIMAL_PROMPT_STREAM
                 try:
                     from ..tools.handlers.plan import get_active_todo_prompt
 
@@ -2495,9 +2509,9 @@ class ReasoningEngine:
                     state.transition(TaskStatus.REASONING)
 
                 _ctx_compressed_info: dict | None = None
+                effective_prompt = _build_effective_prompt()
                 if len(working_messages) > 2:
                     working_messages = self._context_manager.pre_request_cleanup(working_messages)
-                    effective_prompt = _build_effective_prompt()
                     _before_tokens = self._context_manager.estimate_messages_tokens(
                         working_messages
                     )
@@ -5897,12 +5911,34 @@ class ReasoningEngine:
                             llm_client.reset_all_cooldowns(include_structural=True)
                         return "retry"
 
-                    # 没有可剥离的 tool_results，说明触发源是 system prompt
-                    # 或用户直接输入。继续重试只会再次触发同样的审核失败，
-                    # 立即放弃并让上层把"内容审核未通过"信息透传给前端。
+                    # 方案 E: 没有可剥离的 tool_results，触发源可能是
+                    # system prompt（过长或含审核敏感词）。降级为最小化系统提示词
+                    # 重试一次，仅保留最近用户消息。
+                    if not getattr(state, "_content_safety_minimal_prompt", False):
+                        logger.warning(
+                            "[ReAct] Content safety error but no tool_results to strip. "
+                            "Falling back to minimal system prompt and retrying once."
+                        )
+                        state._content_safety_minimal_prompt = True
+                        state._structural_content_stripped = True
+
+                        last_user_msg = None
+                        for msg in reversed(working_messages):
+                            if msg.get("role") == "user":
+                                last_user_msg = msg
+                                break
+                        if last_user_msg:
+                            working_messages.clear()
+                            working_messages.append(last_user_msg)
+
+                        llm_client = getattr(self._brain, "_llm_client", None)
+                        if llm_client:
+                            llm_client.reset_all_cooldowns(include_structural=True)
+                        return "retry"
+
                     logger.error(
-                        "[ReAct] Content safety error but no tool_results to strip. "
-                        "Likely triggered by system prompt or user input. "
+                        "[ReAct] Content safety error persists even with minimal prompt. "
+                        "Likely triggered by user input itself. "
                         "Aborting without further retry."
                     )
                     return None
