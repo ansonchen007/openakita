@@ -1057,7 +1057,7 @@ class Plugin(PluginBase):
                 body["top_k"] = int(payload.get("top_k", 20) or 20)
                 body["lang"] = str(payload.get("lang") or "zh")
                 name_suffix = session
-                description = f"fin-pulse {session} brief → {channel}:{chat_id}"
+                description = f"fin-pulse {session} brief → {channel}/{chat_id}"
             else:
                 rules_text = payload.get("rules_text") or ""
                 if not isinstance(rules_text, str) or not rules_text.strip():
@@ -1070,8 +1070,27 @@ class Plugin(PluginBase):
                 if isinstance(title, str):
                     body["title"] = title
                 radar_key = _radar_key(rules_text)
-                name_suffix = f"radar:{radar_key}"
-                description = f"fin-pulse radar {radar_key} → {channel}:{chat_id}"
+                # NOTE: keep name `:`-free — host _validate_task_name rejects
+                # ":" in task names (Windows/log-file safety), so the radar
+                # suffix must use "-" rather than the old "radar:<hash>".
+                name_suffix = f"radar-{radar_key}"
+                description = f"fin-pulse radar {radar_key} → {channel}/{chat_id}"
+
+            # Optional custom name override from the in-page dialog — must
+            # still start with one of our approved prefixes so ownership
+            # checks (delete/toggle/on_schedule hook) stay watertight.
+            override = str(payload.get("name") or "").strip()
+            if override:
+                if not _task_name_is_finpulse(override):
+                    raise HTTPException(
+                        status_code=400,
+                        detail="custom name must start with 'fin-pulse '",
+                    )
+                task_name = override
+            else:
+                task_name = f"fin-pulse {name_suffix}"
+
+            enabled = bool(payload.get("enabled", True))
 
             try:
                 from openakita.scheduler.task import ScheduledTask  # type: ignore
@@ -1082,7 +1101,7 @@ class Plugin(PluginBase):
                 ) from exc
 
             task = ScheduledTask.create_cron(
-                name=f"fin-pulse {name_suffix}",
+                name=task_name,
                 description=description,
                 cron_expression=cron.strip(),
                 prompt="[fin-pulse] " + json.dumps(body, ensure_ascii=False),
@@ -1091,6 +1110,7 @@ class Plugin(PluginBase):
                 silent=True,  # fin-pulse handles its own notification
                 metadata={"plugin_id": PLUGIN_ID, "mode": mode},
             )
+            task.enabled = enabled
             try:
                 task_id = await scheduler.add_task(task)
             except ValueError as exc:
@@ -1114,6 +1134,68 @@ class Plugin(PluginBase):
             if outcome != "ok":
                 raise HTTPException(status_code=400, detail=outcome)
             return {"ok": True, "id": schedule_id, "deleted": True}
+
+        @router.post("/schedules/{schedule_id}/toggle")
+        async def toggle_schedule(schedule_id: str) -> dict[str, Any]:
+            """Enable/disable a fin-pulse schedule in place so the in-page
+            list can show run/pause controls without redirecting users to
+            the host SchedulerView panel. Ownership is checked against
+            the ``fin-pulse `` / ``fin-pulse:`` name prefix so we never
+            touch schedules that belong to other plugins.
+            """
+            scheduler = _get_active_scheduler()
+            if scheduler is None:
+                raise HTTPException(status_code=503, detail="scheduler_unavailable")
+            existing = scheduler.get_task(schedule_id)
+            if existing is None:
+                raise HTTPException(status_code=404, detail="not_found")
+            if not _task_name_is_finpulse(getattr(existing, "name", "") or ""):
+                raise HTTPException(
+                    status_code=403,
+                    detail="refusing to toggle schedule not owned by fin-pulse",
+                )
+            if getattr(existing, "enabled", True):
+                await scheduler.disable_task(schedule_id)
+            else:
+                await scheduler.enable_task(schedule_id)
+            updated = scheduler.get_task(schedule_id)
+            return {
+                "ok": True,
+                "id": schedule_id,
+                "schedule": _serialize_schedule(updated) if updated else None,
+            }
+
+        @router.post("/schedules/{schedule_id}/trigger")
+        async def trigger_schedule(schedule_id: str) -> dict[str, Any]:
+            """Fire a fin-pulse schedule immediately — proxies to the host
+            scheduler's ``trigger_task`` (non-blocking, backgrounded).
+            """
+            scheduler = _get_active_scheduler()
+            if scheduler is None:
+                raise HTTPException(status_code=503, detail="scheduler_unavailable")
+            existing = scheduler.get_task(schedule_id)
+            if existing is None:
+                raise HTTPException(status_code=404, detail="not_found")
+            if not _task_name_is_finpulse(getattr(existing, "name", "") or ""):
+                raise HTTPException(
+                    status_code=403,
+                    detail="refusing to trigger schedule not owned by fin-pulse",
+                )
+            trigger = getattr(scheduler, "trigger_task", None)
+            if callable(trigger):
+                try:
+                    # Some implementations are async; some return a coroutine.
+                    result = trigger(schedule_id)
+                    if hasattr(result, "__await__"):
+                        await result
+                except Exception as exc:  # noqa: BLE001
+                    raise HTTPException(status_code=500, detail=str(exc)) from exc
+            else:
+                raise HTTPException(
+                    status_code=501,
+                    detail="host scheduler does not expose trigger_task",
+                )
+            return {"ok": True, "id": schedule_id, "triggered": True}
 
         @router.get("/scheduler/channels")
         async def scheduler_channels() -> dict[str, Any]:

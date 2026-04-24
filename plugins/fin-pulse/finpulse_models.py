@@ -222,7 +222,9 @@ SOURCE_DEFS: Final[dict[str, dict[str, object]]] = {
         "display_zh": "NewsNow 聚合",
         "display_en": "NewsNow Aggregator",
         "kind": "newsnow",
-        "default_enabled": False,
+        # Public aggregator is on by default; the pipeline enforces a
+        # 5-minute floor so we never hammer the volunteer-run node.
+        "default_enabled": True,
         "homepage": "https://github.com/ourongxing/newsnow",
     },
 }
