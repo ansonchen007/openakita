@@ -73,7 +73,6 @@ def test_ui_hard_contracts() -> None:
         r'class\s+PluginErrorBoundary\s+extends\s+React\.Component',
         r'ReactDOM\.createRoot\(document\.getElementById\("root"\)\)',
         r'window\.OpenAkitaI18n\.register\(I18N_DICT\)',
-        r'onEvent\("plugin:fin-pulse:',
         r'"tabs\.today"',
         r'"tabs\.digests"',
         r'"tabs\.radar"',
@@ -91,6 +90,21 @@ def test_ui_hard_contracts() -> None:
         r'api-pill',
         r'ConfirmHost',
         r'setInterval',
+        # P0 — api() must unwrap Bridge {ok,status,body} envelopes.
+        r'"body"\s+in\s+res',
+        # P0 — oaToast must send {type, body} for the host notify API.
+        r'type:\s*level',
+        r'body:\s*message',
+        # P1 — radar editor is kept compact; hit preview grows.
+        r'card--compact',
+        # P1 — templated schedule buttons exist instead of window.prompt.
+        r'SCHEDULE_TEMPLATES',
+        r'ScheduleDialog',
+        # P2 — CodeBlock component for NewsNow docker snippet.
+        r'fp-codeblock',
+        # P2 — Darker muted / dim tokens.
+        r'--text-muted:\s*#5E3540',
+        r'--text-dim:\s*#7A4E59',
     ]
     for pat in required:
         assert re.search(pat, html), f"hard contract missing: {pat}"
@@ -100,6 +114,12 @@ def test_ui_hard_contracts() -> None:
         r"classList\.toggle\('dark-mode'\)",
         # Raw ReactDOM.render is forbidden; createRoot is required.
         r'ReactDOM\.render\(',
+        # The fin-pulse custom event names never fired — we must not
+        # register listeners for them any more.
+        r'onEvent\("plugin:fin-pulse:',
+        # The Settings schedule card should no longer use window.prompt
+        # for mode/cron/session — replaced by ScheduleDialog.
+        r'window\.prompt\("mode\s*\(daily_brief',
     ]
     for pat in forbidden:
         assert not re.search(pat, html), f"forbidden token present: {pat}"
@@ -152,10 +172,12 @@ def test_ui_tabs_are_hydrated() -> None:
     """
     html = INDEX_HTML.read_text("utf-8")
 
-    # Today tab talks to /articles + /ingest and reacts to article events.
+    # Today tab talks to /articles + /ingest and uses the new
+    # /sources route to hydrate its dropdown (P0 — avoids drift with
+    # finpulse_models.SOURCE_DEFS).
     assert 'api("GET", "/articles"' in html
     assert 'api("POST", "/ingest"' in html
-    assert 'article_inserted' in html
+    assert 'api("GET", "/sources"' in html
 
     # Digests tab lists + runs + iframes html blobs.
     assert 'api("GET", "/digests' in html
@@ -192,6 +214,10 @@ def test_ui_tabs_are_hydrated() -> None:
         assert tool in html, f"Ask tab missing tool: {tool}"
 
     # Settings tab exposes channels / schedules / NewsNow wizard.
+    # P1 — channels are fed from the host /scheduler/channels proxy so
+    # the dropdown matches SchedulerView. /available-channels is kept
+    # only as a fallback.
+    assert 'api("GET", "/scheduler/channels"' in html
     assert 'api("GET", "/available-channels"' in html
     assert 'api("GET", "/schedules"' in html
     assert 'api("POST", "/schedules"' in html
@@ -199,3 +225,12 @@ def test_ui_tabs_are_hydrated() -> None:
     assert 'settings.newsnow.step1' in html
     assert 'settings.newsnow.step2' in html
     assert 'settings.newsnow.step3' in html
+    # P1 — schedule templates (morning / noon / evening / radar).
+    for tpl in ("morning", "noon", "evening", "radar"):
+        assert f'settings.schedules.tpl.{tpl}' in html, f"schedule tpl i18n missing: {tpl}"
+
+    # P1 — global "no IM channel" banner must only live inside the
+    # Settings IM-channels card, not at the App shell level.
+    assert "showChannelBanner" not in html, (
+        "the legacy App-shell channel banner should have been removed"
+    )

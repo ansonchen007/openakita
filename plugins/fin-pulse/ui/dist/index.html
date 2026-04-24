@@ -26,7 +26,10 @@
        Semantic success/warning/danger stay recognizable but muted. */
     :root {
       --bg: #FDF4F5; --bg-card: #FFFFFF; --bg-hover: #FBE5E9;
-      --text: #4A1E27; --text-muted: #8A5560; --text-dim: #B58B94;
+      /* Darker muted/dim pair so hint text, inactive tab labels and
+         empty states remain readable on blush backgrounds (≥ 4.5:1
+         contrast against --bg-card and --bg-hover). */
+      --text: #4A1E27; --text-muted: #5E3540; --text-dim: #7A4E59;
       --primary: #E86A7B; --primary-hover: #D14D62;
       --primary-soft: #FBCFD4;
       --success: #5EA882; --warning: #E8A660; --danger: #B92E44;
@@ -34,13 +37,13 @@
     }
     [data-theme="dark"] {
       --bg: #2B1821; --bg-card: #3D2430; --bg-hover: #4D3240;
-      --text: #FBE7EB; --text-muted: #D3A5B0; --text-dim: #9A7683;
+      --text: #FBE7EB; --text-muted: #E2B9C3; --text-dim: #B28895;
       --border: #4F2F3C;
     }
     @media (prefers-color-scheme: dark) {
       :root:not([data-theme="light"]) {
         --bg: #2B1821; --bg-card: #3D2430; --bg-hover: #4D3240;
-        --text: #FBE7EB; --text-muted: #D3A5B0; --text-dim: #9A7683;
+        --text: #FBE7EB; --text-muted: #E2B9C3; --text-dim: #B28895;
         --border: #4F2F3C;
       }
     }
@@ -77,15 +80,18 @@
     .split-layout { display: flex; gap: 16px; height: 100%; }
     /* ── Stack layout (top filter bar + bottom content) ── */
     .stack-layout { display: flex; flex-direction: column; gap: 12px; flex: 1; min-height: 0; }
-    .stack-layout > .card.grow { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+    .stack-layout > .card.grow { flex: 1 1 auto; display: flex; flex-direction: column; min-height: 0; }
     .stack-layout > .card.grow > .card-body { flex: 1; overflow: auto; }
+    .stack-layout > .card--compact { flex: 0 0 auto; }
     /* ── Hero title (oa-hero-title) — big gradient brand mark ── */
     .oa-hero-title { display: inline-flex; align-items: center; gap: 12px; font-size: 18px; font-weight: 600; }
     .oa-hero-title__icon {
       width: 40px; height: 40px; border-radius: 10px; flex-shrink: 0;
-      background: linear-gradient(135deg, #F8B4C0 0%, #E86A7B 55%, #7A1A2C 100%);
+      /* Container bg is a neutral dark so any 1px SVG seam blends in;
+         the inline SVG itself renders its full navy background. */
+      background: #0B1526;
       color: #fff; display: inline-flex; align-items: center; justify-content: center;
-      box-shadow: 0 4px 12px rgba(232,106,123,.28), inset 0 0 0 1px rgba(255,255,255,.10);
+      box-shadow: 0 4px 12px rgba(201,21,42,.28), inset 0 0 0 1px rgba(255,255,255,.08);
       position: relative; overflow: hidden;
     }
     .oa-hero-title__icon svg { width: 100%; height: 100%; display: block; }
@@ -109,7 +115,7 @@
     .oa-section-title__actions { margin-left: auto; display: inline-flex; gap: 6px; align-items: center; }
     /* ── Hint text (beginner-friendly description under a title) ── */
     .oa-hint {
-      font-size: 12px; color: var(--text-muted); line-height: 1.6;
+      font-size: 12px; color: var(--text); line-height: 1.6;
       background: var(--bg-hover); padding: 8px 12px; border-radius: 6px;
       border-left: 3px solid var(--primary);
       margin-bottom: 10px;
@@ -141,7 +147,7 @@
       border: 1px solid var(--border); border-radius: var(--radius);
     }
     .filter-bar__item { display: inline-flex; align-items: center; gap: 6px; }
-    .filter-bar__label { font-size: 11px; color: var(--text-muted); font-weight: 500; }
+    .filter-bar__label { font-size: 12px; color: var(--text); font-weight: 500; }
     .filter-bar__sep { width: 1px; height: 20px; background: var(--border); margin: 0 2px; }
     /* ── Config banner (oa-config-banner) ── */
     .oa-config-banner {
@@ -160,6 +166,17 @@
     }
     .oa-config-banner__action:hover { background: var(--primary-hover); }
     .oa-icon { display: inline-flex; align-items: center; }
+    /* ── Code block (terminal-style, with copy button) ── */
+    .fp-codeblock { position: relative; border-radius: 6px;
+                    background: #1F0F14; color: #FDEEF1;
+                    border: 1px solid var(--border);
+                    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+                    font-size: 12px; overflow: hidden; }
+    .fp-codeblock pre { margin: 0; padding: 10px 56px 10px 12px;
+                        white-space: pre-wrap; word-break: break-word;
+                        line-height: 1.55; color: inherit; background: transparent; }
+    .fp-codeblock__copy { position: absolute; top: 6px; right: 6px;
+                          padding: 2px 8px; font-size: 11px; }
     /* ── Label bar ── */
     .label { font-size: 12px; font-weight: 500; color: var(--text-muted); margin-bottom: 6px;
              display: flex; align-items: center; gap: 6px; }
@@ -362,11 +379,34 @@ const I18N_DICT = {
     "settings.channels.none": "未在宿主中注册任何 IM 适配器，推送将不可用。",
     "settings.channels.send": "发送测试消息",
     "settings.schedules.title": "定时任务",
+    "settings.schedules.desc": "创建业务模板化的计划任务，底层由主程序 SchedulerView 统一管理。删除/暂停请前往「主程序 → 计划任务」面板。",
     "settings.schedules.none": "尚未创建任何定时任务",
     "settings.schedules.create": "新增定时任务",
     "settings.schedules.delete": "删除",
     "settings.schedules.daily": "早午晚报",
     "settings.schedules.radar": "热点雷达",
+    "settings.schedules.tpl.morning": "每日早报",
+    "settings.schedules.tpl.morning.desc": "每天 08:00 生成并推送早报",
+    "settings.schedules.tpl.noon": "每日午报",
+    "settings.schedules.tpl.noon.desc": "每天 12:30 生成并推送午报",
+    "settings.schedules.tpl.evening": "每日晚报",
+    "settings.schedules.tpl.evening.desc": "每天 19:00 生成并推送晚报",
+    "settings.schedules.tpl.radar": "雷达预警",
+    "settings.schedules.tpl.radar.desc": "每 15 分钟扫描一次关键词规则",
+    "settings.schedules.dialog.title": "创建定时任务 — {template}",
+    "settings.schedules.dialog.name": "任务名",
+    "settings.schedules.dialog.cron": "Cron 表达式",
+    "settings.schedules.dialog.cron.hint": "不会写？打开 crontab.guru 在线构造",
+    "settings.schedules.dialog.channel": "通知通道",
+    "settings.schedules.dialog.chat_id": "chat_id",
+    "settings.schedules.dialog.timezone": "时区",
+    "settings.schedules.dialog.session": "早午晚",
+    "settings.schedules.dialog.rules": "关键词规则",
+    "settings.schedules.dialog.create": "创建",
+    "settings.schedules.dialog.cancel": "取消",
+    "settings.schedules.open_host": "在主程序计划任务面板管理 →",
+    "settings.schedules.read_only": "这是只读预览，列表维护请前往主程序计划任务面板",
+    "settings.channels.desc": "IM 通道来自宿主 SchedulerView，展示 `channel · chat_name`；空时先去「主程序 → 设置 → IM 通道」配置。",
     "settings.newsnow.title": "NewsNow 热榜聚合",
     "settings.newsnow.mode.off": "关闭",
     "settings.newsnow.mode.public": "公共服务",
@@ -486,11 +526,34 @@ const I18N_DICT = {
     "settings.channels.none": "No IM adapter registered in the host. Dispatch will be unavailable.",
     "settings.channels.send": "Send test message",
     "settings.schedules.title": "Scheduled tasks",
+    "settings.schedules.desc": "Business templates for scheduled tasks. Underlying rows are managed by the host SchedulerView — for delete/pause, open the host Scheduler panel.",
     "settings.schedules.none": "No scheduled tasks",
     "settings.schedules.create": "Create schedule",
     "settings.schedules.delete": "Delete",
     "settings.schedules.daily": "Daily brief",
     "settings.schedules.radar": "Hot radar",
+    "settings.schedules.tpl.morning": "Morning brief",
+    "settings.schedules.tpl.morning.desc": "Runs every day at 08:00",
+    "settings.schedules.tpl.noon": "Noon brief",
+    "settings.schedules.tpl.noon.desc": "Runs every day at 12:30",
+    "settings.schedules.tpl.evening": "Evening brief",
+    "settings.schedules.tpl.evening.desc": "Runs every day at 19:00",
+    "settings.schedules.tpl.radar": "Hot radar",
+    "settings.schedules.tpl.radar.desc": "Scans keyword rules every 15 minutes",
+    "settings.schedules.dialog.title": "Create schedule — {template}",
+    "settings.schedules.dialog.name": "Task name",
+    "settings.schedules.dialog.cron": "Cron expression",
+    "settings.schedules.dialog.cron.hint": "Need help? Open crontab.guru",
+    "settings.schedules.dialog.channel": "IM channel",
+    "settings.schedules.dialog.chat_id": "chat_id",
+    "settings.schedules.dialog.timezone": "Timezone",
+    "settings.schedules.dialog.session": "Session",
+    "settings.schedules.dialog.rules": "Keyword rules",
+    "settings.schedules.dialog.create": "Create",
+    "settings.schedules.dialog.cancel": "Cancel",
+    "settings.schedules.open_host": "Open host Scheduler panel →",
+    "settings.schedules.read_only": "Read-only preview — manage rows from the host Scheduler panel",
+    "settings.channels.desc": "Channels are fed from the host SchedulerView (`channel · chat_name`). If empty, configure them in OpenAkita Settings → IM channels first.",
     "settings.newsnow.title": "NewsNow aggregator",
     "settings.newsnow.mode.off": "Off",
     "settings.newsnow.mode.public": "Public",
@@ -556,32 +619,65 @@ function Ico(props) {
 }
 
 /* ── Brand mark — inline SVG matching icon.svg for pixel-perfect hero ── */
+/* Kept structurally identical to plugins/fin-pulse/icon.svg so the main
+   page hero and the sidebar/loading-splash icon read as one brand. */
 const BRAND_SVG = (
   '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" aria-hidden="true">' +
     '<defs>' +
       '<linearGradient id="hbg" x1="0%" y1="0%" x2="100%" y2="100%">' +
-        '<stop offset="0%" stop-color="#F8B4C0"/>' +
-        '<stop offset="55%" stop-color="#E86A7B"/>' +
-        '<stop offset="100%" stop-color="#7A1A2C"/>' +
+        '<stop offset="0%"  stop-color="#1A1026"/>' +
+        '<stop offset="55%" stop-color="#3A1020"/>' +
+        '<stop offset="100%" stop-color="#5C0E1A"/>' +
+      '</linearGradient>' +
+      '<linearGradient id="hred" x1="0%" y1="0%" x2="0%" y2="100%">' +
+        '<stop offset="0%"  stop-color="#FF7080"/>' +
+        '<stop offset="100%" stop-color="#C9152A"/>' +
+      '</linearGradient>' +
+      '<linearGradient id="hvol" x1="0%" y1="0%" x2="0%" y2="100%">' +
+        '<stop offset="0%"  stop-color="#FF6B7C" stop-opacity="0.55"/>' +
+        '<stop offset="100%" stop-color="#8A1625" stop-opacity="0.45"/>' +
       '</linearGradient>' +
       '<linearGradient id="hline" x1="0%" y1="0%" x2="100%" y2="0%">' +
-        '<stop offset="0%" stop-color="#FFE1E6"/>' +
-        '<stop offset="55%" stop-color="#F48AA0"/>' +
-        '<stop offset="100%" stop-color="#F4A261"/>' +
+        '<stop offset="0%"  stop-color="#FFD2A8"/>' +
+        '<stop offset="100%" stop-color="#FFE9B5"/>' +
       '</linearGradient>' +
     '</defs>' +
-    '<rect x="2" y="2" width="60" height="60" rx="14" ry="14" fill="url(#hbg)"/>' +
-    '<g opacity="0.55">' +
-      '<rect x="14" y="36" width="5" height="12" rx="1" fill="#FBE0E5"/>' +
-      '<rect x="22" y="30" width="5" height="18" rx="1" fill="#FBE0E5"/>' +
-      '<rect x="30" y="26" width="5" height="22" rx="1" fill="#FBE0E5"/>' +
-      '<rect x="38" y="22" width="5" height="26" rx="1" fill="#FBE0E5"/>' +
-      '<rect x="46" y="18" width="5" height="30" rx="1" fill="#FBE0E5"/>' +
+    '<rect x="0" y="0" width="64" height="64" rx="14" ry="14" fill="url(#hbg)"/>' +
+    '<g opacity="0.14" stroke="#FFFFFF" stroke-width="0.5" stroke-dasharray="1.6,2.2">' +
+      '<line x1="6" y1="16" x2="58" y2="16"/>' +
+      '<line x1="6" y1="30" x2="58" y2="30"/>' +
+      '<line x1="6" y1="44" x2="58" y2="44"/>' +
     '</g>' +
-    '<path d="M8 40 L18 40 L22 28 L28 46 L34 22 L40 34 L46 18 L56 18" ' +
-      'fill="none" stroke="url(#hline)" stroke-width="3" ' +
-      'stroke-linecap="round" stroke-linejoin="round"/>' +
-    '<circle cx="56" cy="18" r="2.2" fill="#F4A261"/>' +
+    '<g fill="url(#hvol)">' +
+      '<rect x="10.5" y="52" width="5" height="6" rx="1"/>' +
+      '<rect x="19.5" y="50" width="5" height="8" rx="1"/>' +
+      '<rect x="29.5" y="49" width="5" height="9" rx="1"/>' +
+      '<rect x="39.5" y="47" width="5" height="11" rx="1"/>' +
+      '<rect x="48.5" y="46" width="5" height="12" rx="1"/>' +
+    '</g>' +
+    '<g stroke="#FF8A96" stroke-width="1" stroke-linecap="round">' +
+      '<line x1="13" y1="32" x2="13" y2="48"/>' +
+      '<line x1="22" y1="24" x2="22" y2="42"/>' +
+      '<line x1="32" y1="17" x2="32" y2="36"/>' +
+      '<line x1="42" y1="12" x2="42" y2="32"/>' +
+      '<line x1="51" y1="7"  x2="51" y2="32"/>' +
+    '</g>' +
+    '<g fill="url(#hred)">' +
+      '<rect x="10.5" y="36" width="5" height="10" rx="1"/>' +
+      '<rect x="19.5" y="26" width="5" height="14" rx="1"/>' +
+      '<rect x="29.5" y="20" width="5" height="14" rx="1"/>' +
+      '<rect x="39.5" y="14" width="5" height="16" rx="1"/>' +
+      '<rect x="48"   y="10" width="6" height="18" rx="1.2"/>' +
+    '</g>' +
+    '<path d="M13 41 L22 33 L32 27 L42 22 L51 14" ' +
+      'fill="none" stroke="url(#hline)" stroke-width="1.8" ' +
+      'stroke-linecap="round" stroke-linejoin="round" opacity="0.95"/>' +
+    '<circle cx="51" cy="14" r="4.2" fill="none" stroke="#FFF1C2" stroke-width="0.7" opacity="0.55"/>' +
+    '<circle cx="51" cy="14" r="2.4" fill="#FFF1C2"/>' +
+    '<g stroke="#FFBC74" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">' +
+      '<path d="M52 10 L58 6"/>' +
+      '<path d="M58 6 L58 10 M58 6 L54 6"/>' +
+    '</g>' +
   '</svg>'
 );
 function BrandMark() {
@@ -595,10 +691,25 @@ function onEvent(type, fn) {
   return function () { window.removeEventListener(type, handler); };
 }
 
-/* ── Plugin API wrapper ── */
+/* ── Plugin API wrapper ──
+   Host Bridge (plugin-bridge-host.ts) wraps responses as
+   `{ok, status, body: <plugin JSON>}`, so we must unwrap `body` and
+   carry the transport-level `ok` when the JSON body doesn't have it.
+   Outside the iframe (dev direct-URL mode) the fetch returns the
+   plugin JSON at the root already. */
 async function api(method, path, body) {
   if (window.OpenAkita && typeof window.OpenAkita.api === "function") {
     const res = await window.OpenAkita.api(method, path, body);
+    if (res && typeof res === "object" && "body" in res && "status" in res) {
+      const inner = res.body || {};
+      if (inner && typeof inner === "object") {
+        if (!("ok" in inner)) inner.ok = !!res.ok;
+        if (!inner.ok && !("detail" in inner) && res.status) {
+          inner.detail = "http_" + res.status;
+        }
+      }
+      return inner;
+    }
     return res || { ok: false, error: "no-response" };
   }
   const url = "/api/plugins/fin-pulse" + path;
@@ -612,17 +723,40 @@ async function api(method, path, body) {
 
 /* ── Settings hook (Phase 1 placeholder — Phase 6 hydrates from /config) ── */
 function useSettings() {
+  /* `available_channels` here holds the host's rich channel entries
+     ({channel_id, chat_id, chat_name, ...}) so the Settings / Schedule
+     pickers can show the same dropdown as SchedulerView. */
   const [settings, setSettings] = useState({ available_channels: [] });
   const [loaded, setLoaded] = useState(false);
   const refresh = useCallback(async function () {
-    const resp = await api("GET", "/available-channels");
+    const resp = await api("GET", "/scheduler/channels");
+    let list = (resp && Array.isArray(resp.channels)) ? resp.channels : [];
+    if (!list.length) {
+      /* Fallback to the adapter-probe route when the host scheduler
+         didn't surface any sessions yet. */
+      const fallback = await api("GET", "/available-channels");
+      const names = (fallback && fallback.channels) || [];
+      list = names.map(function (n) {
+        return { channel_id: String(n), chat_id: "", chat_name: "", chat_type: "private" };
+      });
+    }
     setSettings(function (prev) {
-      return Object.assign({}, prev, { available_channels: (resp && resp.channels) || [] });
+      return Object.assign({}, prev, { available_channels: list });
     });
     setLoaded(true);
   }, []);
   useEffect(function () { refresh().catch(function () { setLoaded(true); }); }, [refresh]);
   return { settings: settings, loaded: loaded, refresh: refresh };
+}
+
+/* Build a display label for a channel entry coming from
+   `/scheduler/channels`. Prefer `chat_name`; fall back to channel_id. */
+function formatChannelLabel(ch) {
+  if (!ch || typeof ch !== "object") return String(ch || "");
+  const cid = String(ch.channel_id || "");
+  const name = String(ch.chat_name || ch.display_name || ch.alias || "");
+  if (name) return cid + " · " + name;
+  return cid;
 }
 
 /* ── Global confirm (ConfirmHost / oaConfirm / oaToast) ── */
@@ -632,9 +766,21 @@ window.oaConfirm = function (opts) {
   return _confirmHostRef.open(opts || {});
 };
 window.oaToast = function (opts) {
-  try { if (window.OpenAkita && typeof window.OpenAkita.notify === "function") {
-    window.OpenAkita.notify({ level: (opts && opts.level) || "info", message: (opts && opts.message) || "" });
-  } } catch (_) {}
+  try {
+    if (window.OpenAkita && typeof window.OpenAkita.notify === "function") {
+      const level = (opts && opts.level) || "info";
+      const message = (opts && opts.message) || "";
+      /* Host PluginAppHost.handleNotification consumes `{type, body}`.
+         Keep `{level, message}` for backward compatibility with any
+         older bridges. */
+      window.OpenAkita.notify({
+        type: level,
+        body: message,
+        level: level,
+        message: message,
+      });
+    }
+  } catch (_) {}
 };
 
 function ConfirmHost() {
@@ -703,18 +849,21 @@ function copyText(text) {
   } catch (_) {}
 }
 
-/* Known source ids — reflect finpulse_models.SOURCE_DEFS. Keeps the
-   filter dropdown usable even before the first ingest lands. */
+/* Known source ids — must match finpulse_models.SOURCE_DEFS exactly.
+   Only used as a fallback when GET /sources is unavailable (e.g. the
+   first paint before the response lands). TodayTab fetches the live
+   list and overrides this. */
 const KNOWN_SOURCES = [
   { id: "wallstreetcn", name: "华尔街见闻" },
-  { id: "cls_telegraph", name: "财联社电报" },
-  { id: "stcn", name: "证券时报" },
-  { id: "pboc", name: "中国人民银行" },
-  { id: "stats_gov", name: "国家统计局" },
+  { id: "cls", name: "财联社电报" },
+  { id: "xueqiu", name: "雪球热帖" },
+  { id: "eastmoney", name: "东方财富快讯" },
+  { id: "pbc_omo", name: "央行公开市场" },
+  { id: "nbs", name: "国家统计局" },
   { id: "fed_fomc", name: "美联储 FOMC" },
-  { id: "us_treasury", name: "美国财政部" },
-  { id: "sec_edgar", name: "SEC EDGAR" },
-  { id: "newsnow", name: "NewsNow 热榜" },
+  { id: "sec_edgar", name: "美国 SEC EDGAR" },
+  { id: "rss_generic", name: "自定义 RSS" },
+  { id: "newsnow", name: "NewsNow 聚合" },
 ];
 
 /* ── Today Tab — live article feed ─────────────────────────────── */
@@ -725,6 +874,21 @@ function TodayTab() {
   const [loading, setLoading] = useState(false);
   const [filters, setFilters] = useState({ source: "", window: 24, minScore: 0, sort: "time" });
   const [ingesting, setIngesting] = useState(false);
+  const [sources, setSources] = useState(KNOWN_SOURCES);
+
+  /* Fetch the canonical source list once — keeps the dropdown in
+     sync with finpulse_models.SOURCE_DEFS and avoids id drift. */
+  useEffect(function () {
+    let cancelled = false;
+    api("GET", "/sources").then(function (resp) {
+      if (cancelled || !resp || !resp.ok || !Array.isArray(resp.items)) return;
+      const mapped = resp.items.map(function (s) {
+        return { id: String(s.id || ""), name: String(s.display_zh || s.display_en || s.id || "") };
+      }).filter(function (s) { return s.id; });
+      if (mapped.length) setSources(mapped);
+    }).catch(function () {});
+    return function () { cancelled = true; };
+  }, []);
 
   const load = useCallback(async function () {
     setLoading(true);
@@ -754,10 +918,11 @@ function TodayTab() {
 
   useEffect(function () { load(); }, [load]);
   useEffect(function () {
-    const off1 = onEvent("plugin:fin-pulse:article_inserted", function () { load(); });
-    const off2 = onEvent("plugin:fin-pulse:task_update", function () { load(); });
+    /* Bootstrap dispatches `openakita:event` only, so the fin-pulse
+       custom event names never fired. Poll every 8s instead — cheap
+       and simple. */
     const timer = setInterval(load, 8000);
-    return function () { off1(); off2(); clearInterval(timer); };
+    return function () { clearInterval(timer); };
   }, [load]);
 
   const onIngest = useCallback(async function () {
@@ -781,7 +946,7 @@ function TodayTab() {
                   value={filters.source}
                   onChange={function (e) { setFilters(Object.assign({}, filters, {source: e.target.value})); }}>
             <option value="">{t("today.filters.source.all")}</option>
-            {KNOWN_SOURCES.map(function (s) { return <option key={s.id} value={s.id}>{s.name}</option>; })}
+            {sources.map(function (s) { return <option key={s.id} value={s.id}>{s.name}</option>; })}
           </select>
         </div>
         <span className="filter-bar__sep"/>
@@ -904,8 +1069,14 @@ function DigestsTab() {
     } finally { setLoading(false); }
   }, []);
   const loadChannels = useCallback(async function () {
-    const resp = await api("GET", "/available-channels");
-    setChannels((resp && resp.channels) || []);
+    const resp = await api("GET", "/scheduler/channels");
+    let list = (resp && Array.isArray(resp.channels)) ? resp.channels : [];
+    if (!list.length) {
+      const fb = await api("GET", "/available-channels");
+      const names = (fb && fb.channels) || [];
+      list = names.map(function (n) { return { channel_id: String(n), chat_id: "" }; });
+    }
+    setChannels(list);
   }, []);
   useEffect(function () { load(); loadChannels(); }, [load, loadChannels]);
 
@@ -925,8 +1096,10 @@ function DigestsTab() {
       window.oaToast({level: "warning", message: "no channel registered"});
       return;
     }
-    const channel = channels[0];
-    const chat_id = window.prompt("chat_id for " + channel + "?", "");
+    const pick = channels[0] || {};
+    const channel = pick.channel_id || "";
+    const defaultChatId = pick.chat_id || "";
+    const chat_id = window.prompt("chat_id for " + channel + "?", defaultChatId);
     if (!chat_id) return;
     const ok = await window.oaConfirm({
       title: t("digests.resend"),
@@ -1182,8 +1355,9 @@ function RadarTab() {
 
   return (
     <div className="stack-layout">
-      {/* Rule editor on top */}
-      <div className="card">
+      {/* Rule editor on top — kept compact so the hit preview gets the
+          bulk of the vertical space. */}
+      <div className="card card--compact">
         <div className="oa-section-title">
           {t("radar.editor.title")}
           <span className="oa-section-title__actions">
@@ -1236,7 +1410,7 @@ function RadarTab() {
         <div className="oa-hint" dangerouslySetInnerHTML={{__html: t("radar.editor.hintHtml")}}/>
         <textarea
           className="input"
-          style={{minHeight: 220, fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", fontSize: 12, lineHeight: 1.6}}
+          style={{minHeight: 120, maxHeight: 180, resize: "vertical", fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", fontSize: 12, lineHeight: 1.6}}
           value={rulesText}
           onChange={function (e) { setRulesText(e.target.value); }}
           placeholder={RADAR_TEMPLATE}/>
@@ -1434,12 +1608,169 @@ function AskTab() {
   );
 }
 
-function SettingsTab() {
-  return <SettingsForm/>;
+function SettingsTab(props) {
+  return <SettingsForm goToTab={props && props.goToTab}/>;
 }
 
-/* ── Settings Form — 5 sections including NewsNow 3-stage wizard ── */
-function SettingsForm() {
+/* ── CodeBlock — render preformatted command snippets with a copy
+   button. Strips markdown code fences (``` ... ```) and unescapes
+   ``\n`` so the NewsNow docker snippet renders as real lines.  */
+function CodeBlock(props) {
+  const raw = String(props.text || "");
+  let cleaned = raw.replace(/\\n/g, "\n");
+  cleaned = cleaned.replace(/^\s*>\s?/gm, "");
+  cleaned = cleaned.replace(/```[a-zA-Z0-9_-]*\n?/g, "").replace(/```\s*$/g, "");
+  cleaned = cleaned.trim();
+  const onCopy = function () {
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(cleaned);
+      } else {
+        const ta = document.createElement("textarea");
+        ta.value = cleaned;
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand("copy");
+        document.body.removeChild(ta);
+      }
+      window.oaToast({level: "success", message: _i18n.t("ask.copied")});
+    } catch (_) {}
+  };
+  return (
+    <div className="fp-codeblock">
+      <pre>{cleaned}</pre>
+      <button className="btn btn-sm fp-codeblock__copy" type="button" onClick={onCopy}>
+        <Ico name="copy"/> Copy
+      </button>
+    </div>
+  );
+}
+
+/* ── ScheduleDialog — modal form for creating a templated fin-pulse
+   scheduled task (morning / noon / evening brief + hot radar).  */
+const SCHEDULE_TEMPLATES = {
+  morning:  {mode: "daily_brief", session: "morning", cron: "0 8 * * *",   since_hours: 12, top_k: 20},
+  noon:     {mode: "daily_brief", session: "noon",    cron: "30 12 * * *", since_hours: 12, top_k: 15},
+  evening:  {mode: "daily_brief", session: "evening", cron: "0 19 * * *",  since_hours: 12, top_k: 20},
+  radar:    {mode: "hot_radar",                       cron: "*/15 * * * *", since_hours: 24, limit: 100, cooldown_s: 600},
+};
+
+function ScheduleDialog(props) {
+  const t = useT();
+  const tpl = props.template || "morning";
+  const preset = SCHEDULE_TEMPLATES[tpl] || SCHEDULE_TEMPLATES.morning;
+  const channels = props.channels || [];
+  const firstChannel = channels[0] || {};
+  const tzDisplay = (function () {
+    try { return Intl.DateTimeFormat().resolvedOptions().timeZone || ""; } catch (_) { return ""; }
+  })();
+
+  const [form, setForm] = useState({
+    name: "fin-pulse " + (preset.session || "radar"),
+    cron: preset.cron,
+    channel: firstChannel.channel_id || "",
+    chat_id: firstChannel.chat_id || "",
+    rules_text: tpl === "radar" ? (props.defaultRulesText || "+美联储") : "",
+  });
+  const [submitting, setSubmitting] = useState(false);
+
+  const update = function (key, val) {
+    setForm(function (prev) { return Object.assign({}, prev, {[key]: val}); });
+  };
+
+  const onChannelChange = function (e) {
+    const cid = e.target.value;
+    const pick = channels.find(function (c) { return c.channel_id === cid; }) || {};
+    setForm(function (prev) {
+      return Object.assign({}, prev, {channel: cid, chat_id: pick.chat_id || prev.chat_id});
+    });
+  };
+
+  const onSubmit = async function () {
+    if (submitting) return;
+    if (!form.cron.trim() || !form.channel || !form.chat_id) {
+      window.oaToast({level: "warning", message: t("settings.schedules.dialog.chat_id") + " / cron / channel 必填"});
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const body = {
+        mode: preset.mode,
+        cron: form.cron.trim(),
+        channel: form.channel,
+        chat_id: form.chat_id,
+      };
+      if (preset.mode === "daily_brief") {
+        body.session = preset.session;
+        body.since_hours = preset.since_hours;
+        body.top_k = preset.top_k;
+        body.lang = "zh";
+      } else {
+        body.rules_text = form.rules_text || "";
+        body.since_hours = preset.since_hours;
+        body.limit = preset.limit;
+        body.cooldown_s = preset.cooldown_s;
+      }
+      const resp = await api("POST", "/schedules", body);
+      if (resp && resp.ok) {
+        window.oaToast({level: "success", message: "scheduled " + (resp.id || "")});
+        props.onDone && props.onDone(true);
+      } else {
+        window.oaToast({level: "error", message: "failed: " + ((resp && resp.detail) || "")});
+      }
+    } finally { setSubmitting(false); }
+  };
+
+  const titleLabel = t("settings.schedules.tpl." + tpl);
+  return (
+    <div className="confirm-mask" onClick={function () { props.onDone && props.onDone(false); }}>
+      <div className="confirm-dialog" style={{maxWidth: 480}} onClick={function (e) { e.stopPropagation(); }}>
+        <div className="card-title">{tfmt(t("settings.schedules.dialog.title"), {template: titleLabel})}</div>
+        <div style={{display: "flex", flexDirection: "column", gap: 10, marginTop: 8}}>
+          <label style={{display: "flex", flexDirection: "column", gap: 4}}>
+            <span style={{fontSize: 12, color: "var(--text)"}}>{t("settings.schedules.dialog.cron")}</span>
+            <input className="input" value={form.cron} onChange={function (e) { update("cron", e.target.value); }}/>
+            <span className="oa-hint" style={{fontSize: 11}}>
+              <a href="https://crontab.guru" target="_blank" rel="noreferrer">crontab.guru</a> · {t("settings.schedules.dialog.cron.hint")} · TZ: {tzDisplay || "host"}
+            </span>
+          </label>
+          <label style={{display: "flex", flexDirection: "column", gap: 4}}>
+            <span style={{fontSize: 12, color: "var(--text)"}}>{t("settings.schedules.dialog.channel")}</span>
+            <select className="input" value={form.channel} onChange={onChannelChange}>
+              <option value="">—</option>
+              {channels.map(function (c) {
+                return <option key={c.channel_id + ":" + (c.chat_id || "")} value={c.channel_id}>{formatChannelLabel(c)}</option>;
+              })}
+            </select>
+          </label>
+          <label style={{display: "flex", flexDirection: "column", gap: 4}}>
+            <span style={{fontSize: 12, color: "var(--text)"}}>{t("settings.schedules.dialog.chat_id")}</span>
+            <input className="input" value={form.chat_id} onChange={function (e) { update("chat_id", e.target.value); }}/>
+          </label>
+          {preset.mode === "hot_radar" && (
+            <label style={{display: "flex", flexDirection: "column", gap: 4}}>
+              <span style={{fontSize: 12, color: "var(--text)"}}>{t("settings.schedules.dialog.rules")}</span>
+              <textarea className="input" rows={4} value={form.rules_text}
+                        onChange={function (e) { update("rules_text", e.target.value); }}/>
+            </label>
+          )}
+        </div>
+        <div className="confirm-actions">
+          <button className="btn btn-sm" onClick={function () { props.onDone && props.onDone(false); }}>
+            {t("settings.schedules.dialog.cancel")}
+          </button>
+          <button className="btn btn-sm btn-primary" disabled={submitting} onClick={onSubmit}>
+            {t("settings.schedules.dialog.create")}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ── Settings Form — sources, channels (with in-card no-channel banner),
+   templated schedules, NewsNow 3-stage wizard, LLM hint. */
+function SettingsForm(props) {
   const t = useT();
   const [config, setConfig] = useState({});
   const [loaded, setLoaded] = useState(false);
@@ -1447,15 +1778,22 @@ function SettingsForm() {
   const [schedules, setSchedules] = useState([]);
   const [probeMsg, setProbeMsg] = useState("");
   const [savingKey, setSavingKey] = useState("");
+  const [scheduleDialog, setScheduleDialog] = useState(null);
 
   const reloadAll = useCallback(async function () {
     const [cfg, ch, sched] = await Promise.all([
       api("GET", "/config"),
-      api("GET", "/available-channels"),
+      api("GET", "/scheduler/channels"),
       api("GET", "/schedules"),
     ]);
     setConfig((cfg && cfg.config) || {});
-    setChannels((ch && ch.channels) || []);
+    let list = (ch && Array.isArray(ch.channels)) ? ch.channels : [];
+    if (!list.length) {
+      const fb = await api("GET", "/available-channels");
+      const names = (fb && fb.channels) || [];
+      list = names.map(function (n) { return { channel_id: String(n), chat_id: "" }; });
+    }
+    setChannels(list);
     setSchedules((sched && sched.items) || []);
     setLoaded(true);
   }, []);
@@ -1484,8 +1822,10 @@ function SettingsForm() {
     }
   }, [t]);
 
-  const onSendTest = useCallback(async function (channel) {
-    const chat_id = window.prompt("chat_id for " + channel, "");
+  const onSendTest = useCallback(async function (ch) {
+    const channel = (ch && ch.channel_id) || "";
+    const defaultChatId = (ch && ch.chat_id) || "";
+    const chat_id = window.prompt("chat_id for " + channel, defaultChatId);
     if (!chat_id) return;
     const resp = await api("POST", "/dispatch/send", {
       channel: channel, chat_id: chat_id,
@@ -1498,43 +1838,18 @@ function SettingsForm() {
     });
   }, []);
 
-  const onDeleteSchedule = useCallback(async function (sched) {
-    const ok = await window.oaConfirm({
-      title: t("settings.schedules.delete"),
-      message: sched.name || sched.id,
-      okText: t("settings.schedules.delete"),
-      danger: true,
-    });
-    if (!ok) return;
-    await api("DELETE", "/schedules/" + encodeURIComponent(sched.id));
-    reloadAll();
-  }, [t, reloadAll]);
-
-  const onCreateSchedule = useCallback(async function () {
-    const mode = window.prompt("mode (daily_brief / hot_radar)", "daily_brief") || "";
-    if (!mode) return;
-    const channel = window.prompt("channel", channels[0] || "feishu") || "";
-    const chat_id = window.prompt("chat_id", "") || "";
-    const cron = window.prompt("cron (minute hour day month weekday)", "0 8 * * *") || "";
-    const body = {mode: mode, channel: channel, chat_id: chat_id, cron: cron};
-    if (mode === "daily_brief") {
-      body.session = window.prompt("session (morning/noon/evening)", "morning") || "morning";
-    } else {
-      body.rules_text = window.prompt("radar rules_text", "+美联储") || "";
-    }
-    const resp = await api("POST", "/schedules", body);
-    if (resp && resp.ok) {
-      window.oaToast({level: "success", message: "scheduled " + resp.id});
-    } else {
-      window.oaToast({level: "error", message: "failed: " + ((resp && resp.detail) || "")});
-    }
-    reloadAll();
-  }, [channels, reloadAll]);
+  const openHostScheduler = useCallback(function () {
+    try {
+      window.dispatchEvent(new CustomEvent("openakita:navigate", {detail: {view: "scheduler"}}));
+    } catch (_) {}
+  }, []);
 
   if (!loaded) return <div className="card"><div className="empty">{t("today.list.loading")}</div></div>;
 
   const newsnowMode = String(config["newsnow.mode"] || "off");
   const newsnowUrl = String(config["newsnow.api_url"] || "");
+  const radarRules = String(config["radar_rules"] || "+美联储 +降息");
+  const hasAnyChannel = channels.length > 0;
 
   return (
     <div>
@@ -1557,14 +1872,24 @@ function SettingsForm() {
 
       <div className="card">
         <div className="card-title">{t("settings.channels.title")}</div>
-        {channels.length === 0 ? (
-          <div className="empty">{t("settings.channels.none")}</div>
+        <div className="oa-hint" style={{marginBottom: 8}}>{t("settings.channels.desc")}</div>
+        {!hasAnyChannel ? (
+          <div className="oa-config-banner" role="alert">
+            <span className="oa-icon oa-config-banner__icon"><Ico name="warn"/></span>
+            <div className="oa-config-banner__text">
+              <strong>{t("banner.noChannel.title")}</strong>
+              <div style={{fontSize: 12, color: "var(--text)", marginTop: 2}}>
+                {t("banner.noChannel.desc")}
+              </div>
+            </div>
+          </div>
         ) : (
           <div style={{display: "flex", flexWrap: "wrap", gap: 8}}>
-            {channels.map(function (ch) {
+            {channels.map(function (ch, idx) {
+              const key = (ch.channel_id || "") + ":" + (ch.chat_id || idx);
               return (
-                <div key={ch} style={{display: "flex", alignItems: "center", gap: 6}}>
-                  <span className="api-pill">{ch}</span>
+                <div key={key} style={{display: "flex", alignItems: "center", gap: 6}}>
+                  <span className="api-pill">{formatChannelLabel(ch)}</span>
                   <button className="btn btn-sm" onClick={function () { onSendTest(ch); }}>
                     <Ico name="send"/> {t("settings.channels.send")}
                   </button>
@@ -1576,12 +1901,30 @@ function SettingsForm() {
       </div>
 
       <div className="card">
-        <div style={{display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10}}>
+        <div style={{display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6}}>
           <div className="card-title" style={{margin: 0}}>{t("settings.schedules.title")}</div>
-          <button className="btn btn-sm btn-primary" onClick={onCreateSchedule}>
-            <Ico name="plus"/> {t("settings.schedules.create")}
+          <button className="btn btn-sm" type="button" onClick={openHostScheduler}>
+            {t("settings.schedules.open_host")}
           </button>
         </div>
+        <div className="oa-hint" style={{marginBottom: 10}}>{t("settings.schedules.desc")}</div>
+        <div style={{display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 8, marginBottom: 10}}>
+          {["morning", "noon", "evening", "radar"].map(function (tpl) {
+            return (
+              <button key={tpl}
+                      className="btn"
+                      type="button"
+                      style={{display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 4, padding: "10px 12px", textAlign: "left"}}
+                      onClick={function () { setScheduleDialog(tpl); }}>
+                <span style={{fontWeight: 600}}>
+                  <Ico name={tpl === "radar" ? "target" : "bell"}/> {t("settings.schedules.tpl." + tpl)}
+                </span>
+                <span className="oa-hint" style={{fontSize: 11}}>{t("settings.schedules.tpl." + tpl + ".desc")}</span>
+              </button>
+            );
+          })}
+        </div>
+        <div className="oa-hint" style={{fontSize: 11, marginBottom: 4}}>{t("settings.schedules.read_only")}</div>
         {schedules.length === 0 ? (
           <div className="empty">{t("settings.schedules.none")}</div>
         ) : (
@@ -1593,18 +1936,43 @@ function SettingsForm() {
                   <span className="api-pill">{s.name || s.id}</span>
                   <span style={{fontSize: 11, color: "var(--text-muted)"}}>{s.cron || s.cron_expression || ""}</span>
                   <span style={{flex: 1}}/>
-                  <button className="btn btn-sm btn-danger" onClick={function () { onDeleteSchedule(s); }}>
-                    <Ico name="trash"/> {t("settings.schedules.delete")}
-                  </button>
+                  <span style={{fontSize: 11, color: "var(--text-muted)"}}>{s.channel_id || ""} {s.chat_id ? "· " + s.chat_id : ""}</span>
                 </div>
               );
             })}
           </div>
         )}
+        {scheduleDialog ? (
+          <ScheduleDialog
+            template={scheduleDialog}
+            channels={channels}
+            defaultRulesText={radarRules}
+            onDone={function (ok) {
+              setScheduleDialog(null);
+              if (ok) reloadAll();
+            }}/>
+        ) : null}
       </div>
 
       <div className="card">
-        <div className="card-title">{t("settings.newsnow.title")}</div>
+        <div style={{display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10}}>
+          <div className="card-title" style={{margin: 0}}>{t("settings.newsnow.title")}</div>
+          {newsnowMode !== "off" && (
+            <div style={{display: "flex", gap: 8, alignItems: "center"}}>
+              <button className="btn btn-sm btn-primary"
+                      disabled={savingKey !== ""}
+                      onClick={async function () {
+                        setSavingKey("newsnow");
+                        try {
+                          await persist({"newsnow.mode": newsnowMode, "newsnow.api_url": newsnowUrl});
+                          await onProbeNewsNow();
+                        } finally { setSavingKey(""); }
+                      }}>
+                <Ico name="play"/> {t("settings.newsnow.probe")}
+              </button>
+            </div>
+          )}
+        </div>
         <div style={{marginBottom: 10}}>
           <div className="label">{t("settings.newsnow.step1")}</div>
           <div style={{display: "flex", gap: 6}}>
@@ -1638,37 +2006,21 @@ function SettingsForm() {
                      onChange={function (e) { setCfgField("newsnow.api_url", e.target.value); }}/>
             </div>
             {newsnowMode === "self_host" && (
-              <pre style={{background: "var(--bg-hover)", padding: 10, borderRadius: 6, fontSize: 11, marginTop: 8, overflowX: "auto"}}>
-                {t("settings.newsnow.help.self_host").replace(/\\n/g, "\n")}
-              </pre>
+              <div style={{marginTop: 8}}>
+                <CodeBlock text={t("settings.newsnow.help.self_host")} />
+              </div>
             )}
           </div>
         )}
 
-        {newsnowMode !== "off" && (
-          <div>
-            <div className="label">{t("settings.newsnow.step3")}</div>
-            <div style={{display: "flex", gap: 8, alignItems: "center"}}>
-              <button className="btn btn-primary"
-                      disabled={savingKey !== ""}
-                      onClick={async function () {
-                        setSavingKey("newsnow");
-                        try {
-                          await persist({"newsnow.mode": newsnowMode, "newsnow.api_url": newsnowUrl});
-                          await onProbeNewsNow();
-                        } finally { setSavingKey(""); }
-                      }}>
-                <Ico name="play"/> {t("settings.newsnow.probe")}
-              </button>
-              <span style={{fontSize: 12, color: "var(--text-muted)"}}>{probeMsg}</span>
-            </div>
-          </div>
-        )}
+        {probeMsg ? (
+          <div className="oa-hint" style={{fontSize: 12}}>{probeMsg}</div>
+        ) : null}
       </div>
 
       <div className="card">
         <div className="card-title">{t("settings.llm.title")}</div>
-        <div style={{fontSize: 12, color: "var(--text-muted)"}}>{t("settings.llm.hint")}</div>
+        <div className="oa-hint">{t("settings.llm.hint")}</div>
       </div>
     </div>
   );
@@ -1704,8 +2056,10 @@ function App() {
     return function () { window.removeEventListener("keydown", onKey); };
   }, []);
 
-  const hasAnyChannel = !!(settings.available_channels || []).length;
-  const showChannelBanner = loaded && !hasAnyChannel && TAB_IDS[activeTab] !== "settings";
+  /* The "no IM channel" banner was previously mounted globally on
+     every tab. We now scope it strictly to the Settings → IM channels
+     card (rendered inside SettingsForm), so the Today / Digests /
+     Radar / Ask tabs stay visually clean. */
 
   return (
     <div className="app">
@@ -1730,28 +2084,12 @@ function App() {
           );
         })}
       </div>
-      {showChannelBanner ? (
-        <div className="oa-config-banner" role="alert" style={{margin: "12px 20px 0"}}>
-          <span className="oa-icon oa-config-banner__icon"><Ico name="warn" /></span>
-          <div className="oa-config-banner__text">
-            <strong>{t("banner.noChannel.title")}</strong>
-            <div style={{fontSize: 12, color: "var(--text-muted)", marginTop: 2}}>
-              {t("banner.noChannel.desc")}
-            </div>
-          </div>
-          <button className="oa-config-banner__action" type="button"
-                  onClick={function () { setActiveTab(TAB_IDS.indexOf("settings")); }}>
-            {t("banner.noChannel.cta")}
-            <span className="oa-icon"><Ico name="play" /></span>
-          </button>
-        </div>
-      ) : null}
       <div className="content">
         {activeTab === 0 && <TodayTab />}
         {activeTab === 1 && <DigestsTab />}
         {activeTab === 2 && <RadarTab />}
         {activeTab === 3 && <AskTab />}
-        {activeTab === 4 && <SettingsTab />}
+        {activeTab === 4 && <SettingsTab goToTab={setActiveTab} />}
       </div>
       <ConfirmHost />
     </div>
