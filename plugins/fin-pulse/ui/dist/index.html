@@ -20,31 +20,27 @@
   <link rel="preload" as="script" crossorigin href="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" />
   <link rel="preload" as="script" href="https://unpkg.com/@babel/standalone/babel.min.js" />
   <style>
-    /* ── Theme tokens (macaron-red palette) ──
-       A soft, pastel cherry/rose scheme: primary rose #E86A7B,
-       blush background, burgundy text, peach-coral accents.
-       Semantic success/warning/danger stay recognizable but muted. */
+    /* ── Theme tokens ──
+       Clean white/black base; rose accent (#E86A7B) used only for
+       borders, tab underlines, icons, and button outlines. */
     :root {
-      --bg: #FDF4F5; --bg-card: #FFFFFF; --bg-hover: #FBE5E9;
-      /* Darker muted/dim pair so hint text, inactive tab labels and
-         empty states remain readable on blush backgrounds (≥ 4.5:1
-         contrast against --bg-card and --bg-hover). */
-      --text: #4A1E27; --text-muted: #5E3540; --text-dim: #7A4E59;
+      --bg: #FFFFFF; --bg-card: #FFFFFF; --bg-hover: #F7F8FA;
+      --text: #1a1a1a; --text-muted: #64748b; --text-dim: #94a3b8;
       --primary: #E86A7B; --primary-hover: #D14D62;
       --primary-soft: #FBCFD4;
-      --success: #5EA882; --warning: #E8A660; --danger: #B92E44;
-      --border: #F3D5DB; --radius: 8px;
+      --success: #16a34a; --warning: #f59e0b; --danger: #ef4444;
+      --border: #e2e8f0; --radius: 8px;
     }
     [data-theme="dark"] {
-      --bg: #2B1821; --bg-card: #3D2430; --bg-hover: #4D3240;
-      --text: #FBE7EB; --text-muted: #E2B9C3; --text-dim: #B28895;
-      --border: #4F2F3C;
+      --bg: #0f172a; --bg-card: #1e293b; --bg-hover: #334155;
+      --text: #f1f5f9; --text-muted: #94a3b8; --text-dim: #64748b;
+      --border: #334155;
     }
     @media (prefers-color-scheme: dark) {
       :root:not([data-theme="light"]) {
-        --bg: #2B1821; --bg-card: #3D2430; --bg-hover: #4D3240;
-        --text: #FBE7EB; --text-muted: #E2B9C3; --text-dim: #B28895;
-        --border: #4F2F3C;
+        --bg: #0f172a; --bg-card: #1e293b; --bg-hover: #334155;
+        --text: #f1f5f9; --text-muted: #94a3b8; --text-dim: #64748b;
+        --border: #334155;
       }
     }
     /* ── Reset + typography ── */
@@ -113,7 +109,7 @@
     }
     .oa-section-title::before {
       content: ""; width: 4px; height: 18px; border-radius: 2px;
-      background: linear-gradient(180deg, var(--primary) 0%, #F8B4C0 100%);
+      background: var(--primary);
       display: inline-block;
     }
     .oa-section-title__count {
