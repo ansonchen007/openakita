@@ -14,10 +14,13 @@ Sections:
   with bilingual operator hints, aligned to ``footage-gate`` /
   ``avatar-studio`` / ``subtitle-craft`` so the host task-detail panel
   renders one uniform badge.
-* :data:`SOURCE_DEFS` — the eight finance-first sources plus the
-  generic RSS aggregator slot and the optional NewsNow enhancer.
+* :data:`SOURCE_DEFS` — finance sources spanning three *kinds*
+  (``newsnow`` / ``direct`` / ``rss``), each annotated with a
+  ``content_type`` and an optional ``newsnow_id``.
   ``source_id`` is the primary key used by ``articles.source_id`` and
   the ``config['source.{id}.last_ok']`` health probe keys.
+* :data:`FRESHNESS_DEFAULTS` — per-content-type maximum article age
+  in hours; sources may override with an explicit ``max_age_hours``.
 * :data:`SESSIONS` — ``morning`` / ``noon`` / ``evening`` labels for the
   ``daily_brief`` mode; the :data:`DEFAULT_CRONS` map ships the
   Mon-Fri defaults surfaced in the Settings → Schedules section.
@@ -147,60 +150,168 @@ ERROR_HINTS: Final[dict[str, dict[str, list[str]]]] = {
 ERROR_KINDS: Final[tuple[str, ...]] = tuple(ERROR_HINTS.keys())
 
 
+# ── Content-type freshness defaults (hours) ──────────────────────────────
+
+FRESHNESS_DEFAULTS: Final[dict[str, int]] = {
+    "flash": 12,
+    "news": 72,
+    "hot_stock": 4,
+    "policy": 168,
+    "filing": 168,
+    "data": 168,
+    "custom": 72,
+}
+
+CONTENT_TYPES: Final[tuple[str, ...]] = tuple(FRESHNESS_DEFAULTS.keys())
+
+
 # ── Data sources ─────────────────────────────────────────────────────────
 #
-# Eight prime finance sources ship enabled by default; the generic RSS
-# aggregator is on by default with an empty feed list; NewsNow is off by
-# default and surfaces a Settings wizard (§11.7 of the plan).
+# Each entry carries:
+#   kind          – "newsnow" | "direct" | "rss"
+#   content_type  – one of CONTENT_TYPES
+#   newsnow_id    – upstream NewsNow channel id (only for kind=newsnow)
+#   max_age_hours – per-source freshness override (0 = use FRESHNESS_DEFAULTS)
 
 
 SOURCE_DEFS: Final[dict[str, dict[str, object]]] = {
+    # ── NewsNow: Chinese finance core ────────────────────────────────
     "wallstreetcn": {
         "display_zh": "华尔街见闻",
         "display_en": "WallStreet CN",
-        "kind": "rss_first",
+        "kind": "newsnow",
+        "content_type": "flash",
+        "newsnow_id": "wallstreetcn",
         "default_enabled": True,
+        "homepage": "https://wallstreetcn.com/",
+    },
+    "wallstreetcn-news": {
+        "display_zh": "华尔街见闻·新闻",
+        "display_en": "WallStreet CN News",
+        "kind": "newsnow",
+        "content_type": "news",
+        "newsnow_id": "wallstreetcn-news",
+        "default_enabled": False,
         "homepage": "https://wallstreetcn.com/",
     },
     "cls": {
         "display_zh": "财联社电报",
-        "display_en": "CLS Telegram",
-        "kind": "api",
+        "display_en": "CLS Telegraph",
+        "kind": "newsnow",
+        "content_type": "flash",
+        "newsnow_id": "cls",
         "default_enabled": True,
         "homepage": "https://www.cls.cn/telegraph",
     },
-    "xueqiu": {
-        "display_zh": "雪球热帖",
-        "display_en": "XueQiu Hot",
-        "kind": "rss",
-        "default_enabled": True,
-        "homepage": "https://xueqiu.com/hots/rss",
+    "cls-depth": {
+        "display_zh": "财联社·深度",
+        "display_en": "CLS In-depth",
+        "kind": "newsnow",
+        "content_type": "news",
+        "newsnow_id": "cls-depth",
+        "default_enabled": False,
+        "homepage": "https://www.cls.cn/",
     },
+    "jin10": {
+        "display_zh": "金十数据",
+        "display_en": "Jin10",
+        "kind": "newsnow",
+        "content_type": "flash",
+        "newsnow_id": "jin10",
+        "default_enabled": True,
+        "homepage": "https://www.jin10.com/",
+    },
+    "gelonghui": {
+        "display_zh": "格隆汇",
+        "display_en": "Gelonghui",
+        "kind": "newsnow",
+        "content_type": "news",
+        "newsnow_id": "gelonghui",
+        "default_enabled": True,
+        "homepage": "https://www.gelonghui.com/",
+    },
+    "xueqiu-hotstock": {
+        "display_zh": "雪球·热门股票",
+        "display_en": "Xueqiu Hot Stocks",
+        "kind": "newsnow",
+        "content_type": "hot_stock",
+        "newsnow_id": "xueqiu-hotstock",
+        "default_enabled": True,
+        "homepage": "https://xueqiu.com/",
+    },
+    "fastbull": {
+        "display_zh": "快牛快讯",
+        "display_en": "Fastbull Express",
+        "kind": "newsnow",
+        "content_type": "flash",
+        "newsnow_id": "fastbull",
+        "default_enabled": False,
+        "homepage": "https://www.fastbull.com/",
+    },
+    "mktnews": {
+        "display_zh": "市场新闻",
+        "display_en": "MktNews",
+        "kind": "newsnow",
+        "content_type": "flash",
+        "newsnow_id": "mktnews",
+        "default_enabled": False,
+        "homepage": "https://mktnews.net/",
+    },
+    # ── Direct fetchers ──────────────────────────────────────────────
     "eastmoney": {
-        "display_zh": "东方财富快讯",
-        "display_en": "EastMoney News",
-        "kind": "api",
+        "display_zh": "东方财富",
+        "display_en": "EastMoney",
+        "kind": "direct",
+        "content_type": "news",
         "default_enabled": True,
         "homepage": "https://www.eastmoney.com/",
     },
     "pbc_omo": {
         "display_zh": "央行公开市场",
         "display_en": "PBC OMO",
-        "kind": "html_execjs",
+        "kind": "direct",
+        "content_type": "policy",
         "default_enabled": True,
         "homepage": "http://www.pbc.gov.cn/",
     },
+    "yicai": {
+        "display_zh": "第一财经",
+        "display_en": "Yicai",
+        "kind": "direct",
+        "content_type": "news",
+        "default_enabled": True,
+        "homepage": "https://www.yicai.com/",
+    },
+    "nbd": {
+        "display_zh": "每日经济新闻",
+        "display_en": "National Business Daily",
+        "kind": "direct",
+        "content_type": "news",
+        "default_enabled": True,
+        "homepage": "https://www.nbd.com.cn/",
+    },
+    "stcn": {
+        "display_zh": "证券时报",
+        "display_en": "Securities Times",
+        "kind": "direct",
+        "content_type": "news",
+        "default_enabled": True,
+        "homepage": "https://www.stcn.com/",
+    },
+    # ── RSS / institutional ──────────────────────────────────────────
     "nbs": {
         "display_zh": "国家统计局",
         "display_en": "NBS of China",
-        "kind": "rss_first",
+        "kind": "rss",
+        "content_type": "data",
         "default_enabled": True,
         "homepage": "https://www.stats.gov.cn/",
     },
     "fed_fomc": {
         "display_zh": "美联储 FOMC",
         "display_en": "Fed FOMC",
-        "kind": "calendar_html",
+        "kind": "rss",
+        "content_type": "policy",
         "default_enabled": True,
         "homepage": "https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm",
     },
@@ -208,6 +319,7 @@ SOURCE_DEFS: Final[dict[str, dict[str, object]]] = {
         "display_zh": "美国 SEC EDGAR",
         "display_en": "SEC EDGAR",
         "kind": "rss",
+        "content_type": "filing",
         "default_enabled": True,
         "homepage": "https://www.sec.gov/cgi-bin/browse-edgar",
     },
@@ -215,21 +327,27 @@ SOURCE_DEFS: Final[dict[str, dict[str, object]]] = {
         "display_zh": "自定义 RSS",
         "display_en": "Custom RSS",
         "kind": "rss",
+        "content_type": "custom",
         "default_enabled": True,
         "homepage": "",
-    },
-    "newsnow": {
-        "display_zh": "NewsNow 聚合",
-        "display_en": "NewsNow Aggregator",
-        "kind": "newsnow",
-        # Public aggregator is on by default; the pipeline enforces a
-        # 5-minute floor so we never hammer the volunteer-run node.
-        "default_enabled": True,
-        "homepage": "https://github.com/ourongxing/newsnow",
     },
 }
 
 SOURCE_IDS: Final[tuple[str, ...]] = tuple(SOURCE_DEFS.keys())
+
+
+def get_max_age_hours(source_id: str) -> int:
+    """Return the freshness ceiling for *source_id* in hours.
+
+    Per-source ``max_age_hours`` wins; falls back to the content-type
+    default from :data:`FRESHNESS_DEFAULTS`.
+    """
+    defn = SOURCE_DEFS.get(source_id, {})
+    explicit = defn.get("max_age_hours")
+    if isinstance(explicit, int) and explicit > 0:
+        return explicit
+    ct = defn.get("content_type", "news")
+    return FRESHNESS_DEFAULTS.get(ct, 72)  # type: ignore[arg-type]
 
 
 # ── Scoring scale (Horizon-style 0-10) ───────────────────────────────────
@@ -246,13 +364,16 @@ SCORE_THRESHOLDS: Final[dict[str, float]] = {
 
 
 __all__ = [
+    "CONTENT_TYPES",
     "DEFAULT_CRONS",
     "ERROR_HINTS",
     "ERROR_KINDS",
+    "FRESHNESS_DEFAULTS",
     "MODE_IDS",
     "MODES",
     "SCORE_THRESHOLDS",
     "SESSIONS",
     "SOURCE_DEFS",
     "SOURCE_IDS",
+    "get_max_age_hours",
 ]

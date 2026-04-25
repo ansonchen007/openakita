@@ -25,7 +25,7 @@ from finpulse_errors import map_exception
 from finpulse_fetchers import SOURCE_REGISTRY, get_fetcher
 from finpulse_fetchers.base import FetchReport, NormalizedItem
 from finpulse_frequency import FrequencyMatcher, compile_matcher
-from finpulse_models import SESSIONS, SOURCE_DEFS
+from finpulse_models import SESSIONS, SOURCE_DEFS, get_max_age_hours
 from finpulse_report import build_daily_brief
 
 if TYPE_CHECKING:
@@ -71,12 +71,13 @@ def _newsnow_rate_limit_remaining(cfg: dict[str, str]) -> float:
 async def _resolve_enabled_sources(
     tm: FinpulseTaskManager, *, include: list[str] | None = None
 ) -> list[str]:
-    """Read enabled-source flags from config, intersected with ``include``.
+    """Return source IDs for enabled direct/rss fetchers.
 
-    ``include == None`` → every registered source whose
-    ``config['source.{id}.enabled']`` is ``"true"`` is returned.
-    Passing ``include`` restricts the run to the named subset (still
-    requiring the enabled flag).
+    NewsNow-backed sources (``kind=="newsnow"`` in SOURCE_DEFS) are NOT
+    returned here — they are handled internally by :class:`NewsNowFetcher`.
+    This function only returns sources that have an entry in
+    :data:`SOURCE_REGISTRY` (direct + rss + the unified ``newsnow``
+    aggregator entry).
     """
     cfg = await tm.get_all_config()
     sources: list[str] = []
@@ -84,24 +85,29 @@ async def _resolve_enabled_sources(
     for source_id in universe:
         if source_id not in SOURCE_REGISTRY:
             continue
-        if cfg.get(f"source.{source_id}.enabled", "false") != "true":
+        enabled_val = cfg.get(f"source.{source_id}.enabled", "")
+        if enabled_val == "":
+            defn = SOURCE_DEFS.get(source_id, {})
+            if not defn.get("default_enabled"):
+                continue
+        elif enabled_val.lower() != "true":
             continue
         sources.append(source_id)
     return sources
 
 
-# CN hot-list sources that tap the NewsNow aggregator first. Enabling
-# any of them auto-lifts ``newsnow.mode`` to ``"public"`` for the run so
-# the hybrid path works out of the box (still honouring the 300s floor).
-# ``eastmoney`` is NOT in this set: NewsNow consistently answers
-# ``{error:true, message:"Invalid source id"}`` for every eastmoney
-# variant, so the eastmoney fetcher goes direct (HTML scrape of the
-# "证券聚焦" rolling page) and skips NewsNow by default. The
-# ``source.eastmoney.prefer_newsnow="true"`` knob flips the route back
-# for operators who run a self-hosted NewsNow that does expose it.
-_NEWSNOW_BACKED_CN_SOURCES: frozenset[str] = frozenset(
-    {"wallstreetcn", "cls", "xueqiu"}
-)
+def _has_any_newsnow_source_enabled(cfg: dict[str, str]) -> bool:
+    """Check if at least one ``kind=newsnow`` source is enabled."""
+    for sid, defn in SOURCE_DEFS.items():
+        if defn.get("kind") != "newsnow":
+            continue
+        val = cfg.get(f"source.{sid}.enabled", "")
+        if val == "":
+            if defn.get("default_enabled"):
+                return True
+        elif val.lower() == "true":
+            return True
+    return False
 
 
 async def _fetch_one(
@@ -231,13 +237,11 @@ async def ingest(
             )
         return summary_empty
 
-    # CN hot-list sources default to the NewsNow aggregator (TrendRadar
-    # pattern). If any of them is enabled, lift ``newsnow.mode`` in memory
-    # to ``"public"`` for this run so the hybrid fetchers can reach the
-    # aggregator even when the user never opened the Settings wizard.
-    # This DOES NOT persist to config — the wizard remains the single
-    # source of truth for long-term preference.
-    if any(sid in _NEWSNOW_BACKED_CN_SOURCES for sid in enabled):
+    # If any NewsNow-backed source is enabled, ensure the aggregator
+    # mode is active for this run. The NewsNowFetcher reads its channels
+    # from SOURCE_DEFS at runtime, so we only need to guarantee the mode
+    # and URL are set. This does NOT persist to config.
+    if _has_any_newsnow_source_enabled(cfg):
         mode = (cfg.get("newsnow.mode") or "off").strip().lower()
         if mode == "off":
             cfg["newsnow.mode"] = "public"
@@ -245,6 +249,8 @@ async def ingest(
             from finpulse_fetchers.newsnow_base import DEFAULT_NEWSNOW_URL
 
             cfg["newsnow.api_url"] = DEFAULT_NEWSNOW_URL
+        if "newsnow" not in enabled:
+            enabled.append("newsnow")
 
     since: datetime | None = None
     if since_hours:
@@ -359,6 +365,18 @@ async def ingest(
             ),
             "retry_after_s": int(newsnow_skip_remaining),
         }
+
+    stale_cutoffs: dict[str, str] = {}
+    now_ts = datetime.now(timezone.utc)
+    for sid in SOURCE_DEFS:
+        max_h = get_max_age_hours(sid)
+        cutoff = datetime.fromtimestamp(
+            now_ts.timestamp() - max_h * 3600, tz=timezone.utc
+        ).strftime("%Y-%m-%dT%H:%M:%SZ")
+        stale_cutoffs[sid] = cutoff
+    stale_count = await tm.mark_stale_articles(stale_cutoffs)
+    if stale_count:
+        summary["totals"]["marked_stale"] = stale_count
 
     if updates:
         await tm.set_configs(updates)
