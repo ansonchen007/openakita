@@ -63,6 +63,18 @@ _ADMIN_TOOL_NAMES = frozenset({
     "add_memory",
     "list_directory",
 })
+
+
+def _tool_rate_limit_key(tool_name: str, tool_args: Any) -> str:
+    """Key repeated-tool throttling by the actual invocation, not just tool name."""
+    try:
+        param_str = json.dumps(tool_args, sort_keys=True, ensure_ascii=False, default=str)
+    except Exception:
+        param_str = str(tool_args)
+    param_hash = hashlib.md5(param_str.encode()).hexdigest()[:8]
+    return f"{tool_name}({param_hash})"
+
+
 from .token_tracking import TokenTrackingContext, reset_tracking_context, set_tracking_context
 from .tool_executor import ToolExecutor
 
@@ -1694,17 +1706,22 @@ class ReasoningEngine:
                     _tc_args = tc.get("input", tc.get("arguments", {}))
                     await _emit_progress(f"🔧 {self._describe_tool_call(_tc_name, _tc_args)}")
 
-                # 同名工具频率限制：超阈值的调用跳过执行，返回提示
+                # Exact invocation frequency limit: repeated identical calls are skipped.
+                # Counting only by tool name incorrectly blocks normal progress updates
+                # such as update_todo_step(step_1), update_todo_step(step_2), ...
                 _all_tool_calls = list(decision.tool_calls or [])
                 _rate_limited_by_id: dict[str, dict] = {}
                 _calls_to_execute = []
                 for tc in _all_tool_calls:
                     _tc_name = self._tool_executor.canonicalize_tool_name(tc.get("name", ""))
-                    _tool_call_counter[_tc_name] = _tool_call_counter.get(_tc_name, 0) + 1
-                    if _tool_call_counter[_tc_name] > _MAX_SAME_TOOL_PER_TASK:
+                    _tc_args = tc.get("input", tc.get("arguments", {}))
+                    _tc_key = _tool_rate_limit_key(_tc_name, _tc_args)
+                    _tool_call_counter[_tc_key] = _tool_call_counter.get(_tc_key, 0) + 1
+                    if _tool_call_counter[_tc_key] > _MAX_SAME_TOOL_PER_TASK:
                         logger.warning(
-                            f"[RateLimit] Tool '{_tc_name}' called "
-                            f"{_tool_call_counter[_tc_name]} times (limit={_MAX_SAME_TOOL_PER_TASK}), "
+                            f"[RateLimit] Tool invocation '{_tc_key}' called "
+                            f"{_tool_call_counter[_tc_key]} times "
+                            f"(limit={_MAX_SAME_TOOL_PER_TASK}), "
                             f"skipping execution"
                         )
                         _rate_limited_by_id[tc.get("id", "")] = {
@@ -1712,7 +1729,7 @@ class ReasoningEngine:
                             "tool_use_id": tc.get("id", ""),
                             "content": (
                                 f"[系统] 工具 {_tc_name} 已在本任务中调用 "
-                                f"{_tool_call_counter[_tc_name] - 1} 次，已达上限。"
+                                f"{_tool_call_counter[_tc_key] - 1} 次，已达上限。"
                                 f"请整合操作或继续下一步。"
                             ),
                         }
@@ -3267,17 +3284,19 @@ class ReasoningEngine:
                         tool_args = tc.get("input", tc.get("arguments", {}))
                         tool_id = tc.get("id", str(uuid.uuid4()))
 
-                        # 同名工具频率限制
-                        _tool_call_counter[tool_name] = _tool_call_counter.get(tool_name, 0) + 1
-                        if _tool_call_counter[tool_name] > _MAX_SAME_TOOL_PER_TASK:
+                        # Exact invocation frequency limit: same tool with different
+                        # arguments is valid progress, especially for todo step updates.
+                        _tool_key = _tool_rate_limit_key(tool_name, tool_args)
+                        _tool_call_counter[_tool_key] = _tool_call_counter.get(_tool_key, 0) + 1
+                        if _tool_call_counter[_tool_key] > _MAX_SAME_TOOL_PER_TASK:
                             logger.warning(
-                                f"[RateLimit] Tool '{tool_name}' called "
-                                f"{_tool_call_counter[tool_name]} times "
+                                f"[RateLimit] Tool invocation '{_tool_key}' called "
+                                f"{_tool_call_counter[_tool_key]} times "
                                 f"(limit={_MAX_SAME_TOOL_PER_TASK}), skipping"
                             )
                             _rl_msg = (
                                 f"[系统] 工具 {tool_name} 已在本任务中调用 "
-                                f"{_tool_call_counter[tool_name] - 1} 次，已达上限。"
+                                f"{_tool_call_counter[_tool_key] - 1} 次，已达上限。"
                                 f"请整合操作或继续下一步。"
                             )
                             yield {
