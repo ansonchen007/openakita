@@ -573,12 +573,54 @@ class Plugin(PluginBase):
                     "display_zh": str(meta.get("display_zh") or sid),
                     "display_en": str(meta.get("display_en") or sid),
                     "kind": str(meta.get("kind") or ""),
+                    "content_type": str(meta.get("content_type") or "news"),
+                    "newsnow_id": str(meta.get("newsnow_id") or ""),
                     "default_enabled": bool(meta.get("default_enabled")),
                     "homepage": str(meta.get("homepage") or ""),
                 }
                 for sid, meta in SOURCE_DEFS.items()
             ]
             return {"ok": True, "items": items}
+
+        @router.post("/sources/probe-rss")
+        async def probe_rss(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+            """Fetch a single RSS/Atom URL and return parse result."""
+            url = (payload.get("url") or "").strip()
+            if not url:
+                raise HTTPException(status_code=400, detail="url_required")
+            try:
+                from finpulse_fetchers.rss import parse_feed  # type: ignore
+                import httpx
+            except ImportError as exc:
+                raise HTTPException(
+                    status_code=500, detail="rss_module_unavailable"
+                ) from exc
+            try:
+                async with httpx.AsyncClient(
+                    timeout=httpx.Timeout(15, connect=8),
+                    follow_redirects=True,
+                ) as client:
+                    resp = await client.get(url, headers={
+                        "User-Agent": "Mozilla/5.0 (compatible; FinPulse/1.0)"
+                    })
+                    resp.raise_for_status()
+                    items = parse_feed("_probe", resp.text)
+                    return {
+                        "ok": True,
+                        "count": len(items),
+                        "sample": [
+                            {"title": it.title or "", "url": it.url or ""}
+                            for it in items[:3]
+                        ],
+                    }
+            except httpx.HTTPStatusError as exc:
+                return {
+                    "ok": False,
+                    "error": f"http_{exc.response.status_code}",
+                    "detail": str(exc),
+                }
+            except Exception as exc:  # noqa: BLE001
+                return {"ok": False, "error": "parse_failed", "detail": str(exc)}
 
         @router.get("/config")
         async def get_config() -> dict[str, Any]:

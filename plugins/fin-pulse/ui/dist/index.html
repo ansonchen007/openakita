@@ -339,6 +339,97 @@
       padding: 18px; max-width: 360px;
     }
     .confirm-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+    /* ── Collapsible ── */
+    .coll { border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 8px; background: var(--bg-card); }
+    .coll-head {
+      display: flex; align-items: center; gap: 8px;
+      padding: 10px 14px; cursor: pointer; user-select: none;
+    }
+    .coll-head:hover { background: var(--bg-hover); border-radius: var(--radius); }
+    .coll-head__arrow {
+      display: inline-flex; transition: transform .2s; font-size: 10px;
+      color: var(--text-muted);
+    }
+    .coll--open > .coll-head > .coll-head__arrow { transform: rotate(90deg); }
+    .coll-head__title { font-size: 13px; font-weight: 600; color: var(--text); flex: 1; }
+    .coll-head__badge {
+      font-size: 11px; color: var(--text-muted); background: var(--bg-hover);
+      padding: 1px 8px; border-radius: 999px;
+    }
+    .coll-body { padding: 0 14px 12px; }
+    /* ── Source row ── */
+    .source-row {
+      display: flex; align-items: center; gap: 8px;
+      padding: 7px 0; border-bottom: 1px solid var(--border);
+    }
+    .source-row:last-child { border-bottom: none; }
+    .source-row--disabled { opacity: .5; }
+    .source-row__name { font-size: 13px; font-weight: 500; color: var(--text); min-width: 0; }
+    .source-row__spacer { flex: 1; min-width: 8px; }
+    /* ── Toggle switch ── */
+    .switch {
+      position: relative; width: 34px; height: 18px; flex-shrink: 0;
+      background: var(--border); border-radius: 999px;
+      cursor: pointer; transition: background .2s;
+    }
+    .switch--on { background: var(--primary); }
+    .switch__knob {
+      position: absolute; top: 2px; left: 2px;
+      width: 14px; height: 14px; border-radius: 50%;
+      background: #fff; transition: left .2s;
+    }
+    .switch--on .switch__knob { left: 18px; }
+    /* ── Content-type pill ── */
+    .ct-pill {
+      display: inline-flex; align-items: center;
+      padding: 1px 8px; border-radius: 999px;
+      font-size: 11px; font-weight: 500;
+    }
+    .ct-pill--flash { background: rgba(239,68,68,.12); color: #dc2626; }
+    .ct-pill--news { background: rgba(59,130,246,.12); color: #2563eb; }
+    .ct-pill--hot_stock { background: rgba(245,158,11,.12); color: #d97706; }
+    .ct-pill--policy { background: rgba(139,92,246,.12); color: #7c3aed; }
+    .ct-pill--filing { background: rgba(107,114,128,.12); color: #4b5563; }
+    .ct-pill--data { background: rgba(16,185,129,.12); color: #059669; }
+    .ct-pill--custom { background: rgba(99,102,241,.12); color: #4f46e5; }
+    /* ── Source status dot ── */
+    .source-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+    .source-dot--ok { background: var(--success); }
+    .source-dot--err { background: var(--danger); }
+    .source-dot--unknown { background: var(--border); }
+    /* ── Bing RSS builder ── */
+    .bing-builder { padding: 10px 0; }
+    .bing-builder__row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    .bing-builder__preview {
+      font-size: 11px; color: var(--text-muted); word-break: break-all;
+      margin-top: 6px; padding: 6px 10px;
+      background: var(--bg-hover); border-radius: 6px;
+    }
+    /* ── Custom source add form ── */
+    .custom-add-form { display: flex; flex-direction: column; gap: 8px; padding: 10px 0; }
+    .custom-add-form__row { display: flex; gap: 8px; align-items: center; }
+    /* ── Section wrapper (vertical-line title) ── */
+    .oa-settings-section { margin-bottom: 16px; }
+    .oa-settings-section__title {
+      font-size: 14px; font-weight: 600; color: var(--text);
+      display: flex; align-items: center; gap: 8px; margin-bottom: 12px;
+    }
+    .oa-settings-section__title::before {
+      content: ""; width: 3px; height: 16px; background: var(--primary);
+      border-radius: 1px; display: inline-block;
+    }
+    /* ── NewsNow status bar ── */
+    .nn-status-bar {
+      display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+      padding: 8px 12px; margin-bottom: 10px;
+      background: rgba(245,158,11,.08); border: 1px solid rgba(245,158,11,.2);
+      border-radius: var(--radius); font-size: 12px; color: var(--text);
+    }
+    .nn-status-bar__pill {
+      display: inline-flex; align-items: center; gap: 4px;
+      padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 500;
+      background: rgba(245,158,11,.15); color: #d97706;
+    }
   </style>
   <script>
     /* Apply saved theme before React mounts to avoid a FOUC flash. */
@@ -482,8 +573,41 @@ const I18N_DICT = {
     "ask.copy.prompt": "复制自然语言 Prompt",
     "ask.copy.schema": "复制 JSON 样例",
     "ask.copied": "已复制",
-    "settings.sources.title": "数据源健康",
+    "settings.sources.title": "数据源管理",
     "settings.sources.ingest": "手动抓取",
+    "settings.sources.cat.direct": "直连与 RSS 源",
+    "settings.sources.cat.custom": "自定义来源",
+    "settings.sources.cat.newsnow": "NewsNow 聚合源",
+    "settings.sources.count": "{n} 个源",
+    "settings.sources.probe": "检测",
+    "settings.sources.probing": "检测中…",
+    "settings.sources.probe.ok": "可用 · {n} 条",
+    "settings.sources.probe.fail": "不可用",
+    "settings.sources.probeAll": "全部检测",
+    "settings.sources.ct.flash": "快讯",
+    "settings.sources.ct.news": "新闻",
+    "settings.sources.ct.hot_stock": "热股",
+    "settings.sources.ct.policy": "政策",
+    "settings.sources.ct.filing": "备案",
+    "settings.sources.ct.data": "数据",
+    "settings.sources.ct.custom": "自定义",
+    "settings.sources.custom.bing.title": "Bing 新闻 RSS",
+    "settings.sources.custom.bing.placeholder": "输入搜索关键词，如：科技 编程",
+    "settings.sources.custom.bing.add": "添加此 Bing RSS",
+    "settings.sources.custom.add": "+ 添加自定义 RSS",
+    "settings.sources.custom.name": "来源名称",
+    "settings.sources.custom.url": "RSS 地址",
+    "settings.sources.custom.name.placeholder": "自定义来源名称",
+    "settings.sources.custom.url.placeholder": "https://example.com/feed.xml",
+    "settings.sources.custom.save": "保存",
+    "settings.sources.custom.cancel": "取消",
+    "settings.sources.custom.delete": "删除",
+    "settings.sources.custom.delete.confirm": "确认删除此自定义来源？",
+    "settings.sources.custom.empty": "暂无自定义来源",
+    "settings.sources.nn.warn": "公共服务由开源作者自费维护（v0.0.39），已默认开启；最小抓取间隔 {floor} 秒，避免过载。",
+    "settings.sources.nn.mode": "模式",
+    "settings.sources.nn.floor": "最小间隔",
+    "settings.sources.nn.floor.unit": "秒",
     "settings.channels.title": "IM 推送渠道",
     "settings.channels.none": "未在宿主中注册任何 IM 适配器，推送将不可用。",
     "settings.channels.send": "发送测试消息",
@@ -677,8 +801,41 @@ const I18N_DICT = {
     "ask.copy.prompt": "Copy NL prompt",
     "ask.copy.schema": "Copy JSON sample",
     "ask.copied": "Copied",
-    "settings.sources.title": "Source health",
+    "settings.sources.title": "Source Management",
     "settings.sources.ingest": "Manual ingest",
+    "settings.sources.cat.direct": "Direct & RSS Sources",
+    "settings.sources.cat.custom": "Custom Sources",
+    "settings.sources.cat.newsnow": "NewsNow Aggregated",
+    "settings.sources.count": "{n} sources",
+    "settings.sources.probe": "Probe",
+    "settings.sources.probing": "Probing…",
+    "settings.sources.probe.ok": "OK · {n} items",
+    "settings.sources.probe.fail": "Unavailable",
+    "settings.sources.probeAll": "Probe all",
+    "settings.sources.ct.flash": "Flash",
+    "settings.sources.ct.news": "News",
+    "settings.sources.ct.hot_stock": "Hot Stock",
+    "settings.sources.ct.policy": "Policy",
+    "settings.sources.ct.filing": "Filing",
+    "settings.sources.ct.data": "Data",
+    "settings.sources.ct.custom": "Custom",
+    "settings.sources.custom.bing.title": "Bing News RSS",
+    "settings.sources.custom.bing.placeholder": "Enter search keywords, e.g.: tech programming",
+    "settings.sources.custom.bing.add": "Add this Bing RSS",
+    "settings.sources.custom.add": "+ Add Custom RSS",
+    "settings.sources.custom.name": "Source name",
+    "settings.sources.custom.url": "RSS URL",
+    "settings.sources.custom.name.placeholder": "Custom source name",
+    "settings.sources.custom.url.placeholder": "https://example.com/feed.xml",
+    "settings.sources.custom.save": "Save",
+    "settings.sources.custom.cancel": "Cancel",
+    "settings.sources.custom.delete": "Delete",
+    "settings.sources.custom.delete.confirm": "Delete this custom source?",
+    "settings.sources.custom.empty": "No custom sources yet",
+    "settings.sources.nn.warn": "Public service maintained at author's cost (v0.0.39), enabled by default; min fetch interval {floor}s to prevent overload.",
+    "settings.sources.nn.mode": "Mode",
+    "settings.sources.nn.floor": "Min interval",
+    "settings.sources.nn.floor.unit": "sec",
     "settings.channels.title": "IM channels",
     "settings.channels.none": "No IM adapter registered in the host. Dispatch will be unavailable.",
     "settings.channels.send": "Send test message",
@@ -1119,22 +1276,8 @@ function copyText(text) {
   } catch (_) {}
 }
 
-/* Known source ids — must match finpulse_models.SOURCE_DEFS exactly.
-   Only used as a fallback when GET /sources is unavailable (e.g. the
-   first paint before the response lands). TodayTab fetches the live
-   list and overrides this. */
-const KNOWN_SOURCES = [
-  { id: "wallstreetcn", name: "华尔街见闻" },
-  { id: "cls", name: "财联社电报" },
-  { id: "xueqiu", name: "雪球热帖" },
-  { id: "eastmoney", name: "东方财富快讯" },
-  { id: "pbc_omo", name: "央行公开市场" },
-  { id: "nbs", name: "国家统计局" },
-  { id: "fed_fomc", name: "美联储 FOMC" },
-  { id: "sec_edgar", name: "美国 SEC EDGAR" },
-  { id: "rss_generic", name: "自定义 RSS" },
-  { id: "newsnow", name: "NewsNow 聚合" },
-];
+/* Source definitions are loaded dynamically from GET /sources.
+   Content-type labels use i18n keys: settings.sources.ct.{type}. */
 
 /* ── Ingest drawer helpers + component ───────────────────────────
    The drawer renders the per-source breakdown returned by
@@ -1287,7 +1430,7 @@ function TodayTab() {
   const [loading, setLoading] = useState(false);
   const [filters, setFilters] = useState({ source: "", window: 24, minScore: 0, sort: "time" });
   const [ingesting, setIngesting] = useState(false);
-  const [sources, setSources] = useState(KNOWN_SOURCES);
+  const [sources, setSources] = useState([]);
   /* Most recent ingest summary (null = never ran). Shape:
      {mode: "all"|"single", sourceId: string|null, totals, by_source, task_id}.
      The inline drawer reads this; onIngest writes it. */
@@ -2344,18 +2487,76 @@ function ScheduleDialog(props) {
   );
 }
 
-/* ── Settings Form — sources, channels (with in-card no-channel banner
-   + explicit refresh button), templated schedules (with full in-page
-   run/pause/delete actions), NewsNow 3-stage wizard, LLM hint.
-   We never redirect to the host SchedulerView — row actions talk to
-   the host scheduler REST API directly via the plugin bridge. */
+/* ── Reusable sub-components for the Settings data-source area ──── */
 
-/* Public NewsNow upstream — hard-coded so users never need to hunt for
-   the URL. Keeps the pipeline's 5-minute floor paired with a stable
-   node reference. Change both here and finpulse_task_manager._seed_default_config
-   if upstream ever moves. */
 const NEWSNOW_PUBLIC_URL = "https://newsnow.busiyi.world/api/s";
 const NEWSNOW_PUBLIC_MIN_INTERVAL_S = 300;
+
+function Collapsible(props) {
+  const [open, setOpen] = useState(!!props.defaultOpen);
+  return (
+    <div className={"coll" + (open ? " coll--open" : "")}>
+      <div className="coll-head" onClick={function () { setOpen(!open); }}>
+        <span className="coll-head__arrow">▶</span>
+        <span className="coll-head__title">{props.title}</span>
+        {props.badge != null && <span className="coll-head__badge">{props.badge}</span>}
+        {props.extra || null}
+      </div>
+      {open && <div className="coll-body">{props.children}</div>}
+    </div>
+  );
+}
+
+function ToggleSwitch(props) {
+  return (
+    <span className={"switch" + (props.on ? " switch--on" : "")}
+          onClick={props.onChange}
+          title={props.on ? "Enabled" : "Disabled"}>
+      <span className="switch__knob"/>
+    </span>
+  );
+}
+
+function ContentTypePill(props) {
+  const t = useT();
+  var ct = props.type || "news";
+  var label = t("settings.sources.ct." + ct) || ct;
+  return <span className={"ct-pill ct-pill--" + ct}>{label}</span>;
+}
+
+function SourceRow(props) {
+  var s = props.source;
+  var t = useT();
+  var enabled = props.enabled;
+  var probeState = props.probeState;
+  var lastError = props.lastError;
+
+  var dotClass = "source-dot source-dot--unknown";
+  if (probeState === "ok") dotClass = "source-dot source-dot--ok";
+  else if (probeState === "err" || lastError) dotClass = "source-dot source-dot--err";
+
+  return (
+    <div className={"source-row" + (enabled ? "" : " source-row--disabled")}>
+      <ToggleSwitch on={enabled} onChange={props.onToggle}/>
+      <span className="source-row__name">{s.display_zh || s.display_en || s.id}</span>
+      <ContentTypePill type={s.content_type}/>
+      <span className="source-row__spacer"/>
+      <span className={dotClass} title={lastError || (probeState === "ok" ? "OK" : "")}/>
+      {props.probeLabel && (
+        <span style={{fontSize: 11, color: probeState === "ok" ? "var(--success)" : probeState === "err" ? "var(--danger)" : "var(--text-muted)"}}>
+          {props.probeLabel}
+        </span>
+      )}
+      <button className="btn btn-sm"
+              disabled={props.probing}
+              onClick={props.onProbe}>
+        {props.probing ? t("settings.sources.probing") : t("settings.sources.probe")}
+      </button>
+    </div>
+  );
+}
+
+/* ── Settings Form ── */
 
 function SettingsForm(props) {
   const t = useT();
@@ -2363,20 +2564,34 @@ function SettingsForm(props) {
   const [loaded, setLoaded] = useState(false);
   const [channels, setChannels] = useState([]);
   const [schedules, setSchedules] = useState([]);
-  const [probeMsg, setProbeMsg] = useState("");
   const [savingKey, setSavingKey] = useState("");
   const [scheduleDialog, setScheduleDialog] = useState(null);
   const [channelsRefreshing, setChannelsRefreshing] = useState(false);
   const [rowPending, setRowPending] = useState({});
 
+  const [allSources, setAllSources] = useState([]);
+  const [probeStates, setProbeStates] = useState({});
+  const [probeLabels, setProbeLabels] = useState({});
+  const [probingIds, setProbingIds] = useState({});
+
+  const [bingKeywords, setBingKeywords] = useState("");
+  const [customFeeds, setCustomFeeds] = useState([]);
+  const [addingCustom, setAddingCustom] = useState(false);
+  const [newCustomName, setNewCustomName] = useState("");
+  const [newCustomUrl, setNewCustomUrl] = useState("");
+  const [customProbing, setCustomProbing] = useState({});
+  const [customProbeLabels, setCustomProbeLabels] = useState({});
+
   const reloadAll = useCallback(async function (opts) {
     const silent = !!(opts && opts.silent);
-    const [cfg, ch, sched] = await Promise.all([
+    const [cfg, ch, sched, srcResp] = await Promise.all([
       api("GET", "/config"),
       api("GET", "/scheduler/channels"),
       api("GET", "/schedules"),
+      api("GET", "/sources"),
     ]);
-    setConfig((cfg && cfg.config) || {});
+    var cfgData = (cfg && cfg.config) || {};
+    setConfig(cfgData);
     let list = (ch && Array.isArray(ch.channels)) ? ch.channels : [];
     if (!list.length) {
       const fb = await api("GET", "/available-channels");
@@ -2385,6 +2600,14 @@ function SettingsForm(props) {
     }
     setChannels(list);
     setSchedules((sched && sched.items) || []);
+    if (srcResp && srcResp.ok && Array.isArray(srcResp.items)) {
+      setAllSources(srcResp.items);
+    }
+    var feedsRaw = String(cfgData["rss_generic.feeds"] || "");
+    var parsed = feedsRaw.split("\n").map(function (l) { return l.trim(); }).filter(Boolean);
+    setCustomFeeds(parsed.map(function (url, i) {
+      return {id: "cf_" + i, url: url, name: url.length > 50 ? url.substring(0, 47) + "…" : url};
+    }));
     setLoaded(true);
     if (!silent) return;
   }, []);
@@ -2422,26 +2645,6 @@ function SettingsForm(props) {
     }
   }, [t]);
 
-  const onProbeNewsNow = useCallback(async function () {
-    setProbeMsg("…");
-    const resp = await api("POST", "/ingest/source/newsnow");
-    // Rate-limited case surfaces a structured summary rather than detail.
-    const rl = resp && resp.summary && resp.summary.by_source &&
-               resp.summary.by_source.newsnow &&
-               resp.summary.by_source.newsnow.error_kind === "rate_limited"
-      ? resp.summary.by_source.newsnow.retry_after_s : null;
-    if (rl != null) {
-      setProbeMsg(tfmt(t("settings.newsnow.rate_limited"), {s: rl}));
-      return;
-    }
-    if (resp && resp.ok) {
-      const n = (resp.summary && resp.summary.inserted) || (resp.summary && resp.summary.received) || 0;
-      setProbeMsg(tfmt(t("settings.newsnow.probe.ok"), {n: n}));
-    } else {
-      setProbeMsg(tfmt(t("settings.newsnow.probe.fail"), {err: (resp && resp.detail) || "unknown"}));
-    }
-  }, [t]);
-
   const onSendTest = useCallback(async function (ch) {
     const channel = (ch && ch.channel_id) || "";
     const defaultChatId = (ch && ch.chat_id) || "";
@@ -2458,10 +2661,6 @@ function SettingsForm(props) {
     });
   }, []);
 
-  /* Row-level schedule actions: we call the host scheduler REST API
-     directly through the plugin bridge for toggle / trigger (those
-     endpoints are plugin-specific wrappers that enforce fin-pulse
-     ownership), and the plugin's own /schedules/{id} for delete. */
   const markRow = function (id, key, val) {
     setRowPending(function (prev) {
       const copy = Object.assign({}, prev);
@@ -2501,43 +2700,315 @@ function SettingsForm(props) {
     } finally { markRow(s.id, "del", false); }
   }, [reloadSchedules, t]);
 
+  /* ── Source toggle ── */
+  const onToggleSource = useCallback(async function (sid) {
+    var key = "source." + sid + ".enabled";
+    var cur = config[key];
+    var next = cur === false || cur === "false" ? true : (cur === undefined ? false : !cur);
+    setCfgField(key, next);
+    await persist({[key]: String(next)});
+  }, [config, persist]);
+
+  /* ── Source probe ── */
+  const onProbeSource = useCallback(async function (sid) {
+    var srcDef = allSources.find(function (s) { return s.id === sid; });
+    var isNewsNow = srcDef && srcDef.kind === "newsnow";
+    var endpoint = isNewsNow ? "/ingest/source/newsnow" : "/ingest/source/" + sid;
+    setProbingIds(function (p) { return Object.assign({}, p, {[sid]: true}); });
+    try {
+      var resp = await api("POST", endpoint);
+      if (resp && resp.ok) {
+        var n = (resp.summary && resp.summary.inserted) || (resp.summary && resp.summary.received) || 0;
+        setProbeStates(function (p) { return Object.assign({}, p, {[sid]: "ok"}); });
+        setProbeLabels(function (p) { return Object.assign({}, p, {[sid]: tfmt(t("settings.sources.probe.ok"), {n: n})}); });
+      } else {
+        setProbeStates(function (p) { return Object.assign({}, p, {[sid]: "err"}); });
+        setProbeLabels(function (p) { return Object.assign({}, p, {[sid]: t("settings.sources.probe.fail")}); });
+      }
+    } catch (_) {
+      setProbeStates(function (p) { return Object.assign({}, p, {[sid]: "err"}); });
+      setProbeLabels(function (p) { return Object.assign({}, p, {[sid]: t("settings.sources.probe.fail")}); });
+    } finally {
+      setProbingIds(function (p) { return Object.assign({}, p, {[sid]: false}); });
+    }
+  }, [t, allSources]);
+
+  /* ── Custom feed helpers ── */
+  const persistCustomFeeds = useCallback(async function (feeds) {
+    var urls = feeds.map(function (f) { return f.url; });
+    await persist({"rss_generic.feeds": urls.join("\n")});
+    setCustomFeeds(feeds);
+  }, [persist]);
+
+  const onAddBingRss = useCallback(async function () {
+    if (!bingKeywords.trim()) return;
+    var url = "https://www.bing.com/news/search?q=" + encodeURIComponent(bingKeywords.trim()) + "&format=RSS";
+    var feed = {id: "cf_" + Date.now(), url: url, name: "Bing: " + bingKeywords.trim()};
+    var next = customFeeds.concat([feed]);
+    await persistCustomFeeds(next);
+    setBingKeywords("");
+    window.oaToast({level: "success", message: t("settings.saved")});
+  }, [bingKeywords, customFeeds, persistCustomFeeds, t]);
+
+  const onAddCustomRss = useCallback(async function () {
+    if (!newCustomUrl.trim()) return;
+    var feed = {id: "cf_" + Date.now(), url: newCustomUrl.trim(), name: newCustomName.trim() || newCustomUrl.trim()};
+    var next = customFeeds.concat([feed]);
+    await persistCustomFeeds(next);
+    setNewCustomName(""); setNewCustomUrl(""); setAddingCustom(false);
+    window.oaToast({level: "success", message: t("settings.saved")});
+  }, [newCustomName, newCustomUrl, customFeeds, persistCustomFeeds, t]);
+
+  const onDeleteCustom = useCallback(async function (idx) {
+    if (!window.confirm(t("settings.sources.custom.delete.confirm"))) return;
+    var next = customFeeds.filter(function (_, i) { return i !== idx; });
+    await persistCustomFeeds(next);
+  }, [customFeeds, persistCustomFeeds, t]);
+
+  const onProbeCustom = useCallback(async function (url, idx) {
+    setCustomProbing(function (p) { return Object.assign({}, p, {[idx]: true}); });
+    try {
+      var resp = await api("POST", "/sources/probe-rss", {url: url});
+      if (resp && resp.ok) {
+        setCustomProbeLabels(function (p) { return Object.assign({}, p, {[idx]: tfmt(t("settings.sources.probe.ok"), {n: resp.count || 0})}); });
+      } else {
+        setCustomProbeLabels(function (p) { return Object.assign({}, p, {[idx]: t("settings.sources.probe.fail")}); });
+      }
+    } catch (_) {
+      setCustomProbeLabels(function (p) { return Object.assign({}, p, {[idx]: t("settings.sources.probe.fail")}); });
+    } finally {
+      setCustomProbing(function (p) { return Object.assign({}, p, {[idx]: false}); });
+    }
+  }, [t]);
+
   if (!loaded) return <div className="card"><div className="empty">{t("today.list.loading")}</div></div>;
 
-  /* NewsNow defaults: first-render should treat ``undefined`` / ``off``
-     as "use the public aggregator with the built-in URL". We only show
-     the input box in self_host mode to avoid confusing copy-paste. */
-  const rawNewsnowMode = config["newsnow.mode"];
-  const newsnowMode = (rawNewsnowMode && String(rawNewsnowMode)) || "public";
-  const rawNewsnowUrl = config["newsnow.api_url"];
-  const newsnowUrl = (rawNewsnowUrl && String(rawNewsnowUrl))
-    || (newsnowMode === "public" ? NEWSNOW_PUBLIC_URL : "");
-  const rawMinInterval = parseInt(config["newsnow.min_interval_s"] || "300", 10);
-  const newsnowFloor = (isNaN(rawMinInterval) ? 300 : Math.max(
+  /* Classify sources */
+  var directSources = allSources.filter(function (s) {
+    return (s.kind === "direct" || s.kind === "rss") && s.id !== "rss_generic";
+  });
+  var newsnowSources = allSources.filter(function (s) { return s.kind === "newsnow"; });
+
+  var isEnabled = function (sid) {
+    var v = config["source." + sid + ".enabled"];
+    if (v === undefined || v === null || v === "") {
+      var def = allSources.find(function (s) { return s.id === sid; });
+      return def ? !!def.default_enabled : true;
+    }
+    return v !== false && v !== "false";
+  };
+
+  var rawNewsnowMode = config["newsnow.mode"];
+  var newsnowMode = (rawNewsnowMode && String(rawNewsnowMode)) || "public";
+  var rawMinInterval = parseInt(config["newsnow.min_interval_s"] || "300", 10);
+  var newsnowFloor = (isNaN(rawMinInterval) ? 300 : Math.max(
     newsnowMode === "public" ? NEWSNOW_PUBLIC_MIN_INTERVAL_S : 0,
     rawMinInterval
   ));
-  const radarRules = String(config["radar_rules"] || "+美联储 +降息");
-  const hasAnyChannel = channels.length > 0;
+  var radarRules = String(config["radar_rules"] || "+美联储 +降息");
+  var hasAnyChannel = channels.length > 0;
 
   return (
     <div>
-      <div className="card">
-        <div className="card-title">{t("settings.sources.title")}</div>
-        <div style={{display: "flex", flexWrap: "wrap", gap: 8}}>
-          {KNOWN_SOURCES.map(function (s) {
-            const state = String(config["source." + s.id + ".last_error"] || "");
-            const ok = !state;
-            return (
-              <span key={s.id}
-                    className={"api-pill " + (ok ? "" : "api-pill--missing")}
-                    title={state || "last_ok"}>
-                {s.name}
+      {/* ════════ Data Source Management ════════ */}
+      <div className="card" style={{padding: "16px 14px"}}>
+        <div className="oa-settings-section">
+          <div className="oa-settings-section__title">{t("settings.sources.title")}</div>
+
+          {/* Category 1: Direct & RSS */}
+          <Collapsible
+            title={t("settings.sources.cat.direct")}
+            badge={tfmt(t("settings.sources.count"), {n: directSources.length})}
+            defaultOpen={true}>
+            {directSources.map(function (s) {
+              return (
+                <SourceRow
+                  key={s.id}
+                  source={s}
+                  enabled={isEnabled(s.id)}
+                  probeState={probeStates[s.id]}
+                  probeLabel={probeLabels[s.id]}
+                  probing={!!probingIds[s.id]}
+                  lastError={config["source." + s.id + ".last_error"]}
+                  onToggle={function () { onToggleSource(s.id); }}
+                  onProbe={function () { onProbeSource(s.id); }}
+                />
+              );
+            })}
+          </Collapsible>
+
+          {/* Category 2: Custom sources */}
+          <Collapsible
+            title={t("settings.sources.cat.custom")}
+            badge={tfmt(t("settings.sources.count"), {n: customFeeds.length})}
+            defaultOpen={false}>
+            {/* Bing RSS builder */}
+            <div className="bing-builder">
+              <div className="label">{t("settings.sources.custom.bing.title")}</div>
+              <div className="bing-builder__row">
+                <input className="input" type="text" style={{flex: 1, minWidth: 120}}
+                       placeholder={t("settings.sources.custom.bing.placeholder")}
+                       value={bingKeywords}
+                       onChange={function (e) { setBingKeywords(e.target.value); }}/>
+                <button className="btn btn-sm btn-primary" onClick={onAddBingRss}
+                        disabled={!bingKeywords.trim()}>
+                  {t("settings.sources.custom.bing.add")}
+                </button>
+              </div>
+              {bingKeywords.trim() && (
+                <div className="bing-builder__preview">
+                  {"https://www.bing.com/news/search?q=" + encodeURIComponent(bingKeywords.trim()) + "&format=RSS"}
+                </div>
+              )}
+            </div>
+
+            {/* Existing custom feeds */}
+            {customFeeds.length === 0 && !addingCustom ? (
+              <div className="empty" style={{padding: "10px 0"}}>{t("settings.sources.custom.empty")}</div>
+            ) : (
+              customFeeds.map(function (f, idx) {
+                return (
+                  <div key={f.id} className="source-row">
+                    <ToggleSwitch on={true} onChange={function () {}}/>
+                    <span className="source-row__name" title={f.url}>{f.name}</span>
+                    <ContentTypePill type="custom"/>
+                    <span className="source-row__spacer"/>
+                    {customProbeLabels[idx] && (
+                      <span style={{fontSize: 11, color: customProbeLabels[idx].indexOf("OK") >= 0 || customProbeLabels[idx].indexOf("可用") >= 0 ? "var(--success)" : "var(--danger)"}}>
+                        {customProbeLabels[idx]}
+                      </span>
+                    )}
+                    <button className="btn btn-sm" disabled={!!customProbing[idx]}
+                            onClick={function () { onProbeCustom(f.url, idx); }}>
+                      {customProbing[idx] ? t("settings.sources.probing") : t("settings.sources.probe")}
+                    </button>
+                    <button className="btn btn-sm" onClick={function () { onDeleteCustom(idx); }}>
+                      <Ico name="trash"/>
+                    </button>
+                  </div>
+                );
+              })
+            )}
+
+            {/* Add custom form */}
+            {addingCustom ? (
+              <div className="custom-add-form">
+                <div className="custom-add-form__row">
+                  <input className="input" type="text" style={{flex: 1}}
+                         placeholder={t("settings.sources.custom.name.placeholder")}
+                         value={newCustomName}
+                         onChange={function (e) { setNewCustomName(e.target.value); }}/>
+                </div>
+                <div className="custom-add-form__row">
+                  <input className="input" type="text" style={{flex: 1}}
+                         placeholder={t("settings.sources.custom.url.placeholder")}
+                         value={newCustomUrl}
+                         onChange={function (e) { setNewCustomUrl(e.target.value); }}/>
+                </div>
+                <div style={{display: "flex", gap: 8}}>
+                  <button className="btn btn-sm btn-primary" onClick={onAddCustomRss}
+                          disabled={!newCustomUrl.trim()}>
+                    {t("settings.sources.custom.save")}
+                  </button>
+                  <button className="btn btn-sm" onClick={function () { setAddingCustom(false); setNewCustomName(""); setNewCustomUrl(""); }}>
+                    {t("settings.sources.custom.cancel")}
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div style={{paddingTop: 8}}>
+                <button className="btn btn-sm" onClick={function () { setAddingCustom(true); }}>
+                  {t("settings.sources.custom.add")}
+                </button>
+              </div>
+            )}
+          </Collapsible>
+
+          {/* Category 3: NewsNow aggregated */}
+          <Collapsible
+            title={t("settings.sources.cat.newsnow")}
+            badge={tfmt(t("settings.sources.count"), {n: newsnowSources.length})}
+            defaultOpen={false}>
+            {/* Status bar */}
+            <div className="nn-status-bar">
+              <span className="nn-status-bar__pill">
+                {t("settings.sources.nn.mode")}: {t("settings.newsnow.mode." + newsnowMode)}
               </span>
-            );
-          })}
+              {newsnowMode === "public" && (
+                <span style={{fontSize: 11, color: "var(--text-muted)"}}>
+                  {tfmt(t("settings.sources.nn.warn"), {floor: newsnowFloor})}
+                </span>
+              )}
+              <span className="source-row__spacer"/>
+              {/* Mode selector pills */}
+              <div style={{display: "flex", gap: 4}}>
+                {["off", "public", "self_host"].map(function (m) {
+                  var active = newsnowMode === m;
+                  return <span key={m}
+                               className={"api-pill " + (active ? "" : "api-pill--missing")}
+                               style={{cursor: "pointer", fontSize: 11}}
+                               onClick={function () {
+                                 setCfgField("newsnow.mode", m);
+                                 if (m === "public") {
+                                   setCfgField("newsnow.api_url", NEWSNOW_PUBLIC_URL);
+                                   var cur = parseInt(config["newsnow.min_interval_s"] || "300", 10);
+                                   if (isNaN(cur) || cur < NEWSNOW_PUBLIC_MIN_INTERVAL_S) {
+                                     setCfgField("newsnow.min_interval_s", String(NEWSNOW_PUBLIC_MIN_INTERVAL_S));
+                                   }
+                                 }
+                                 persist({"newsnow.mode": m});
+                               }}>
+                    {t("settings.newsnow.mode." + m)}
+                  </span>;
+                })}
+              </div>
+            </div>
+
+            {newsnowMode === "public" && (
+              <div style={{display: "flex", gap: 8, alignItems: "center", marginBottom: 10, fontSize: 12}}>
+                <span style={{color: "var(--text-muted)"}}>{t("settings.sources.nn.floor")}:</span>
+                <input className="input" type="number" style={{width: 80}}
+                       min={NEWSNOW_PUBLIC_MIN_INTERVAL_S} step={60}
+                       value={newsnowFloor}
+                       onChange={function (e) {
+                         var v = Math.max(NEWSNOW_PUBLIC_MIN_INTERVAL_S, parseInt(e.target.value || "300", 10) || NEWSNOW_PUBLIC_MIN_INTERVAL_S);
+                         setCfgField("newsnow.min_interval_s", String(v));
+                       }}
+                       onBlur={function () { persist({"newsnow.min_interval_s": String(newsnowFloor)}); }}/>
+                <span style={{color: "var(--text-muted)", fontSize: 11}}>{t("settings.sources.nn.floor.unit")}</span>
+              </div>
+            )}
+
+            {/* NewsNow source list */}
+            {newsnowSources.map(function (s) {
+              var disabled = newsnowMode === "off";
+              return (
+                <div key={s.id} className={"source-row" + (disabled ? " source-row--disabled" : "")}>
+                  <ToggleSwitch
+                    on={!disabled && isEnabled(s.id)}
+                    onChange={disabled ? function () {} : function () { onToggleSource(s.id); }}/>
+                  <span className="source-row__name">{s.display_zh || s.display_en || s.id}</span>
+                  <ContentTypePill type={s.content_type}/>
+                  <span className="source-row__spacer"/>
+                  {probeLabels[s.id] && (
+                    <span style={{fontSize: 11, color: probeStates[s.id] === "ok" ? "var(--success)" : "var(--danger)"}}>
+                      {probeLabels[s.id]}
+                    </span>
+                  )}
+                  <span className={probeStates[s.id] === "ok" ? "source-dot source-dot--ok" : probeStates[s.id] === "err" ? "source-dot source-dot--err" : "source-dot source-dot--unknown"}/>
+                  <button className="btn btn-sm"
+                          disabled={disabled || !!probingIds[s.id]}
+                          onClick={function () { onProbeSource(s.id); }}>
+                    {probingIds[s.id] ? t("settings.sources.probing") : t("settings.sources.probe")}
+                  </button>
+                </div>
+              );
+            })}
+          </Collapsible>
         </div>
       </div>
 
+      {/* ════════ IM Channels ════════ */}
       <div className="card">
         <div style={{display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8}}>
           <div className="card-title" style={{margin: 0}}>{t("settings.channels.title")}</div>
@@ -2574,6 +3045,7 @@ function SettingsForm(props) {
         )}
       </div>
 
+      {/* ════════ Scheduled Tasks ════════ */}
       <div className="card">
         <div className="card-title" style={{marginBottom: 6}}>{t("settings.schedules.title")}</div>
         <div className="oa-hint" style={{marginBottom: 10}}>{t("settings.schedules.desc")}</div>
@@ -2645,106 +3117,7 @@ function SettingsForm(props) {
         ) : null}
       </div>
 
-      <div className="card">
-        <div style={{display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10}}>
-          <div className="card-title" style={{margin: 0}}>{t("settings.newsnow.title")}</div>
-          {newsnowMode !== "off" && (
-            <div style={{display: "flex", gap: 8, alignItems: "center"}}>
-              <button className="btn btn-sm btn-primary"
-                      disabled={savingKey !== ""}
-                      onClick={async function () {
-                        setSavingKey("newsnow");
-                        try {
-                          const updates = {
-                            "newsnow.mode": newsnowMode,
-                            "newsnow.api_url": newsnowUrl,
-                            "newsnow.min_interval_s": String(newsnowFloor),
-                          };
-                          await persist(updates);
-                          await onProbeNewsNow();
-                        } finally { setSavingKey(""); }
-                      }}>
-                <Ico name="play"/> {t("settings.newsnow.probe")}
-              </button>
-            </div>
-          )}
-        </div>
-        <div style={{marginBottom: 10}}>
-          <div className="label">{t("settings.newsnow.step1")}</div>
-          <div style={{display: "flex", gap: 6}}>
-            {["off", "public", "self_host"].map(function (m) {
-              const active = newsnowMode === m;
-              return <span key={m}
-                           className={"api-pill " + (active ? "" : "api-pill--missing")}
-                           onClick={function () {
-                             setCfgField("newsnow.mode", m);
-                             // Snap URL/floor back to built-in values when
-                             // switching into public mode so users don't have
-                             // to hit any extra save step.
-                             if (m === "public") {
-                               setCfgField("newsnow.api_url", NEWSNOW_PUBLIC_URL);
-                               const cur = parseInt(config["newsnow.min_interval_s"] || "300", 10);
-                               if (isNaN(cur) || cur < NEWSNOW_PUBLIC_MIN_INTERVAL_S) {
-                                 setCfgField("newsnow.min_interval_s", String(NEWSNOW_PUBLIC_MIN_INTERVAL_S));
-                               }
-                             }
-                           }}>
-                {t("settings.newsnow.mode." + m)}
-              </span>;
-            })}
-          </div>
-          {newsnowMode === "public" && (
-            <div className="oa-config-banner" role="alert" style={{marginTop: 10, background: "rgba(245,158,11,.12)", border: "1px solid rgba(245,158,11,.24)"}}>
-              <span className="oa-icon oa-config-banner__icon"><Ico name="warn"/></span>
-              <div className="oa-config-banner__text" style={{fontSize: 12}}>
-                {tfmt(t("settings.newsnow.warn.public"), {floor: newsnowFloor})}
-              </div>
-            </div>
-          )}
-        </div>
-
-        {newsnowMode === "public" && (
-          <div style={{marginBottom: 10}}>
-            <div className="label">{t("settings.newsnow.step2")}</div>
-            <div className="oa-hint" style={{fontSize: 12, padding: "8px 10px", background: "var(--bg-subtle, rgba(0,0,0,.03))", borderRadius: 6, color: "var(--text)"}}>
-              {tfmt(t("settings.newsnow.url.readonly"), {url: NEWSNOW_PUBLIC_URL})}
-            </div>
-            <div className="label" style={{marginTop: 10}}>{t("settings.newsnow.floor.label")}</div>
-            <div className="field-wrap">
-              <input className="input"
-                     type="number"
-                     min={NEWSNOW_PUBLIC_MIN_INTERVAL_S}
-                     step={60}
-                     value={newsnowFloor}
-                     onChange={function (e) {
-                       const v = Math.max(NEWSNOW_PUBLIC_MIN_INTERVAL_S, parseInt(e.target.value || "300", 10) || NEWSNOW_PUBLIC_MIN_INTERVAL_S);
-                       setCfgField("newsnow.min_interval_s", String(v));
-                     }}/>
-            </div>
-          </div>
-        )}
-
-        {newsnowMode === "self_host" && (
-          <div style={{marginBottom: 10}}>
-            <div className="label">{t("settings.newsnow.step2")}</div>
-            <div className="field-wrap">
-              <input className="input"
-                     type="text"
-                     placeholder="http://127.0.0.1:4444/api/s"
-                     value={newsnowUrl}
-                     onChange={function (e) { setCfgField("newsnow.api_url", e.target.value); }}/>
-            </div>
-            <div style={{marginTop: 8}}>
-              <CodeBlock text={t("settings.newsnow.help.self_host")} />
-            </div>
-          </div>
-        )}
-
-        {probeMsg ? (
-          <div className="oa-hint" style={{fontSize: 12}}>{probeMsg}</div>
-        ) : null}
-      </div>
-
+      {/* ════════ LLM ════════ */}
       <div className="card">
         <div className="card-title">{t("settings.llm.title")}</div>
         <div className="oa-hint">{t("settings.llm.hint")}</div>
