@@ -754,6 +754,92 @@ class Plugin(PluginBase):
                 raise HTTPException(status_code=404, detail="not_found")
             return {"ok": True, "article": row}
 
+        @router.post("/translate")
+        async def translate_articles(
+            payload: dict[str, Any] = Body(default={}),
+        ) -> dict[str, Any]:
+            """Translate article title/summary via the host Brain.
+
+            This mirrors TrendRadar's translation idea but keeps it scoped to
+            on-demand card translation instead of adding another background
+            pipeline.
+            """
+
+            raw_items = payload.get("items") if isinstance(payload, dict) else None
+            if raw_items is None and isinstance(payload, dict):
+                raw_items = [payload]
+            if not isinstance(raw_items, list) or not raw_items:
+                return {"ok": False, "error": "items is required"}
+            target_language = str(payload.get("target_language") or "中文")
+            items: list[dict[str, str]] = []
+            for raw in raw_items[:8]:
+                if not isinstance(raw, dict):
+                    continue
+                item_id = str(raw.get("id") or "")
+                title = str(raw.get("title") or "")[:800]
+                summary = str(raw.get("summary") or "")[:1600]
+                if item_id and (title or summary):
+                    items.append({"id": item_id, "title": title, "summary": summary})
+            if not items:
+                return {"ok": False, "error": "no translatable items"}
+            try:
+                brain = self._api.get_brain() if self._api is not None else None
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("translate brain access failed: %s", exc)
+                brain = None
+            if brain is None:
+                return {"ok": False, "error": "brain.access not granted"}
+
+            user_payload = json.dumps(
+                {"target_language": target_language, "items": items},
+                ensure_ascii=False,
+            )
+            system_prompt = (
+                "You translate financial news for a product UI. "
+                "Return strict JSON only: {\"items\":[{\"id\":\"...\","
+                "\"title_translated\":\"...\",\"summary_translated\":\"...\"}]}. "
+                "Keep tickers, company names, numbers, dates, and URLs unchanged. "
+                "Do not add commentary."
+            )
+            try:
+                response = await brain.chat(
+                    messages=[{"role": "user", "content": user_payload}],
+                    system=system_prompt,
+                    temperature=0.1,
+                    max_tokens=1800,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("translate brain.chat failed: %s", exc)
+                return {"ok": False, "error": f"brain error: {exc}"}
+            raw_text = response if isinstance(response, str) else getattr(response, "content", None)
+            if raw_text is None and isinstance(response, dict):
+                raw_text = response.get("content")
+            text = str(raw_text or "").strip()
+            if text.startswith("```"):
+                text = text.strip("`")
+                if text.lower().startswith("json"):
+                    text = text[4:].strip()
+            try:
+                parsed = json.loads(text)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("translate JSON parse failed: %s", exc)
+                return {"ok": False, "error": "translation_json_parse_failed"}
+            out_items = parsed.get("items") if isinstance(parsed, dict) else None
+            if not isinstance(out_items, list):
+                return {"ok": False, "error": "translation_items_missing"}
+            cleaned: list[dict[str, str]] = []
+            for raw in out_items:
+                if not isinstance(raw, dict):
+                    continue
+                cleaned.append(
+                    {
+                        "id": str(raw.get("id") or ""),
+                        "title_translated": str(raw.get("title_translated") or ""),
+                        "summary_translated": str(raw.get("summary_translated") or ""),
+                    }
+                )
+            return {"ok": True, "items": [row for row in cleaned if row["id"]]}
+
         @router.post("/digest/run")
         async def run_digest(
             payload: dict[str, Any] = Body(default={}),
