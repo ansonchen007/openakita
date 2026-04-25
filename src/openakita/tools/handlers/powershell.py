@@ -229,15 +229,9 @@ class PowerShellHandler:
 
         env = os.environ.copy()
         try:
-            from ...runtime_env import IS_FROZEN, get_python_executable
+            from ...runtime_env import apply_agent_python_environment
 
-            if IS_FROZEN:
-                _ext_py = get_python_executable()
-                if _ext_py:
-                    from pathlib import Path
-
-                    _py_dir = str(Path(_ext_py).parent)
-                    env["PATH"] = _py_dir + os.pathsep + env.get("PATH", "")
+            env = apply_agent_python_environment(env)
         except Exception:
             pass
 

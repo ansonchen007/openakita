@@ -148,13 +148,9 @@ class TerminalSession:
         cmd_env.update(self.env)
 
         try:
-            from ..runtime_env import IS_FROZEN, get_python_executable
+            from ..runtime_env import apply_agent_python_environment
 
-            if IS_FROZEN:
-                _ext_py = get_python_executable()
-                if _ext_py:
-                    _py_dir = str(Path(_ext_py).parent)
-                    cmd_env["PATH"] = _py_dir + os.pathsep + cmd_env.get("PATH", "")
+            cmd_env = apply_agent_python_environment(cmd_env)
         except Exception:
             pass
 

@@ -1020,9 +1020,7 @@ def _build_runtime_section_uncached() -> str:
     from ..config import settings
     from ..runtime_env import (
         IS_FROZEN,
-        can_pip_install,
-        get_configured_venv_path,
-        get_python_executable,
+        get_runtime_environment_report,
         verify_python_executable,
     )
 
@@ -1030,11 +1028,8 @@ def _build_runtime_section_uncached() -> str:
 
     # --- 部署模式与 Python 环境 ---
     deploy_mode = _detect_deploy_mode()
-    ext_python = get_python_executable()
-    pip_ok = can_pip_install()
-    venv_path = get_configured_venv_path()
-
-    python_info = _build_python_info(IS_FROZEN, ext_python, pip_ok, settings, venv_path)
+    runtime_report = get_runtime_environment_report()
+    python_info = _build_python_info(IS_FROZEN, runtime_report, settings)
 
     # --- 版本号 ---
     try:
@@ -1280,57 +1275,61 @@ def _detect_deploy_mode() -> str:
 
 def _build_python_info(
     is_frozen: bool,
-    ext_python: str | None,
-    pip_ok: bool,
+    runtime_report: dict,
     settings,
-    venv_path: str | None = None,
 ) -> str:
     """根据部署模式构建 Python 环境信息"""
     import sys as _sys
 
+    mode = runtime_report.get("mode") or ("legacy-pyinstaller" if is_frozen else "source")
+    app_python = runtime_report.get("app_python") or _sys.executable
+    app_venv = runtime_report.get("app_venv") or ""
+    agent_python = runtime_report.get("agent_python")
+    agent_venv = runtime_report.get("agent_venv") or ""
+    pip_target = runtime_report.get("pip_install_target") or "agent-venv"
+    pip_index = runtime_report.get("pip_index_url") or "https://mirrors.aliyun.com/pypi/simple/"
+    trusted_host = runtime_report.get("pip_trusted_host") or ""
+    legacy_mode = runtime_report.get("legacy_mode")
+    can_pip_install = bool(runtime_report.get("can_pip_install"))
+
     if not is_frozen:
         in_venv = _sys.prefix != _sys.base_prefix
         env_type = "venv" if in_venv else "system"
-        lines = [
-            f"- **Python**: {_sys.version.split()[0]} ({env_type})",
-            f"- **解释器**: {_sys.executable}",
-        ]
-        if in_venv:
-            lines.append(f"- **虚拟环境**: {_sys.prefix}")
-        lines.append("- **pip**: 可用")
-        lines.append(
-            "- **注意**: 执行 Python 脚本时使用上述解释器路径，pip install 会安装到当前环境中"
-        )
-        return "\n".join(lines)
+        mode = f"{mode} ({env_type})"
 
-    # 打包模式
-    if ext_python:
-        lines = [
-            "- **Python**: 可用（外置环境已自动配置）",
-            f"- **解释器**: {ext_python}",
-        ]
-        if venv_path:
-            lines.append(f"- **虚拟环境**: {venv_path}")
-        lines.append(f"- **pip**: {'可用' if pip_ok else '不可用'}")
-        lines.append(
-            "- **注意**: 执行 Python 脚本时请使用上述解释器路径，pip install 会安装到该虚拟环境中"
-        )
-        return "\n".join(lines)
+    lines = [
+        "### OpenAkita 后端环境",
+        f"- 后端解释器: {app_python}",
+        f"- 后端虚拟环境: {app_venv or '当前 Python 环境'}",
+        "- 用途: 运行 OpenAkita 服务、MCP、内置工具",
+        "- 不要用它安装临时脚本依赖",
+        f"- 当前模式: {mode}",
+        "",
+        "### Agent 脚本环境",
+        f"- 脚本解释器: {agent_python or '不可用'}",
+        f"- pip 安装目标: {pip_target}",
+        f"- agent 虚拟环境: {agent_venv or '不可用'}",
+        f"- 默认 pip 源: {pip_index}",
+    ]
+    if trusted_host:
+        lines.append(f"- pip trusted-host: {trusted_host}")
 
-    # 打包模式 + 无外置 Python
-    fallback_venv = settings.project_root / "data" / "venv"
-    if platform.system() == "Windows":
-        install_cmd = "winget install Python.Python.3.12"
+    if can_pip_install:
+        lines.append(
+            "- 推荐: 写脚本后用 `python script.py` 执行；需要依赖时使用 `pip install <package>`"
+        )
     else:
-        install_cmd = "sudo apt install python3 或 brew install python3"
+        fallback_venv = settings.project_root / "data" / "venv"
+        lines.extend(
+            [
+                "- **Agent Python unavailable**: `pip install` 当前不可用，不要假装可安装依赖",
+                f"- 可见 fallback 位置: {fallback_venv}",
+            ]
+        )
+    if legacy_mode:
+        lines.append("- **兼容模式**: 当前使用 legacy PyInstaller fallback，动态 pip install 可能不可靠")
 
-    return (
-        f"- **Python**: ⚠️ 未检测到可用的 Python 环境\n"
-        f"  - 推荐操作：通过 `run_shell` 执行 `{install_cmd}` 安装 Python\n"
-        f"  - 安装后创建工作区虚拟环境：`python -m venv {fallback_venv}`\n"
-        f"  - 创建完成后系统将自动检测并使用该环境，无需重启\n"
-        f"  - 此环境为系统专用，与用户个人 Python 环境隔离"
-    )
+    return "\n".join(lines)
 
 
 _PLATFORM_NAMES = {

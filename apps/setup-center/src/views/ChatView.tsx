@@ -1894,6 +1894,7 @@ export function ChatView({
       subAgentTasks: [],
       isDelegating: false,
       pollingTimer: null,
+      _hadError: false,
     };
     streamContexts.current.set(thisConvId, sctx);
     // Sending a new turn should always reveal the latest messages immediately.
