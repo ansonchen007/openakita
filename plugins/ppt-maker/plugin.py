@@ -10,14 +10,25 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException, Request
+from pydantic import BaseModel, ConfigDict
 
 from openakita.plugins.api import PluginAPI, PluginBase
 
-from ppt_maker_inline.file_utils import resolve_plugin_data_root
+from ppt_maker_inline.file_utils import resolve_plugin_data_root, safe_name, unique_child
+from ppt_maker_inline.upload_preview import register_upload_preview_routes
+from ppt_source_loader import MissingDependencyError, SourceLoader, SourceParseError
+from ppt_task_manager import PptTaskManager
 
 
 PLUGIN_ID = "ppt-maker"
+
+
+class ParseSourceRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    path: str
+    kind: str | None = None
 
 
 class Plugin(PluginBase):
@@ -33,6 +44,7 @@ class Plugin(PluginBase):
         self._data_dir = data_dir
 
         router = APIRouter()
+        register_upload_preview_routes(router, data_dir / "uploads", prefix="/uploads")
 
         @router.get("/healthz")
         async def healthz() -> dict[str, Any]:
@@ -42,6 +54,57 @@ class Plugin(PluginBase):
                 "phase": 1,
                 "data_dir": str(data_dir),
                 "db_path": str(data_dir / "ppt_maker.db"),
+            }
+
+        @router.post("/upload")
+        async def upload(request: Request) -> dict[str, Any]:
+            form = await request.form()
+            upload = form.get("file")
+            project_id = str(form.get("project_id") or "") or None
+            if upload is None or not hasattr(upload, "filename") or not hasattr(upload, "read"):
+                raise HTTPException(status_code=400, detail="Missing upload field: file")
+
+            filename = safe_name(str(upload.filename or "upload.bin"))
+            target = unique_child(data_dir / "uploads", filename)
+            content = await upload.read()
+            target.write_bytes(content)
+
+            loader = SourceLoader()
+            kind = loader.detect_kind(target)
+            async with PptTaskManager(data_dir / "ppt_maker.db") as manager:
+                source = await manager.create_source(
+                    project_id=project_id,
+                    kind=kind,
+                    filename=filename,
+                    path=str(target),
+                    metadata={"size": len(content), "preview_url": f"/uploads/{target.name}"},
+                )
+            return {
+                "ok": True,
+                "source": source.model_dump(mode="json"),
+                "preview_url": f"/uploads/{target.name}",
+            }
+
+        @router.post("/sources/parse")
+        async def parse_source(payload: ParseSourceRequest) -> dict[str, Any]:
+            loader = SourceLoader()
+            try:
+                parsed = await loader.parse(payload.path, kind=payload.kind)
+            except MissingDependencyError as exc:
+                raise HTTPException(
+                    status_code=424,
+                    detail={"error": str(exc), "dependency_group": exc.dependency_group},
+                ) from exc
+            except SourceParseError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            return {
+                "ok": True,
+                "source": {
+                    "kind": parsed.kind,
+                    "title": parsed.title,
+                    "text": parsed.text,
+                    "metadata": parsed.metadata,
+                },
             }
 
         api.register_api_routes(router)
