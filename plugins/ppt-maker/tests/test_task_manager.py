@@ -173,3 +173,29 @@ async def test_outline_and_design_versions(tmp_path) -> None:
     assert latest_design is not None
     assert latest_design["spec_lock"] == {"theme": "default"}
 
+
+@pytest.mark.asyncio
+async def test_replace_list_and_update_slides(tmp_path) -> None:
+    async with PptTaskManager(tmp_path / "ppt_maker.db") as manager:
+        project = await manager.create_project(
+            ProjectCreate(mode=DeckMode.TOPIC_TO_DECK, title="Roadmap")
+        )
+        records = await manager.replace_slides(
+            project.id,
+            [
+                {"id": "slide_01", "slide_type": "cover", "title": "Cover"},
+                {"id": "slide_02", "slide_type": "content", "title": "Body"},
+            ],
+        )
+        listed = await manager.list_slides(project.id)
+        updated = await manager.update_slide_safe(
+            project.id,
+            "slide_02",
+            {"id": "slide_02", "slide_type": "summary", "title": "Summary"},
+        )
+
+    assert [record["id"] for record in records] == ["slide_01", "slide_02"]
+    assert [record["id"] for record in listed] == ["slide_01", "slide_02"]
+    assert updated is not None
+    assert updated["slide_type"] == "summary"
+

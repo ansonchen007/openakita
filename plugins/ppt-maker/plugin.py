@@ -29,6 +29,7 @@ from ppt_source_loader import MissingDependencyError, SourceLoader, SourceParseE
 from ppt_table_analyzer import TableAnalyzer
 from ppt_template_manager import TemplateDiagnosticError, TemplateManager
 from ppt_design import DesignBuilder
+from ppt_ir import SlideIrBuilder
 from ppt_outline import OutlineBuilder
 from ppt_task_manager import PptTaskManager
 
@@ -77,6 +78,12 @@ class DesignConfirmRequest(BaseModel):
 
     design: dict[str, Any] | None = None
     confirmed: bool = True
+
+
+class SlideUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    slide: dict[str, Any]
 
 
 class Plugin(PluginBase):
@@ -403,6 +410,45 @@ class Plugin(PluginBase):
                 )
             return {"ok": True, "design": design, "paths": paths, "record": stored}
 
+        @router.post("/projects/{project_id}/slides")
+        async def generate_slides(project_id: str) -> dict[str, Any]:
+            async with PptTaskManager(data_dir / "ppt_maker.db") as manager:
+                project = await manager.get_project(project_id)
+                if project is None:
+                    raise HTTPException(status_code=404, detail="Project not found")
+                outline = await manager.latest_outline(project_id)
+                design = _normalize_design(await manager.latest_design_spec(project_id))
+                if outline is None or design is None:
+                    raise HTTPException(status_code=409, detail="Confirm outline and design first")
+                dataset = await manager.get_dataset(project.dataset_id) if project.dataset_id else None
+                template = await manager.get_template(project.template_id) if project.template_id else None
+                table_insights = _read_json_if_exists(dataset.insights_path if dataset else None)
+                chart_specs = _read_json_if_exists(dataset.chart_specs_path if dataset else None) or []
+                layout_map = _read_json_if_exists(template.layout_map_path if template else None)
+                ir = SlideIrBuilder().build(
+                    outline=outline["outline"],
+                    spec_lock=design["spec_lock"],
+                    table_insights=table_insights,
+                    chart_specs=chart_specs,
+                    template_id=project.template_id,
+                    layout_map=layout_map,
+                )
+                path = SlideIrBuilder().save(ir, project_dir(data_dir, project_id))
+                slides = await manager.replace_slides(project_id, ir["slides"])
+            return {"ok": True, "slides_ir": ir, "path": str(path), "slides": slides}
+
+        @router.put("/projects/{project_id}/slides/{slide_id}")
+        async def update_slide(
+            project_id: str,
+            slide_id: str,
+            payload: SlideUpdateRequest,
+        ) -> dict[str, Any]:
+            async with PptTaskManager(data_dir / "ppt_maker.db") as manager:
+                updated = await manager.update_slide_safe(project_id, slide_id, payload.slide)
+            if updated is None:
+                raise HTTPException(status_code=404, detail="Slide not found")
+            return {"ok": True, "slide": updated}
+
         api.register_api_routes(router)
         api.register_tools(_tool_definitions(), self._handle_tool)
         api.log(f"{PLUGIN_ID}: loaded")
@@ -451,7 +497,7 @@ def _tool_definitions() -> list[dict[str, Any]]:
     ]
 
 
-def _read_json_if_exists(path: str | None) -> dict[str, Any] | None:
+def _read_json_if_exists(path: str | None) -> Any:
     if not path:
         return None
     file_path = Path(path)

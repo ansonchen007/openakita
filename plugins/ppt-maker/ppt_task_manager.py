@@ -645,6 +645,76 @@ class PptTaskManager:
             "created_at": row["created_at"],
         }
 
+    async def replace_slides(self, project_id: str, slides: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        now = _now()
+        await self._conn.execute("DELETE FROM slides WHERE project_id = ?", (project_id,))
+        records = []
+        for index, slide in enumerate(slides, start=1):
+            slide_id = slide.get("id") or _new_id("slide")
+            slide_type = slide.get("slide_type", "content")
+            await self._conn.execute(
+                """
+                INSERT INTO slides (
+                    id, project_id, slide_index, slide_type, slide_json, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (slide_id, project_id, index, slide_type, _json(slide), now, now),
+            )
+            records.append(
+                {
+                    "id": slide_id,
+                    "project_id": project_id,
+                    "slide_index": index,
+                    "slide_type": slide_type,
+                    "slide": slide,
+                    "created_at": now,
+                    "updated_at": now,
+                }
+            )
+        await self._conn.commit()
+        return records
+
+    async def list_slides(self, project_id: str) -> list[dict[str, Any]]:
+        async with self._conn.execute(
+            "SELECT * FROM slides WHERE project_id = ? ORDER BY slide_index ASC",
+            (project_id,),
+        ) as cur:
+            rows = [_row_dict(row) for row in await cur.fetchall()]
+        return [
+            {
+                "id": row["id"],
+                "project_id": row["project_id"],
+                "slide_index": row["slide_index"],
+                "slide_type": row["slide_type"],
+                "slide": _loads(row.get("slide_json"), {}),
+                "created_at": row["created_at"],
+                "updated_at": row["updated_at"],
+            }
+            for row in rows
+            if row is not None
+        ]
+
+    async def update_slide_safe(
+        self,
+        project_id: str,
+        slide_id: str,
+        slide: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        now = _now()
+        cur = await self._conn.execute(
+            """
+            UPDATE slides
+               SET slide_type = ?, slide_json = ?, updated_at = ?
+             WHERE project_id = ? AND id = ?
+            """,
+            (slide.get("slide_type", "content"), _json(slide), now, project_id, slide_id),
+        )
+        await self._conn.commit()
+        if cur.rowcount <= 0:
+            return None
+        rows = await self.list_slides(project_id)
+        return next((row for row in rows if row["id"] == slide_id), None)
+
     async def _next_version(self, table: str, project_id: str) -> int:
         if table not in {"outlines", "design_specs"}:
             raise ValueError(f"Unsupported versioned table: {table}")
