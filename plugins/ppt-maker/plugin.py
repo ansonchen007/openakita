@@ -7,6 +7,7 @@ routes while preserving this self-contained plugin shape.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -15,9 +16,10 @@ from pydantic import BaseModel, ConfigDict
 
 from openakita.plugins.api import PluginAPI, PluginBase
 
-from ppt_maker_inline.file_utils import resolve_plugin_data_root, safe_name, unique_child
+from ppt_maker_inline.file_utils import dataset_dir, resolve_plugin_data_root, safe_name, unique_child
 from ppt_maker_inline.upload_preview import register_upload_preview_routes
 from ppt_source_loader import MissingDependencyError, SourceLoader, SourceParseError
+from ppt_table_analyzer import TableAnalyzer
 from ppt_task_manager import PptTaskManager
 
 
@@ -29,6 +31,14 @@ class ParseSourceRequest(BaseModel):
 
     path: str
     kind: str | None = None
+
+
+class DatasetCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    path: str
+    name: str | None = None
+    project_id: str | None = None
 
 
 class Plugin(PluginBase):
@@ -106,6 +116,83 @@ class Plugin(PluginBase):
                     "metadata": parsed.metadata,
                 },
             }
+
+        @router.post("/datasets")
+        async def create_dataset(payload: DatasetCreateRequest) -> dict[str, Any]:
+            source_path = Path(payload.path)
+            if not source_path.exists() or not source_path.is_file():
+                raise HTTPException(status_code=404, detail="Dataset file not found")
+            async with PptTaskManager(data_dir / "ppt_maker.db") as manager:
+                dataset = await manager.create_dataset(
+                    project_id=payload.project_id,
+                    name=payload.name or source_path.stem,
+                    original_path=str(source_path),
+                    metadata={"kind": SourceLoader().detect_kind(source_path)},
+                )
+            return {"ok": True, "dataset": dataset.model_dump(mode="json")}
+
+        @router.get("/datasets")
+        async def list_datasets() -> dict[str, Any]:
+            async with PptTaskManager(data_dir / "ppt_maker.db") as manager:
+                datasets = await manager.list_datasets()
+            return {"ok": True, "datasets": [item.model_dump(mode="json") for item in datasets]}
+
+        @router.get("/datasets/{dataset_id}")
+        async def get_dataset(dataset_id: str) -> dict[str, Any]:
+            async with PptTaskManager(data_dir / "ppt_maker.db") as manager:
+                dataset = await manager.get_dataset(dataset_id)
+            if dataset is None:
+                raise HTTPException(status_code=404, detail="Dataset not found")
+            return {"ok": True, "dataset": dataset.model_dump(mode="json")}
+
+        @router.post("/datasets/{dataset_id}/profile")
+        async def profile_dataset(dataset_id: str) -> dict[str, Any]:
+            async with PptTaskManager(data_dir / "ppt_maker.db") as manager:
+                dataset = await manager.get_dataset(dataset_id)
+                if dataset is None:
+                    raise HTTPException(status_code=404, detail="Dataset not found")
+                try:
+                    analysis = TableAnalyzer().analyze_to_files(
+                        dataset.original_path,
+                        dataset_dir(data_dir, dataset_id),
+                    )
+                except MissingDependencyError as exc:
+                    raise HTTPException(
+                        status_code=424,
+                        detail={"error": str(exc), "dependency_group": exc.dependency_group},
+                    ) from exc
+                except SourceParseError as exc:
+                    raise HTTPException(status_code=400, detail=str(exc)) from exc
+                dataset = await manager.update_dataset_safe(
+                    dataset_id,
+                    status="profiled",
+                    profile_path=analysis["paths"]["profile_path"],
+                    insights_path=analysis["paths"]["insights_path"],
+                    chart_specs_path=analysis["paths"]["chart_specs_path"],
+                )
+            return {
+                "ok": True,
+                "dataset": dataset.model_dump(mode="json") if dataset else None,
+                "profile": analysis["profile"],
+            }
+
+        @router.post("/datasets/{dataset_id}/insights")
+        async def dataset_insights(dataset_id: str) -> dict[str, Any]:
+            async with PptTaskManager(data_dir / "ppt_maker.db") as manager:
+                dataset = await manager.get_dataset(dataset_id)
+            if dataset is None or not dataset.insights_path:
+                raise HTTPException(status_code=404, detail="Dataset insights not found")
+            insights = json.loads(Path(dataset.insights_path).read_text(encoding="utf-8"))
+            return {"ok": True, "insights": insights}
+
+        @router.post("/datasets/{dataset_id}/chart-specs")
+        async def dataset_chart_specs(dataset_id: str) -> dict[str, Any]:
+            async with PptTaskManager(data_dir / "ppt_maker.db") as manager:
+                dataset = await manager.get_dataset(dataset_id)
+            if dataset is None or not dataset.chart_specs_path:
+                raise HTTPException(status_code=404, detail="Dataset chart specs not found")
+            chart_specs = json.loads(Path(dataset.chart_specs_path).read_text(encoding="utf-8"))
+            return {"ok": True, "chart_specs": chart_specs}
 
         api.register_api_routes(router)
         api.register_tools(_tool_definitions(), self._handle_tool)

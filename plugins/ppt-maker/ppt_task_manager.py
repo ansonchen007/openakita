@@ -172,6 +172,15 @@ _TASK_WRITABLE = frozenset(
         "completed_at",
     }
 )
+_DATASET_WRITABLE = frozenset(
+    {
+        "profile_path",
+        "insights_path",
+        "chart_specs_path",
+        "status",
+        "metadata_json",
+    }
+)
 
 
 def _now() -> float:
@@ -441,6 +450,37 @@ class PptTaskManager:
         if row is None:
             raise RuntimeError("Dataset insert failed")
         return self._dataset_record(row)
+
+    async def get_dataset(self, dataset_id: str) -> DatasetRecord | None:
+        async with self._conn.execute("SELECT * FROM datasets WHERE id = ?", (dataset_id,)) as cur:
+            row = _row_dict(await cur.fetchone())
+        return self._dataset_record(row) if row is not None else None
+
+    async def list_datasets(self, *, limit: int = 50) -> list[DatasetRecord]:
+        async with self._conn.execute(
+            "SELECT * FROM datasets ORDER BY created_at DESC LIMIT ?", (limit,)
+        ) as cur:
+            rows = [_row_dict(row) for row in await cur.fetchall()]
+        return [self._dataset_record(row) for row in rows if row is not None]
+
+    async def update_dataset_safe(self, dataset_id: str, **updates: Any) -> DatasetRecord | None:
+        if not updates:
+            return await self.get_dataset(dataset_id)
+        if "metadata" in updates:
+            updates["metadata_json"] = _json(updates.pop("metadata"))
+        bad = set(updates) - _DATASET_WRITABLE
+        if bad:
+            raise ValueError(f"Unsupported dataset update columns: {sorted(bad)}")
+        if "metadata_json" in updates and not isinstance(updates["metadata_json"], str):
+            updates["metadata_json"] = _json(updates["metadata_json"])
+        updates["updated_at"] = _now()
+        sets = ", ".join(f"{key} = ?" for key in updates)
+        await self._conn.execute(
+            f"UPDATE datasets SET {sets} WHERE id = ?",
+            [*updates.values(), dataset_id],
+        )
+        await self._conn.commit()
+        return await self.get_dataset(dataset_id)
 
     async def create_template(
         self,

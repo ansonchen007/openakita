@@ -98,3 +98,24 @@ async def test_sources_datasets_templates_and_wal(tmp_path) -> None:
     assert template.category is not None
     assert journal_mode.lower() == "wal"
 
+
+@pytest.mark.asyncio
+async def test_dataset_update_safe_records_analysis_paths(tmp_path) -> None:
+    async with PptTaskManager(tmp_path / "ppt_maker.db") as manager:
+        dataset = await manager.create_dataset(name="Sales", original_path="raw.csv")
+        updated = await manager.update_dataset_safe(
+            dataset.id,
+            status="profiled",
+            profile_path="profile.json",
+            insights_path="insights.json",
+            chart_specs_path="chart_specs.json",
+            metadata={"rows": 10},
+        )
+        with pytest.raises(ValueError):
+            await manager.update_dataset_safe(dataset.id, id="bad")
+
+    assert updated is not None
+    assert updated.status == "profiled"
+    assert updated.profile_path == "profile.json"
+    assert updated.metadata == {"rows": 10}
+
