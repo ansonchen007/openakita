@@ -40,80 +40,119 @@
   <div id="app"></div>
   <script>
     (function () {
-      var theme = (window.OpenAkita && window.OpenAkita.meta && window.OpenAkita.meta.theme) || "light";
-      document.documentElement.setAttribute("data-theme", theme);
       var tabs = ["create", "projects", "templates", "draft", "settings", "guide"];
-      var state = { tab: "create", health: null, error: "", draft: JSON.parse(localStorage.getItem("word-maker-draft") || "{}") };
+      var labels = { create: "创建", projects: "项目", templates: "模板", draft: "草稿", settings: "设置", guide: "指南" };
+      var docTypes = [
+        ["weekly_report", "周报"], ["meeting_minutes", "会议纪要"], ["proposal", "项目建议书"],
+        ["acceptance_report", "验收报告"], ["sop", "SOP"], ["research_report", "调研报告"]
+      ];
+      var state = {
+        tab: location.hash ? location.hash.slice(1) : "create",
+        health: null, settings: null, projects: [], selected: null, notice: "", error: "",
+        draft: JSON.parse(localStorage.getItem("word-maker-draft") || '{"doc_type":"research_report"}')
+      };
+      function esc(v) { return String(v == null ? "" : v).replace(/[&<>"]/g, function (ch) { return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[ch]; }); }
       function api(method, path, body) {
-        if (window.OpenAkita && window.OpenAkita.request) {
-          return window.OpenAkita.request(path, { method: method, body: body });
-        }
-        return fetch("/api/plugins/word-maker" + path, {
-          method: method,
-          headers: { "Content-Type": "application/json" },
-          body: body ? JSON.stringify(body) : undefined
-        }).then(function (r) { return r.json(); });
+        if (window.OpenAkita && window.OpenAkita.request) return window.OpenAkita.request(path, { method: method, body: body });
+        return fetch("/api/plugins/word-maker" + path, { method: method, headers: { "Content-Type": "application/json" }, body: body ? JSON.stringify(body) : undefined }).then(function (r) { return r.json(); });
       }
-      function tr(key) {
-        var zh = {
-          create: "创建", projects: "项目", templates: "模板", draft: "草稿", settings: "设置", guide: "指南",
-          title: "Word 文档助手", subtitle: "需求澄清、模板变量校验、DOCX 生成"
-        };
-        return zh[key] || key;
-      }
-      function setTab(tab) { state.tab = tab; render(); }
-      function updateDraft(key, value) {
-        state.draft[key] = value;
-        localStorage.setItem("word-maker-draft", JSON.stringify(state.draft));
-      }
-      function loadHealth() {
-        api("GET", "/healthz").then(function (data) {
-          state.health = data; state.error = ""; render();
-        }).catch(function (err) {
-          state.error = String(err && err.message || err); render();
+      function toast(msg, bad) { state.notice = msg; state.error = bad ? msg : ""; render(); setTimeout(function () { state.notice = ""; render(); }, 2200); }
+      function draft(key, value) { state.draft[key] = value; localStorage.setItem("word-maker-draft", JSON.stringify(state.draft)); }
+      function refresh() {
+        Promise.all([
+          api("GET", "/healthz").catch(function (e) { return { error: String(e.message || e) }; }),
+          api("GET", "/settings").catch(function () { return null; }),
+          api("GET", "/projects").catch(function () { return { projects: [] }; })
+        ]).then(function (items) {
+          state.health = items[0]; state.settings = items[1]; state.projects = items[2].projects || [];
+          render();
         });
       }
+      function setTab(tab) { state.tab = tab; location.hash = tab; refresh(); render(); }
+      function createProject() {
+        var body = {
+          title: state.draft.title || "未命名文档",
+          doc_type: state.draft.doc_type || "research_report",
+          audience: state.draft.audience || "",
+          tone: state.draft.tone || "professional",
+          language: state.draft.language || "zh-CN",
+          requirements: state.draft.requirements || ""
+        };
+        api("POST", "/projects", body).then(function (r) {
+          state.selected = r.project; setTab("projects"); toast("项目已创建：" + r.project.id);
+        }).catch(function (e) { toast("创建失败：" + (e.message || e), true); });
+      }
+      function inspectTemplate() {
+        var projectId = document.getElementById("tpl-project").value.trim();
+        var path = document.getElementById("tpl-path").value.trim();
+        if (!projectId || !path) return toast("请填写 project_id 和模板路径", true);
+        api("POST", "/projects/" + encodeURIComponent(projectId) + "/template", { template_path: path, context: {} }).then(function (r) {
+          document.getElementById("tpl-result").textContent = JSON.stringify(r.inspection, null, 2);
+        }).catch(function (e) { toast("模板检测失败：" + (e.message || e), true); });
+      }
+      function checkDeps() {
+        api("POST", "/deps/check", {}).then(function (r) {
+          document.getElementById("deps-result").textContent = JSON.stringify(r.deps, null, 2);
+        });
+      }
+      function openFolderPicker() {
+        document.getElementById("folder-picker").style.display = "block";
+        api("POST", "/storage/open-folder", {}).catch(function () {});
+        api("GET", "/storage/list-dir").then(function (r) {
+          document.getElementById("folder-list").innerHTML = r.entries.map(function (x) {
+            return '<div class="pill">' + (x.is_dir ? "目录 " : "文件 ") + esc(x.name) + '</div>';
+          }).join(" ");
+        });
+      }
+      function renderHeader() {
+        var ok = state.health && state.health.ok;
+        return '<div class="header"><div><h1>Word 文档助手</h1><div class="muted">需求澄清、模板变量校验、DOCX 生成</div></div>' +
+          '<div class="row"><span class="status ' + (ok ? "ok" : "warn") + '">' + (ok ? "Loaded" : "Checking") + '</span><button class="btn" onclick="window.__wmRefresh()">刷新</button></div></div>';
+      }
+      function renderTabs() {
+        return '<div class="tabs">' + tabs.map(function (tab) {
+          return '<div class="tab ' + (state.tab === tab ? "active" : "") + '" onclick="window.__wmTab(\\'' + tab + '\\')">' + labels[tab] + '</div>';
+        }).join("") + '</div>';
+      }
       function renderCreate() {
-        return '<div class="grid"><div class="card"><h2>新建文档项目</h2>' +
-          '<p class="muted">先描述目标、受众和已有资料；后续阶段会接入 Brain 进行需求澄清和大纲生成。</p>' +
-          '<div class="row" style="margin:10px 0">' +
-          '<span class="pill">周报</span><span class="pill">会议纪要</span><span class="pill">项目建议书</span><span class="pill">SOP</span></div>' +
-          '<textarea class="textarea" placeholder="例如：基于这些材料生成一份项目验收报告..." oninput="window.__wmDraft(\\'requirement\\', this.value)">' + (state.draft.requirement || "") + '</textarea>' +
-          '<div class="row" style="margin-top:10px"><button class="btn primary" disabled>Phase 4 启用创建</button><button class="btn" onclick="window.__wmHealth()">检查插件</button></div>' +
-          '</div><div class="card"><h2>健康状态</h2>' + renderHealth() + '</div></div>';
+        return '<div class="grid"><div class="card"><h2>新建文档项目</h2><p class="muted">像 avatar-studio 一样先收集需求，再进入项目页逐步生成。</p>' +
+          '<div class="row">' + docTypes.map(function (item) {
+            return '<button class="btn ' + (state.draft.doc_type === item[0] ? "primary" : "") + '" onclick="window.__wmDraft(\\'doc_type\\',\\'' + item[0] + '\\');window.__wmRender()">' + item[1] + '</button>';
+          }).join("") + '</div><br>' +
+          '<input class="input" placeholder="标题" value="' + esc(state.draft.title || "") + '" oninput="window.__wmDraft(\\'title\\',this.value)"><br><br>' +
+          '<input class="input" placeholder="目标受众" value="' + esc(state.draft.audience || "") + '" oninput="window.__wmDraft(\\'audience\\',this.value)"><br><br>' +
+          '<textarea class="textarea" placeholder="请描述要生成的文档、已有资料和交付要求" oninput="window.__wmDraft(\\'requirements\\',this.value)">' + esc(state.draft.requirements || "") + '</textarea>' +
+          '<br><br><button class="btn primary" onclick="window.__wmCreate()">创建项目</button></div>' +
+          '<div class="card"><h2>下一步</h2><p class="muted">创建后进入 Projects：上传资料、检测模板变量、生成大纲并渲染 DOCX。</p><pre>' + esc(JSON.stringify(state.health || {}, null, 2)) + '</pre></div></div>';
       }
-      function renderHealth() {
-        if (state.error) return '<p class="status bad">连接失败：' + state.error + '</p>';
-        if (!state.health) return '<p class="status warn">尚未检查</p>';
-        return '<pre>' + JSON.stringify(state.health, null, 2) + '</pre>';
+      function renderProjects() {
+        var rows = state.projects.map(function (p) {
+          return '<tr><td>' + esc(p.id) + '</td><td>' + esc(p.title) + '</td><td>' + esc(p.doc_type) + '</td><td><span class="status">' + esc(p.status) + '</span></td><td>' + esc(p.output_path || "") + '</td></tr>';
+        }).join("");
+        return '<div class="card"><h2>项目列表</h2><table style="width:100%;border-collapse:collapse"><thead><tr><th>id</th><th>标题</th><th>类型</th><th>状态</th><th>输出</th></tr></thead><tbody>' + rows + '</tbody></table></div>';
       }
-      function renderSimple(title, body) {
-        return '<div class="card"><h2>' + title + '</h2><p class="muted">' + body + '</p></div>';
+      function renderTemplates() {
+        return '<div class="grid"><div class="card"><h2>模板变量检测</h2><input id="tpl-project" class="input" placeholder="project_id"><br><br><input id="tpl-path" class="input" placeholder="DOCX 模板绝对路径"><br><br><button class="btn primary" onclick="window.__wmInspectTemplate()">提取变量</button></div><div class="card"><h2>检测结果</h2><pre id="tpl-result">等待检测</pre></div></div>';
+      }
+      function renderDraft() {
+        return '<div class="card"><h2>草稿与章节</h2><p class="muted">这里用于查看大纲、字段 JSON 和章节重写结果。当前阶段后端接口已具备，UI 保留入口。</p><textarea class="textarea" placeholder="粘贴章节 Markdown，后续可调用 rewrite_section"></textarea></div>';
+      }
+      function renderSettings() {
+        var settings = state.settings || {};
+        return '<div class="grid"><div class="card"><h2>设置</h2><p class="muted">Brain 可用：' + esc(settings.brain_available) + '</p><p class="muted">数据目录：' + esc(settings.data_dir_active || "") + '</p><button class="btn" onclick="window.__wmFolder()">浏览目录</button> <button class="btn primary" onclick="window.__wmDeps()">检测依赖</button><pre id="deps-result">' + esc(JSON.stringify(settings.deps || {}, null, 2)) + '</pre></div><div class="card" id="folder-picker" style="display:none"><h2>文件夹选择器</h2><div id="folder-list" class="row"></div></div></div>';
+      }
+      function renderGuide() {
+        return '<div class="card"><h2>5 分钟烟测</h2><ol><li>打开本页并确认 Loaded。</li><li>Create 里输入标题和需求，创建项目。</li><li>Templates 里填写 project_id 和 DOCX 模板路径，提取变量。</li><li>调用 render 接口生成 document.docx。</li><li>在 Projects 查看 output_path 并下载。</li></ol><p class="muted">模板变量示例：{{ company_name }}、{{ title }}、{{ summary }}。</p></div>';
       }
       function renderContent() {
-        if (state.tab === "create") return renderCreate();
-        if (state.tab === "projects") return renderSimple("项目", "Phase 1 后显示项目列表、状态筛选和详情抽屉。");
-        if (state.tab === "templates") return renderSimple("模板", "Phase 2 后支持上传 DOCX 模板、提取变量和校验缺失字段。");
-        if (state.tab === "draft") return renderSimple("草稿", "Phase 3 后支持大纲确认、字段 JSON 检查和章节重写。");
-        if (state.tab === "settings") return renderSimple("设置", "后续提供数据目录、依赖检测、Brain 权限状态和存储清理。");
-        return renderSimple("指南", "5 分钟烟测：加载插件，检查 healthz，调用 word_list_projects。");
+        return state.tab === "create" ? renderCreate() : state.tab === "projects" ? renderProjects() : state.tab === "templates" ? renderTemplates() : state.tab === "draft" ? renderDraft() : state.tab === "settings" ? renderSettings() : renderGuide();
       }
       function render() {
-        document.getElementById("app").innerHTML =
-          '<div class="app"><div class="header"><div><h1>' + tr("title") + '</h1><div class="muted">' + tr("subtitle") + '</div></div>' +
-          '<div class="status ' + (state.health ? "ok" : "warn") + '">' + (state.health ? "Loaded" : "Phase 0") + '</div></div>' +
-          '<div class="tabs">' + tabs.map(function (tab) {
-            return '<div class="tab ' + (state.tab === tab ? "active" : "") + '" onclick="window.__wmTab(\\'' + tab + '\\')">' + tr(tab) + '</div>';
-          }).join("") + '</div><div class="content">' + renderContent() + '</div></div>';
+        document.getElementById("app").innerHTML = '<div class="app">' + renderHeader() + renderTabs() + (state.notice ? '<div class="card status ' + (state.error ? "bad" : "ok") + '">' + esc(state.notice) + '</div>' : "") + '<div class="content">' + renderContent() + '</div></div>';
       }
-      window.__wmTab = setTab;
-      window.__wmHealth = loadHealth;
-      window.__wmDraft = updateDraft;
-      window.addEventListener("openakita:ready", function (event) {
-        if (event.detail && event.detail.theme) document.documentElement.setAttribute("data-theme", event.detail.theme);
-      });
-      loadHealth();
-      render();
+      window.__wmTab = setTab; window.__wmRefresh = refresh; window.__wmDraft = draft; window.__wmCreate = createProject; window.__wmInspectTemplate = inspectTemplate; window.__wmDeps = checkDeps; window.__wmFolder = openFolderPicker; window.__wmRender = render;
+      window.addEventListener("openakita:ready", function (event) { if (event.detail && event.detail.theme) document.documentElement.setAttribute("data-theme", event.detail.theme); });
+      refresh(); render();
     })();
   </script>
 </body>
