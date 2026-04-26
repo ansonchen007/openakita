@@ -25,6 +25,7 @@ from ppt_maker_inline.file_utils import (
     template_dir,
     unique_child,
 )
+from ppt_maker_inline.python_deps import PythonDepsManager
 from ppt_maker_inline.upload_preview import register_upload_preview_routes
 from ppt_source_loader import MissingDependencyError, SourceLoader, SourceParseError
 from ppt_table_analyzer import TableAnalyzer
@@ -111,11 +112,13 @@ class Plugin(PluginBase):
     def __init__(self) -> None:
         self._api: PluginAPI | None = None
         self._data_dir: Path | None = None
+        self._deps: PythonDepsManager | None = None
 
     def on_load(self, api: PluginAPI) -> None:
         self._api = api
         data_dir = resolve_plugin_data_root(api.get_data_dir() or Path.cwd() / "data")
         self._data_dir = data_dir
+        self._deps = PythonDepsManager(data_dir)
 
         router = APIRouter()
         register_upload_preview_routes(router, data_dir / "uploads", prefix="/uploads")
@@ -130,6 +133,27 @@ class Plugin(PluginBase):
                 "db_path": str(data_dir / "ppt_maker.db"),
                 "pipeline_steps": 10,
             }
+
+        @router.get("/system/python-deps")
+        async def list_python_deps() -> dict[str, Any]:
+            assert self._deps is not None
+            return {"ok": True, "groups": self._deps.list_groups()}
+
+        @router.get("/system/python-deps/{dep_id}/status")
+        async def python_dep_status(dep_id: str) -> dict[str, Any]:
+            assert self._deps is not None
+            try:
+                return {"ok": True, "dependency": self._deps.status(dep_id)}
+            except ValueError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+        @router.post("/system/python-deps/{dep_id}/install")
+        async def install_python_dep(dep_id: str) -> dict[str, Any]:
+            assert self._deps is not None
+            try:
+                return {"ok": True, "dependency": await self._deps.start_install(dep_id)}
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
 
         @router.post("/projects")
         async def create_project(payload: ProjectCreateRequest) -> dict[str, Any]:

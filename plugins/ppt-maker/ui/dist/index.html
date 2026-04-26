@@ -139,11 +139,20 @@
       }
 
       function SettingsTab({ health, setHealth, setError }) {
+        const [deps, setDeps] = useState(null);
         async function checkHealth() {
           setError(null);
           setHealth(await request("/healthz"));
         }
-        return <section className="panel"><h2>Settings</h2><button onClick={checkHealth}>健康检查</button><div className="hint">依赖管理面板将在 Phase 11 接入；当前必需依赖为 python-pptx。</div><pre>{JSON.stringify(health, null, 2)}</pre></section>;
+        async function loadDeps() {
+          setError(null);
+          setDeps(await request("/system/python-deps"));
+        }
+        async function installDep(depId) {
+          setError(null);
+          setDeps(await request(`/system/python-deps/${depId}/install`, { method: "POST" }));
+        }
+        return <section className="panel"><h2>Settings</h2><div className="actions"><button onClick={checkHealth}>健康检查</button><button onClick={loadDeps}>检测可选依赖</button></div><div className="hint">PythonDepsPanel：只允许安装白名单依赖组，禁止输入任意 pip 包名。</div>{deps?.groups?.map((dep) => <div className="row" key={dep.id}><b>{dep.id}</b><span>{dep.installed ? "已安装" : "未安装"}</span><span>{dep.status}</span><button onClick={() => installDep(dep.id)} disabled={dep.detect_only || dep.busy}>安装</button></div>)}<pre>{JSON.stringify({ health, deps }, null, 2)}</pre></section>;
       }
 
       function App() {

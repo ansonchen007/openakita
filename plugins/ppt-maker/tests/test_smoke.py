@@ -35,5 +35,5 @@ def test_inline_helpers_import() -> None:
 
     assert safe_name("a/b c.pptx") == "b_c.pptx"
     assert parse_llm_json_object("```json\n{\"ok\": true}\n```") == {"ok": True}
-    assert "table" in list_optional_groups()
+    assert "table_processing" in list_optional_groups()
 

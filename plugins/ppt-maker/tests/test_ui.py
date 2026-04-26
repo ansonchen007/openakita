@@ -13,6 +13,8 @@ def test_ui_contains_seven_tabs_and_core_widgets() -> None:
         assert tab in html
     for marker in ["FileUploadZone", "CostBreakdown", "ErrorPanel", "ProgressPanel"]:
         assert marker in html
+    assert "PythonDepsPanel" in html
+    assert "/system/python-deps" in html
     assert "table_to_deck" in html
     assert "template_deck" in html
     assert "brand_tokens" in html
