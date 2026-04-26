@@ -294,6 +294,10 @@ export function ChatView({
   const handleSecurityClose = useCallback((info?: SecurityCloseInfo) => {
     if (securityTimerRef.current) clearInterval(securityTimerRef.current);
 
+    if (info && (info.decision === "deny" || info.decision === "timeout")) {
+      securityPolicy.recordDeny(info.tool);
+    }
+
     if (info?.decision === "allow_always" && securityQueueRef.current.length > 0) {
       const decidedPrefix = _cmdPrefix(info.command);
       const isShell = info.tool === "run_shell" || info.tool === "run_powershell";
@@ -318,7 +322,7 @@ export function ChatView({
 
     const next = securityQueueRef.current.shift();
     setSecurityConfirm(next ?? null);
-  }, [apiBaseUrl]);
+  }, [apiBaseUrl, securityPolicy]);
   const [winSize, setWinSize] = useState({ w: window.innerWidth, h: window.innerHeight });
   useEffect(() => {
     if (!lightbox) return;
@@ -1894,6 +1898,7 @@ export function ChatView({
       subAgentTasks: [],
       isDelegating: false,
       pollingTimer: null,
+      _hadError: false,
     };
     streamContexts.current.set(thisConvId, sctx);
     // Sending a new turn should always reveal the latest messages immediately.

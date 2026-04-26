@@ -537,7 +537,7 @@ function MainApp() {
   const [installProgress, setInstallProgress] = useState<{ stage: string; percent: number } | null>(null);
   const [extras, setExtras] = useState<string>("all");
   const [indexUrl, setIndexUrl] = useState<string>("https://mirrors.aliyun.com/pypi/simple/");
-  const [pipIndexPresetId, setPipIndexPresetId] = useState<"official" | "tuna" | "aliyun" | "custom">("aliyun");
+  const [pipIndexPresetId, setPipIndexPresetId] = useState<"official" | "tuna" | "ustc" | "aliyun" | "custom">("aliyun");
   const [customIndexUrl, setCustomIndexUrl] = useState<string>("");
   const [venvReady, setVenvReady] = useState(false);
   const [openakitaInstalled, setOpenakitaInstalled] = useState(false);
@@ -2852,40 +2852,88 @@ function MainApp() {
 
   function renderStatus() {
     return (
-      <StatusView
-        currentWorkspaceId={currentWorkspaceId}
-        workspaces={workspaces}
-        envDraft={envDraft}
-        serviceStatus={serviceStatus}
-        heartbeatState={heartbeatState}
-        busy={busy}
-        autostartEnabled={autostartEnabled}
-        autoUpdateEnabled={autoUpdateEnabled}
-        setAutostartEnabled={setAutostartEnabled}
-        setAutoUpdateEnabled={setAutoUpdateEnabled}
-        endpointSummary={endpointSummary}
-        endpointHealth={endpointHealth}
-        setEndpointHealth={setEndpointHealth}
-        imHealth={imHealth}
-        setImHealth={setImHealth}
-        skillSummary={skillSummary}
-        serviceLog={serviceLog}
-        serviceLogRef={serviceLogRef}
-        logAtBottomRef={logAtBottomRef}
-        detectedProcesses={detectedProcesses}
-        setDetectedProcesses={setDetectedProcesses}
-        setNewRelease={setNewRelease}
-        setUpdateAvailable={setUpdateAvailable}
-        setUpdateProgress={setUpdateProgress}
-        shouldUseHttpApi={shouldUseHttpApi}
-        httpApiBase={httpApiBase}
-        startLocalServiceWithConflictCheck={startLocalServiceWithConflictCheck}
-        refreshStatus={refreshStatus}
-        doStopService={doStopService}
-        waitForServiceDown={waitForServiceDown}
-        doStartLocalService={doStartLocalService}
-        setView={setView}
-      />
+      <div className="space-y-4">
+        {renderRuntimeBootstrapPanel()}
+        <StatusView
+          currentWorkspaceId={currentWorkspaceId}
+          workspaces={workspaces}
+          envDraft={envDraft}
+          serviceStatus={serviceStatus}
+          heartbeatState={heartbeatState}
+          busy={busy}
+          autostartEnabled={autostartEnabled}
+          autoUpdateEnabled={autoUpdateEnabled}
+          setAutostartEnabled={setAutostartEnabled}
+          setAutoUpdateEnabled={setAutoUpdateEnabled}
+          endpointSummary={endpointSummary}
+          endpointHealth={endpointHealth}
+          setEndpointHealth={setEndpointHealth}
+          imHealth={imHealth}
+          setImHealth={setImHealth}
+          skillSummary={skillSummary}
+          serviceLog={serviceLog}
+          serviceLogRef={serviceLogRef}
+          logAtBottomRef={logAtBottomRef}
+          detectedProcesses={detectedProcesses}
+          setDetectedProcesses={setDetectedProcesses}
+          setNewRelease={setNewRelease}
+          setUpdateAvailable={setUpdateAvailable}
+          setUpdateProgress={setUpdateProgress}
+          shouldUseHttpApi={shouldUseHttpApi}
+          httpApiBase={httpApiBase}
+          startLocalServiceWithConflictCheck={startLocalServiceWithConflictCheck}
+          refreshStatus={refreshStatus}
+          doStopService={doStopService}
+          waitForServiceDown={waitForServiceDown}
+          doStartLocalService={doStartLocalService}
+          setView={setView}
+        />
+      </div>
+    );
+  }
+
+  function renderRuntimeBootstrapPanel() {
+    const stage = installProgress?.stage || (serviceStatus?.running ? "运行环境已就绪" : "等待启动后端");
+    const percent = installProgress?.percent ?? (serviceStatus?.running ? 100 : 0);
+    const runtimeLogHint = "~/.openakita/runtime/logs/bootstrap.log";
+    return (
+      <div className="card border border-blue-200/70 bg-blue-50/50 dark:border-blue-500/30 dark:bg-blue-950/20">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h3 className="text-base font-bold tracking-tight">OpenAkita 运行环境准备</h3>
+            <p className="text-sm text-muted-foreground mt-1">
+              桌面端会优先创建 app runtime venv 和 agent tools venv；失败时回退到 legacy PyInstaller 兼容模式。
+            </p>
+          </div>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={!!busy || !currentWorkspaceId}
+            onClick={() => currentWorkspaceId && doStartLocalService(currentWorkspaceId)}
+          >
+            重试启动/修复
+          </Button>
+        </div>
+        <div className="mt-4 h-2 rounded-full bg-blue-100 dark:bg-blue-950 overflow-hidden">
+          <div
+            className="h-full bg-blue-500 transition-all"
+            style={{ width: `${Math.max(0, Math.min(100, percent))}%` }}
+          />
+        </div>
+        <div className="mt-3 grid gap-2 text-sm text-muted-foreground md:grid-cols-2">
+          <div>当前阶段：<span className="font-medium text-foreground">{stage}</span></div>
+          <div>默认镜像：<span className="font-mono text-xs">{indexUrl || "https://mirrors.aliyun.com/pypi/simple/"}</span></div>
+          <div>App venv：<span className="font-mono text-xs">~/.openakita/runtime/app-venv</span></div>
+          <div>Agent venv：<span className="font-mono text-xs">~/.openakita/runtime/agent-venv</span></div>
+          <div>日志路径：<span className="font-mono text-xs">{runtimeLogHint}</span></div>
+          <div>状态：<span className="font-medium">{venvStatus || (serviceStatus?.running ? "后端运行中" : "尚未启动")}</span></div>
+        </div>
+        {installLiveLog && (
+          <pre className="mt-3 max-h-40 overflow-auto rounded-lg bg-slate-950 p-3 text-xs text-slate-200">
+            {installLiveLog.slice(-4000)}
+          </pre>
+        )}
+      </div>
     );
   }
 

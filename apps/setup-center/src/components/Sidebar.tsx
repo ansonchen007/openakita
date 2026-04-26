@@ -131,20 +131,54 @@ export function Sidebar({
   // Refetch the Apps sidebar list. Triggered initially, when backend
   // availability changes, and on the global "openakita:plugin-apps-changed"
   // event dispatched by PluginManagerView after install/enable/disable/etc.
+  //
+  // Tauri can mark the backend process as "running" before FastAPI has mounted
+  // plugin UI routes. Use a few startup retries instead of polling forever.
   useEffect(() => {
     if (!httpApiBase || !serviceRunning) { setPluginApps([]); return; }
     let cancelled = false;
-    const refetch = () => {
-      fetch(`${httpApiBase}/api/plugins/ui-apps`)
-        .then(r => r.ok ? r.json() : [])
-        .then(data => { if (!cancelled) setPluginApps(Array.isArray(data) ? data : []); })
-        .catch(() => { if (!cancelled) setPluginApps([]); });
+    const retryDelays = [2_000, 6_000, 15_000];
+    const timers = new Set<ReturnType<typeof setTimeout>>();
+
+    const clearTimers = () => {
+      timers.forEach(timer => clearTimeout(timer));
+      timers.clear();
     };
+
+    const scheduleRetry = (attempt: number) => {
+      const delay = retryDelays[attempt];
+      if (delay == null) return false;
+      const timer = setTimeout(() => {
+        timers.delete(timer);
+        void refetch(attempt + 1);
+      }, delay);
+      timers.add(timer);
+      return true;
+    };
+
+    const refetch = async (attempt = 0) => {
+      try {
+        const r = await fetch(`${httpApiBase}/api/plugins/ui-apps`);
+        const data = r.ok ? await r.json() : [];
+        if (cancelled) return;
+        const apps = Array.isArray(data) ? data : [];
+        setPluginApps(apps);
+        if (apps.length === 0) scheduleRetry(attempt);
+      } catch {
+        if (cancelled) return;
+        if (!scheduleRetry(attempt)) setPluginApps([]);
+      }
+    };
+
     refetch();
-    const onChanged = () => refetch();
+    const onChanged = () => {
+      clearTimers();
+      void refetch();
+    };
     window.addEventListener("openakita:plugin-apps-changed", onChanged);
     return () => {
       cancelled = true;
+      clearTimers();
       window.removeEventListener("openakita:plugin-apps-changed", onChanged);
     };
   }, [httpApiBase, serviceRunning]);

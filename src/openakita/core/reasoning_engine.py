@@ -63,6 +63,18 @@ _ADMIN_TOOL_NAMES = frozenset({
     "add_memory",
     "list_directory",
 })
+
+
+def _tool_rate_limit_key(tool_name: str, tool_args: Any) -> str:
+    """Key repeated-tool throttling by the actual invocation, not just tool name."""
+    try:
+        param_str = json.dumps(tool_args, sort_keys=True, ensure_ascii=False, default=str)
+    except Exception:
+        param_str = str(tool_args)
+    param_hash = hashlib.md5(param_str.encode()).hexdigest()[:8]
+    return f"{tool_name}({param_hash})"
+
+
 from .token_tracking import TokenTrackingContext, reset_tracking_context, set_tracking_context
 from .tool_executor import ToolExecutor
 
@@ -956,6 +968,12 @@ class ReasoningEngine:
             except Exception:
                 param_str = str(inp)
 
+            if name == "read_file":
+                path = str(inp.get("path", "") or inp.get("file_path", ""))
+                normalized_path = path.replace("\\", "/").lower()
+                if "/terminals/" in normalized_path and normalized_path.endswith(".txt"):
+                    name = "read_file_terminal"
+
             if name in self._browser_page_read_tools and len(param_str) <= 20 and _last_browser_url:
                 param_str = f"{param_str}|url={_last_browser_url}"
 
@@ -1694,17 +1712,22 @@ class ReasoningEngine:
                     _tc_args = tc.get("input", tc.get("arguments", {}))
                     await _emit_progress(f"🔧 {self._describe_tool_call(_tc_name, _tc_args)}")
 
-                # 同名工具频率限制：超阈值的调用跳过执行，返回提示
+                # Exact invocation frequency limit: repeated identical calls are skipped.
+                # Counting only by tool name incorrectly blocks normal progress updates
+                # such as update_todo_step(step_1), update_todo_step(step_2), ...
                 _all_tool_calls = list(decision.tool_calls or [])
                 _rate_limited_by_id: dict[str, dict] = {}
                 _calls_to_execute = []
                 for tc in _all_tool_calls:
                     _tc_name = self._tool_executor.canonicalize_tool_name(tc.get("name", ""))
-                    _tool_call_counter[_tc_name] = _tool_call_counter.get(_tc_name, 0) + 1
-                    if _tool_call_counter[_tc_name] > _MAX_SAME_TOOL_PER_TASK:
+                    _tc_args = tc.get("input", tc.get("arguments", {}))
+                    _tc_key = _tool_rate_limit_key(_tc_name, _tc_args)
+                    _tool_call_counter[_tc_key] = _tool_call_counter.get(_tc_key, 0) + 1
+                    if _tool_call_counter[_tc_key] > _MAX_SAME_TOOL_PER_TASK:
                         logger.warning(
-                            f"[RateLimit] Tool '{_tc_name}' called "
-                            f"{_tool_call_counter[_tc_name]} times (limit={_MAX_SAME_TOOL_PER_TASK}), "
+                            f"[RateLimit] Tool invocation '{_tc_key}' called "
+                            f"{_tool_call_counter[_tc_key]} times "
+                            f"(limit={_MAX_SAME_TOOL_PER_TASK}), "
                             f"skipping execution"
                         )
                         _rate_limited_by_id[tc.get("id", "")] = {
@@ -1712,7 +1735,7 @@ class ReasoningEngine:
                             "tool_use_id": tc.get("id", ""),
                             "content": (
                                 f"[系统] 工具 {_tc_name} 已在本任务中调用 "
-                                f"{_tool_call_counter[_tc_name] - 1} 次，已达上限。"
+                                f"{_tool_call_counter[_tc_key] - 1} 次，已达上限。"
                                 f"请整合操作或继续下一步。"
                             ),
                         }
@@ -1866,7 +1889,8 @@ class ReasoningEngine:
                         f"[系统提示] 工具 {_tool_names} 累计失败已达 {self.PERSISTENT_FAIL_LIMIT} 次"
                         f"（含跨回滚），通常是因为参数过长被 API 截断。"
                         "你必须改用完全不同的策略：\n"
-                        "- 使用 run_shell 执行 Python 脚本来生成大文件\n"
+                        "- 使用平台命令工具执行 Python 脚本来生成大文件"
+                        "（Windows 用 run_powershell，其他环境用 run_shell）\n"
                         "- 将内容拆分成多次小写入\n"
                         "- 先写骨架，再逐步填充\n"
                         "禁止再次用同样方式调用该工具。"
@@ -1958,9 +1982,9 @@ class ReasoningEngine:
                         )
                         is_error = r.get("is_error", False) if isinstance(r, dict) else False
                     if not is_error and result_content:
-                        is_error = any(
-                            m in result_content
-                            for m in ["❌", "⚠️ 工具执行错误", "错误类型:", "⚠️ 策略拒绝:"]
+                        stripped_result = result_content.lstrip()
+                        is_error = stripped_result.startswith(
+                            ("❌", "⚠️ 工具执行错误", "错误类型:", "⚠️ 策略拒绝:")
                         )
                     self._supervisor.record_tool_call(
                         tool_name=_tc_name,
@@ -2126,9 +2150,8 @@ class ReasoningEngine:
                                 f"(iter={iteration}, pattern={intervention.pattern.value})"
                             )
                         else:
-                            tools = []
                             logger.info(
-                                f"[Supervisor] NUDGE: tools stripped to force text response "
+                                f"[Supervisor] NUDGE: prompt injected; tools left available "
                                 f"(iter={iteration}, pattern={intervention.pattern.value})"
                             )
                         max_no_tool_retries = 0
@@ -2384,6 +2407,11 @@ class ReasoningEngine:
                     param_str = json.dumps(inp, sort_keys=True, ensure_ascii=False)
                 except Exception:
                     param_str = str(inp)
+                if name == "read_file":
+                    path = str(inp.get("path", "") or inp.get("file_path", ""))
+                    normalized_path = path.replace("\\", "/").lower()
+                    if "/terminals/" in normalized_path and normalized_path.endswith(".txt"):
+                        name = "read_file_terminal"
                 if (
                     name in self._browser_page_read_tools
                     and len(param_str) <= 20
@@ -3053,6 +3081,7 @@ class ReasoningEngine:
                     if ask_user_calls:
                         # 先执行非 ask_user 工具
                         tool_results_for_msg: list[dict] = []
+                        _security_confirm_interrupted_ask = False
                         for tc in other_tool_calls:
                             t_name = self._tool_executor.canonicalize_tool_name(
                                 tc.get("name", "unknown")
@@ -3095,7 +3124,7 @@ class ReasoningEngine:
                                 {"status": "tool_execution", "tool_name": t_name},
                             )
                             # PolicyEngine 检查
-                            from .policy import PolicyDecision, get_policy_engine
+                            from .policy import PolicyDecision, PolicyResult, get_policy_engine
 
                             _pe = get_policy_engine()
                             _pr = _pe.assert_tool_allowed(
@@ -3105,7 +3134,7 @@ class ReasoningEngine:
                                 r = f"⚠️ 策略拒绝: {_pr.reason}"
                                 _tool_is_error = True
                             elif _pr.decision == PolicyDecision.CONFIRM:
-                                _risk = _pr.metadata.get("risk_level", "HIGH")
+                                _risk = _pr.metadata.get("risk_level") or "medium"
                                 _needs_sb = _pr.metadata.get("needs_sandbox", False)
                                 _pe.store_ui_pending(
                                     t_id,
@@ -3114,6 +3143,7 @@ class ReasoningEngine:
                                     session_id=conversation_id or "",
                                     needs_sandbox=_needs_sb,
                                 )
+                                _pe.prepare_ui_confirm(t_id)
                                 yield {
                                     "type": "security_confirm",
                                     "tool": t_name,
@@ -3132,12 +3162,44 @@ class ReasoningEngine:
                                     ]
                                     + (["sandbox"] if _needs_sb else []),
                                 }
-                                r = (
-                                    f"⚠️ 需要用户确认: {_pr.reason}\n"
-                                    "已向用户发送确认请求，请等待用户通过界面做出决定后再继续。"
-                                    "不要使用 ask_user 工具重复询问。"
+                                _decision = await _pe.wait_for_ui_resolution(
+                                    t_id,
+                                    float(_pe._config.confirmation.timeout_seconds),
                                 )
-                                _tool_is_error = True
+                                _pe.cleanup_ui_confirm(t_id)
+                                if _decision in (
+                                    "allow",
+                                    "allow_once",
+                                    "allow_session",
+                                    "allow_always",
+                                    "sandbox",
+                                ):
+                                    try:
+                                        r = await self._tool_executor.execute_tool_with_policy(
+                                            tool_name=t_name,
+                                            tool_input=t_args if isinstance(t_args, dict) else {},
+                                            policy_result=PolicyResult(
+                                                decision=PolicyDecision.ALLOW,
+                                                reason=f"用户已允许安全确认: {_decision}",
+                                                metadata={
+                                                    "confirmed_bypass": True,
+                                                    "needs_sandbox": _decision == "sandbox" or _needs_sb,
+                                                },
+                                            ),
+                                            session_id=conversation_id,
+                                        )
+                                        r = str(r) if r else ""
+                                        _tool_is_error = False
+                                    except Exception as exc:
+                                        r = f"Tool error after security confirmation: {exc}"
+                                        _tool_is_error = True
+                                else:
+                                    r = (
+                                        f"用户已拒绝安全确认: {_decision}。"
+                                        "不要再执行该操作，请选择安全替代方案或说明无法继续。"
+                                    )
+                                    _tool_is_error = True
+                                _security_confirm_interrupted_ask = True
                             else:
                                 _tool_is_error = False
                                 try:
@@ -3168,10 +3230,15 @@ class ReasoningEngine:
                                     "type": "tool_result",
                                     "tool_use_id": t_id,
                                     "content": r,
+                                    "is_error": _tool_is_error,
                                 }
                             )
+                            if _security_confirm_interrupted_ask:
+                                break
 
                         all_tool_results.extend(tool_results_for_msg)
+                        if _security_confirm_interrupted_ask:
+                            continue
 
                         # ask_user 事件
                         ask_raw = ask_user_calls[0].get("input")
@@ -3267,17 +3334,19 @@ class ReasoningEngine:
                         tool_args = tc.get("input", tc.get("arguments", {}))
                         tool_id = tc.get("id", str(uuid.uuid4()))
 
-                        # 同名工具频率限制
-                        _tool_call_counter[tool_name] = _tool_call_counter.get(tool_name, 0) + 1
-                        if _tool_call_counter[tool_name] > _MAX_SAME_TOOL_PER_TASK:
+                        # Exact invocation frequency limit: same tool with different
+                        # arguments is valid progress, especially for todo step updates.
+                        _tool_key = _tool_rate_limit_key(tool_name, tool_args)
+                        _tool_call_counter[_tool_key] = _tool_call_counter.get(_tool_key, 0) + 1
+                        if _tool_call_counter[_tool_key] > _MAX_SAME_TOOL_PER_TASK:
                             logger.warning(
-                                f"[RateLimit] Tool '{tool_name}' called "
-                                f"{_tool_call_counter[tool_name]} times "
+                                f"[RateLimit] Tool invocation '{_tool_key}' called "
+                                f"{_tool_call_counter[_tool_key]} times "
                                 f"(limit={_MAX_SAME_TOOL_PER_TASK}), skipping"
                             )
                             _rl_msg = (
                                 f"[系统] 工具 {tool_name} 已在本任务中调用 "
-                                f"{_tool_call_counter[tool_name] - 1} 次，已达上限。"
+                                f"{_tool_call_counter[_tool_key] - 1} 次，已达上限。"
                                 f"请整合操作或继续下一步。"
                             )
                             yield {
@@ -3342,7 +3411,7 @@ class ReasoningEngine:
                         )
 
                         # PolicyEngine 检查（与 execute_batch 一致）
-                        from .policy import PolicyDecision, get_policy_engine
+                        from .policy import PolicyDecision, PolicyResult, get_policy_engine
 
                         _pe = get_policy_engine()
                         _tool_args_dict = tool_args if isinstance(tool_args, dict) else {}
@@ -3381,7 +3450,7 @@ class ReasoningEngine:
                             continue
 
                         if _pr.decision == PolicyDecision.CONFIRM:
-                            _risk = _pr.metadata.get("risk_level", "HIGH")
+                            _risk = _pr.metadata.get("risk_level") or "medium"
                             _needs_sb = _pr.metadata.get("needs_sandbox", False)
                             _pe.store_ui_pending(
                                 tool_id,
@@ -3390,6 +3459,7 @@ class ReasoningEngine:
                                 session_id=conversation_id or "",
                                 needs_sandbox=_needs_sb,
                             )
+                            _pe.prepare_ui_confirm(tool_id)
                             yield {
                                 "type": "security_confirm",
                                 "tool": tool_name,
@@ -3403,17 +3473,50 @@ class ReasoningEngine:
                                 "options": ["allow_once", "allow_session", "allow_always", "deny"]
                                 + (["sandbox"] if _needs_sb else []),
                             }
-                            result_text = (
-                                f"⚠️ 需要用户确认: {_pr.reason}\n"
-                                "已向用户发送确认请求，请等待用户通过界面做出决定后再继续。"
-                                "不要使用 ask_user 工具重复询问。"
+                            _decision = await _pe.wait_for_ui_resolution(
+                                tool_id,
+                                float(_pe._config.confirmation.timeout_seconds),
                             )
+                            _pe.cleanup_ui_confirm(tool_id)
+                            _confirmed_allowed = _decision in (
+                                "allow",
+                                "allow_once",
+                                "allow_session",
+                                "allow_always",
+                                "sandbox",
+                            )
+                            if _confirmed_allowed:
+                                try:
+                                    result_text = await self._tool_executor.execute_tool_with_policy(
+                                        tool_name=tool_name,
+                                        tool_input=_tool_args_dict,
+                                        policy_result=PolicyResult(
+                                            decision=PolicyDecision.ALLOW,
+                                            reason=f"用户已允许安全确认: {_decision}",
+                                            metadata={
+                                                "confirmed_bypass": True,
+                                                "needs_sandbox": _decision == "sandbox" or _needs_sb,
+                                            },
+                                        ),
+                                        session_id=conversation_id,
+                                    )
+                                    result_text = str(result_text) if result_text else ""
+                                    _confirm_is_error = False
+                                except Exception as exc:
+                                    result_text = f"Tool error after security confirmation: {exc}"
+                                    _confirm_is_error = True
+                            else:
+                                result_text = (
+                                    f"用户已拒绝安全确认: {_decision}。"
+                                    "不要再执行该操作，请选择安全替代方案或说明无法继续。"
+                                )
+                                _confirm_is_error = True
                             yield {
                                 "type": "tool_call_end",
                                 "tool": tool_name,
                                 "result": result_text[:_SSE_RESULT_PREVIEW_CHARS],
                                 "id": tool_id,
-                                "is_error": True,
+                                "is_error": _confirm_is_error,
                                 "result_summary": self._summarize_tool_result(tool_name, result_text) or "",
                             }
                             tool_results_for_msg.append(
@@ -3421,7 +3524,7 @@ class ReasoningEngine:
                                     "type": "tool_result",
                                     "tool_use_id": tool_id,
                                     "content": result_text,
-                                    "is_error": True,
+                                    "is_error": _confirm_is_error,
                                 }
                             )
                             continue
@@ -3848,10 +3951,16 @@ class ReasoningEngine:
                             _sr_content = (
                                 str(_sr.get("content", "")) if isinstance(_sr, dict) else str(_sr)
                             )
-                        _sr_err = any(
-                            m in _sr_content
-                            for m in ["❌", "⚠️ 工具执行错误", "错误类型:", "⚠️ 策略拒绝:"]
-                        )
+                            _sr_err = (
+                                bool(_sr.get("is_error", False)) if isinstance(_sr, dict) else False
+                            )
+                        else:
+                            _sr_err = False
+                        if not _sr_err and _sr_content:
+                            _stripped_sr = _sr_content.lstrip()
+                            _sr_err = _stripped_sr.startswith(
+                                ("❌", "⚠️ 工具执行错误", "错误类型:", "⚠️ 策略拒绝:")
+                            )
                         self._supervisor.record_tool_call(
                             tool_name=_stn,
                             params=_stc.get("input", {}),
@@ -4002,9 +4111,8 @@ class ReasoningEngine:
                                     f"(iter={_iteration}, pattern={intervention.pattern.value})"
                                 )
                             else:
-                                tools = []
                                 logger.info(
-                                    f"[Supervisor] NUDGE: tools stripped to force text response "
+                                    f"[Supervisor] NUDGE: prompt injected; tools left available "
                                     f"(iter={_iteration}, pattern={intervention.pattern.value})"
                                 )
                             max_no_tool_retries = 0
@@ -5182,7 +5290,8 @@ class ReasoningEngine:
                                     "[系统] ⚠️ 严重警告：你已经连续多轮只是在描述将要做什么，"
                                     "但从未实际调用工具执行。系统日志确认你没有生成任何文件。"
                                     "文字描述≠实际执行。"
-                                    "请立即调用 run_shell 或 write_file 等工具来完成实际操作，"
+                                    "请立即调用 write_file、平台命令工具"
+                                    "（Windows 用 run_powershell，其他环境用 run_shell）等工具来完成实际操作，"
                                     "不要再输出任何描述性文字。"
                                 ),
                             }

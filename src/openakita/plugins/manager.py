@@ -1199,7 +1199,13 @@ class PluginManager:
             assert ui is not None
             icon_url = ""
             if ui.icon:
-                icon_url = f"/api/plugins/{lp.manifest.id}/ui/{ui.icon}"
+                version = ""
+                ui_icon_path = (lp.plugin_dir / ui.entry).parent / ui.icon
+                try:
+                    version = f"?v={ui_icon_path.stat().st_mtime_ns}"
+                except OSError:
+                    version = ""
+                icon_url = f"/api/plugins/{lp.manifest.id}/ui/{ui.icon}{version}"
             result.append({
                 "id": lp.manifest.id,
                 "title": ui.title or lp.manifest.name,

@@ -1646,6 +1646,11 @@ class Agent:
             logger.warning("propagate_skill_change: catalog rebuild failed: %s", e)
 
         try:
+            self._invalidate_system_prompt_cache("skill change")
+        except Exception as e:
+            logger.warning("propagate_skill_change: prompt cache invalidation failed: %s", e)
+
+        try:
             self._update_skill_tools()
         except Exception as e:
             logger.warning("propagate_skill_change: tool mapping update failed: %s", e)
@@ -2324,7 +2329,8 @@ class Agent:
                 "直接用你自己的专业工具（如 web_search、browser、read_file 等）完成任务。\n"
                 "\n"
                 "### 数据结论零伪造原则（必须遵守）\n"
-                "- 若任务要求数值/统计/模拟/计算结果，必须通过 run_shell 执行 python "
+                "- 若任务要求数值/统计/模拟/计算结果，必须通过平台命令工具"
+                "（Windows 用 run_powershell，其他环境用 run_shell）执行 python，"
                 "或调用对应工具获得，不得凭经验估算。\n"
                 "- 任何没有工具输出佐证的数字、百分比、均值、标准差、概率一律视为违规。\n"
                 "- 无法获得真实数据时，明确返回：\"无法执行：<具体原因>，建议 <替代方案>\"，"

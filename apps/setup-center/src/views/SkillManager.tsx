@@ -737,6 +737,35 @@ export function SkillManager({
     }
   }, [venvDir, currentWorkspaceId, serviceRunning, apiBaseUrl, dataMode]);
 
+  const reloadRuntimeAfterLocalInstall = useCallback(async () => {
+    if (!serviceRunning || !apiBaseUrl) return true;
+    try {
+      const res = await safeFetch(`${apiBaseUrl}/api/skills/reload`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+        signal: AbortSignal.timeout(30_000),
+      });
+      let data: Record<string, unknown> | null = null;
+      try {
+        data = await res.json();
+      } catch {
+        data = null;
+      }
+      if (!res.ok || data?.error) {
+        throw new Error(String(data?.error || `HTTP ${res.status}`));
+      }
+      return true;
+    } catch (e) {
+      console.warn("Skill runtime reload after local install failed:", e);
+      toast.warning(t(
+        "skills.runtimeReloadFailed",
+        "技能已安装，但运行时刷新失败，可能需要重启后端服务。",
+      ));
+      return false;
+    }
+  }, [serviceRunning, apiBaseUrl, t]);
+
   useEffect(() => {
     loadSkills();
   }, [loadSkills]);
@@ -1151,6 +1180,7 @@ export function SkillManager({
           workspaceId: currentWorkspaceId,
           url: folderPath,
         });
+        await reloadRuntimeAfterLocalInstall();
       }
 
       await loadSkills();
@@ -1158,6 +1188,7 @@ export function SkillManager({
     } catch (e) {
       const msg = String(e);
       if (msg.includes("该技能已安装") || msg.toLowerCase().includes("already installed")) {
+        await reloadRuntimeAfterLocalInstall();
         await loadSkills();
         toast.success(t("skills.alreadyInstalled"));
       } else {
@@ -1166,7 +1197,7 @@ export function SkillManager({
     } finally {
       setLocalImporting(false);
     }
-  }, [dataMode, serviceRunning, apiBaseUrl, currentWorkspaceId, venvDir, loadSkills, t, installCategory]);
+  }, [dataMode, serviceRunning, apiBaseUrl, currentWorkspaceId, venvDir, loadSkills, t, installCategory, reloadRuntimeAfterLocalInstall]);
 
   // ── 打开技能详情弹窗 ──
   const handleViewDetail = useCallback(async (skill: SkillInfo) => {
@@ -1438,6 +1469,7 @@ export function SkillManager({
           workspaceId: currentWorkspaceId,
           url: skill.url,
         });
+        await reloadRuntimeAfterLocalInstall();
       }
 
       setInstallStatus(t("skills.installDone", "安装完成"));
@@ -1450,6 +1482,7 @@ export function SkillManager({
     } catch (e) {
       const raw = String(e);
       if (raw.includes("该技能已安装") || raw.toLowerCase().includes("already installed")) {
+        await reloadRuntimeAfterLocalInstall();
         const refreshed = await loadSkills();
         if (refreshed) {
           setMarketplace((prev) => prev.map((s) =>
@@ -1469,7 +1502,7 @@ export function SkillManager({
       setInstallingSet(prev => { const next = new Set(prev); next.delete(uniqueKey); return next; });
       setInstallStatus("");
     }
-  }, [loadSkills, venvDir, currentWorkspaceId, dataMode, serviceRunning, apiBaseUrl, t, installCategory]);
+  }, [loadSkills, venvDir, currentWorkspaceId, dataMode, serviceRunning, apiBaseUrl, t, installCategory, reloadRuntimeAfterLocalInstall]);
 
   // ── 手动输入链接安装技能 ──
   const handleManualInstall = useCallback(async () => {
@@ -1507,6 +1540,7 @@ export function SkillManager({
           workspaceId: currentWorkspaceId,
           url,
         });
+        await reloadRuntimeAfterLocalInstall();
       }
 
       setManualUrl("");
@@ -1516,6 +1550,7 @@ export function SkillManager({
       const raw = String(e);
       if (raw.includes("该技能已安装") || raw.toLowerCase().includes("already installed")) {
         setManualUrl("");
+        await reloadRuntimeAfterLocalInstall();
         await loadSkills();
         toast.success(t("skills.alreadyInstalled"));
         setTab("installed");
@@ -1527,7 +1562,7 @@ export function SkillManager({
     } finally {
       setManualInstalling(false);
     }
-  }, [manualUrl, loadSkills, venvDir, currentWorkspaceId, dataMode, serviceRunning, apiBaseUrl, t, installCategory]);
+  }, [manualUrl, loadSkills, venvDir, currentWorkspaceId, dataMode, serviceRunning, apiBaseUrl, t, installCategory, reloadRuntimeAfterLocalInstall]);
 
   if (!serviceRunning) {
     return (
