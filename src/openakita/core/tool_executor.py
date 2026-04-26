@@ -15,6 +15,7 @@ import asyncio
 import json
 import logging
 import time
+import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -925,6 +926,8 @@ class ToolExecutor:
                 "type": "tool_result",
                 "tool_use_id": tool_use_id,
                 "content": result_str,
+                "receipt_id": f"tool_{uuid.uuid4().hex[:12]}",
+                "tool_name": tool_name,
             }
             if not success:
                 tool_result["is_error"] = True

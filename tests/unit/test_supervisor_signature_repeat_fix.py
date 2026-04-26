@@ -24,6 +24,7 @@ from __future__ import annotations
 from openakita.core.supervisor import (
     InterventionLevel,
     RuntimeSupervisor,
+    SIGNATURE_REPEAT_STRATEGY_SWITCH,
     SIGNATURE_REPEAT_TERMINATE,
     UNPRODUCTIVE_ADMIN_TOOLS,
 )
@@ -151,6 +152,18 @@ class TestExactRepeatStillTerminates:
         assert out.should_rollback
         assert out.should_inject_prompt
         assert "完全相同参数连续重复" in out.prompt_injection
+
+    def test_repeated_web_fetch_strategy_switch_throttles_network_tool(self):
+        sup = RuntimeSupervisor(enabled=True)
+        for _ in range(SIGNATURE_REPEAT_STRATEGY_SWITCH):
+            sup.record_tool_signature("web_fetch(same_url_hash)")
+
+        out = sup._check_signature_repeat(iteration=SIGNATURE_REPEAT_STRATEGY_SWITCH)
+
+        assert out is not None
+        assert out.level == InterventionLevel.STRATEGY_SWITCH
+        assert out.throttled_tool_names == ["web_fetch"]
+        assert "缓存摘要" in out.prompt_injection
 
 
 # ---------------------------------------------------------------------------

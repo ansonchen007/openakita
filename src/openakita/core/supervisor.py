@@ -162,6 +162,7 @@ VARYING_ARG_REPEAT_NUDGE_EXEMPT_TOOLS = frozenset(
         "run_skill_script",
     }
 )
+NETWORK_READ_TOOLS = frozenset({"web_fetch", "web_search", "news_search"})
 
 
 class RuntimeSupervisor:
@@ -501,18 +502,27 @@ class RuntimeSupervisor:
                 pattern=PatternType.SIGNATURE_REPEAT,
                 message=f"Dead loop: '{tail_sig[:60]}' repeated {tail_same_count} consecutive times",
                 should_terminate=True,
+                throttled_tool_names=[_tail_tool] if _tail_tool in NETWORK_READ_TOOLS else [],
             )
 
         if tail_same_count >= SIGNATURE_REPEAT_STRATEGY_SWITCH and not sig_is_poll:
+            _is_network_read = _tail_tool in NETWORK_READ_TOOLS
             return Intervention(
                 level=InterventionLevel.STRATEGY_SWITCH,
                 pattern=PatternType.SIGNATURE_REPEAT,
                 message=f"Repeated signature '{tail_sig[:60]}' ({tail_same_count}x consecutive) — rollback",
                 should_inject_prompt=True,
                 should_rollback=True,
+                throttled_tool_names=[_tail_tool] if _is_network_read else [],
                 prompt_injection=(
                     "[系统提示] 检测到同一工具使用完全相同参数连续重复调用，系统已回滚。"
-                    "如果任务已完成，请直接回复用户最终结果，不要再调用任何工具。"
+                    + (
+                        "该网络读取工具已从本轮可用工具中临时移除；请基于已有缓存摘要继续，"
+                        "或换用不同查询目标。"
+                        if _is_network_read
+                        else ""
+                    )
+                    + "如果任务已完成，请直接回复用户最终结果，不要再调用任何工具。"
                     "如果确实需要继续，必须使用完全不同的工具或参数。"
                     "禁止再次调用与之前相同的工具+参数组合。"
                     + self._extra_hint_for_tool(_tail_tool)
