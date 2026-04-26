@@ -264,13 +264,13 @@ class WordTaskManager:
     async def update_project_safe(self, project_id: str, **updates: Any) -> dict[str, Any] | None:
         await self.init()
         assert self._db is not None
+        if "metadata" in updates:
+            updates["metadata_json"] = _json_dumps(updates.pop("metadata"))
         illegal = sorted(set(updates) - PROJECT_WRITABLE)
         if illegal:
             raise ValueError(f"Unsupported project update fields: {', '.join(illegal)}")
         if "status" in updates and updates["status"] not in PROJECT_STATUSES:
             raise ValueError(f"Unsupported project status: {updates['status']}")
-        if "metadata" in updates:
-            updates["metadata_json"] = _json_dumps(updates.pop("metadata"))
         updates["updated_at"] = _now()
         fields = ", ".join(f"{key} = ?" for key in updates)
         values = list(updates.values()) + [project_id]
