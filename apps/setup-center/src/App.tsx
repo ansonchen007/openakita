@@ -1,4 +1,4 @@
-import { createContext, useCallback, useEffect, useMemo, useRef, useState, lazy, Suspense } from "react";
+import { createContext, useCallback, useEffect, useMemo, useRef, useState, lazy, Suspense, startTransition } from "react";
 import { useTranslation } from "react-i18next";
 import { invoke, listen, IS_TAURI, IS_WEB, IS_CAPACITOR, IS_LOCAL_WEB, getAppVersion, onWsEvent, reconnectWsNow, setWsApiBaseUrl, logger, registerGlobalShortcut } from "./platform";
 import { getActiveServer, getActiveServerId } from "./platform/servers";
@@ -324,12 +324,17 @@ function MainApp() {
   const [disabledViews, setDisabledViews] = useState<string[]>([]);
   const multiAgentEnabled = true;
   const [storeVisible, setStoreVisible] = useState(() => localStorage.getItem("openakita_storeVisible") === "true");
+  const transitionToView = useCallback((nextView: ViewId) => {
+    startTransition(() => {
+      setView(nextView);
+    });
+  }, []);
   // ── Hash-based deep link routing ──
   useEffect(() => {
     const onHashChange = () => {
       const parsed = _parseHashRoute(window.location.hash);
       if (parsed) {
-        setView(parsed.view);
+        transitionToView(parsed.view);
         if (parsed.stepId) setStepId(parsed.stepId);
       }
     };
@@ -345,7 +350,7 @@ function MainApp() {
       window.removeEventListener("hashchange", onHashChange);
       window.removeEventListener("message", onMessage);
     };
-  }, []);
+  }, [transitionToView]);
 
   // ── Data mode: "local" (Tauri commands) or "remote" (HTTP API) ──
   // Web mode always starts in "remote" since the backend is already running
@@ -380,6 +385,19 @@ function MainApp() {
     const parsed = _parseHashRoute(window.location.hash);
     return parsed?.stepId || "llm";
   });
+  const navigateToView = useCallback((nextView: ViewId, nextStepId?: StepId) => {
+    const newHash = _viewToHash(nextView, nextStepId);
+    startTransition(() => {
+      setView(nextView);
+      if (nextStepId) setStepId(nextStepId);
+      if (isMobile) setMobileSidebarOpen(false);
+    });
+    if (newHash) {
+      if (window.location.hash !== newHash) window.location.hash = newHash;
+    } else if (window.location.hash) {
+      history.replaceState(null, "", window.location.pathname + window.location.search);
+    }
+  }, [isMobile]);
   const currentStepIdxRaw = useMemo(() => steps.findIndex((s) => s.id === stepId), [steps, stepId]);
   const currentStepIdx = currentStepIdxRaw < 0 ? 0 : currentStepIdxRaw;
 
@@ -474,7 +492,7 @@ function MainApp() {
       refreshStatus("local", baseUrl, true);
       autoCheckEndpoints(baseUrl);
       // 4. 跳过 onboarding，进入主界面
-      setView("status");
+      navigateToView("status");
     } catch (e) {
       logger.error("App", "obConnectExistingService failed", { error: String(e) });
     }
@@ -487,11 +505,11 @@ function MainApp() {
         const firstRun = await invoke<boolean>("is_first_run");
         if (firstRun) {
           await obProbeRunningService();
-          setView("onboarding");
+          navigateToView("onboarding");
           obLoadEnvCheck();
         } else {
           // 非首次启动：直接进入状态页面
-          setView("status");
+          navigateToView("status");
         }
       } catch {
         // is_first_run 命令不可用（开发模式），忽略
@@ -502,7 +520,7 @@ function MainApp() {
     const unlisten = listen<string>("app-launch-mode", async (e) => {
       if (e.payload === "first-run") {
         await obProbeRunningService();
-        setView("onboarding");
+        navigateToView("onboarding");
         obLoadEnvCheck();
       }
     });
@@ -514,7 +532,7 @@ function MainApp() {
         setObStep("ob-welcome");
         setObDetectedService(null);
         obProbeRunningService();
-        setView("onboarding");
+        navigateToView("onboarding");
         obLoadEnvCheck();
       }
     };
@@ -963,7 +981,7 @@ function MainApp() {
     let unlisten: null | (() => void) = null;
     (async () => {
       unlisten = await listen("open_status", async () => {
-        setView("status");
+        navigateToView("status");
         try {
           await refreshStatus(undefined, undefined, true);
         } catch {
@@ -1031,7 +1049,7 @@ function MainApp() {
       unlisten = await listen("quit_failed", async (ev) => {
         const p = ev.payload as any;
         const msg = String(p?.message || "退出失败：后台服务仍在运行。请先停止服务。");
-        setView("status");
+        navigateToView("status");
         notifyError(msg);
         try {
           await refreshStatus(undefined, undefined, true);
@@ -2886,7 +2904,7 @@ function MainApp() {
           doStopService={doStopService}
           waitForServiceDown={waitForServiceDown}
           doStartLocalService={doStartLocalService}
-          setView={setView}
+          setView={navigateToView}
         />
       </div>
     );
@@ -3292,7 +3310,7 @@ function MainApp() {
         askConfirm={askConfirm}
         refreshAll={refreshAll}
         restartService={restartService}
-        setView={setView}
+        setView={navigateToView}
       />
     );
   }
@@ -4835,7 +4853,7 @@ function MainApp() {
                   visibilityGraceRef.current = true;
                   heartbeatFailCount.current = 0;
                   setTimeout(() => { visibilityGraceRef.current = false; }, 15000);
-                  setView("status");
+                  navigateToView("status");
                   await refreshAll();
                   // 关键：刷新端点列表、IM 状态等（forceAliveCheck=true 绕过 serviceStatus 闭包）
                   // 首次尝试
@@ -5029,7 +5047,7 @@ function MainApp() {
           key={pluginId}
           pluginId={pluginId}
           apiBase={httpApiBase()}
-          onViewChange={(v) => setView(v)}
+          onViewChange={(v) => navigateToView(v)}
         />
       );
     }
@@ -5198,16 +5216,7 @@ function MainApp() {
         collapsed={isMobile ? false : sidebarCollapsed}
         onToggleCollapsed={() => { if (!isMobile) setSidebarCollapsed((v) => !v); }}
         view={view}
-        onViewChange={(v) => {
-          setView(v);
-          setMobileSidebarOpen(false);
-          const newHash = _viewToHash(v);
-          if (newHash) {
-            window.location.hash = newHash;
-          } else if (window.location.hash) {
-            history.replaceState(null, "", window.location.pathname + window.location.search);
-          }
-        }}
+        onViewChange={(v) => navigateToView(v)}
         mobileOpen={mobileSidebarOpen}
         configExpanded={configExpanded}
         onToggleConfig={() => {
@@ -5218,7 +5227,7 @@ function MainApp() {
         stepId={stepId}
         onStepChange={(s: StepId) => {
           setStepId(s);
-          if (view === "wizard") window.location.hash = _viewToHash("wizard", s);
+          if (view === "wizard") navigateToView("wizard", s);
         }}
         disabledViews={disabledViews}
         storeVisible={storeVisible}
@@ -5322,7 +5331,7 @@ function MainApp() {
           saveEnvKeys={saveEnvKeys}
           restartService={restartService}
           askConfirm={askConfirm}
-          setView={setView}
+          setView={navigateToView}
         />
 
         {showPwBanner && (
@@ -5338,8 +5347,7 @@ function MainApp() {
                 : t("web.passwordBanner", { defaultValue: "当前 Web 访问密码为系统自动生成，建议前往设置页面配置自定义密码以保障远程访问安全。" })}
             </span>
             <button className="btnSmall" style={{ whiteSpace: "nowrap", fontWeight: 500, fontSize: isMobile ? 11 : undefined, padding: isMobile ? "2px 8px" : undefined }} onClick={() => {
-              setView("wizard");
-              setStepId("advanced");
+              navigateToView("wizard", "advanced");
               setShowPwBanner(false);
               localStorage.setItem("openakita_pw_banner_dismissed", "1");
             }}>{t("web.passwordBannerAction", { defaultValue: "去设置" })}</button>
@@ -5640,7 +5648,7 @@ function MainApp() {
         open={bugReportOpen}
         onClose={() => setBugReportOpen(false)}
         apiBase={httpApiBase()}
-        onNavigateToMyFeedback={() => setView("my_feedback")}
+        onNavigateToMyFeedback={() => navigateToView("my_feedback")}
         serviceRunning={serviceStatus?.running ?? false}
         currentWorkspaceId={currentWorkspaceId}
       />

@@ -30,6 +30,7 @@ import threading
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from ..core.log_health import record_health_event
 from .consolidator import MemoryConsolidator
 from .extractor import MemoryExtractor
 from .retention import apply_retention
@@ -459,7 +460,13 @@ class MemoryManager:
             self._session_turns.clear()
             return 0
         except Exception as e:
-            logger.warning(f"[Memory] Topic-change extraction failed: {e}")
+            if record_health_event(
+                "memory",
+                "topic_change_extraction",
+                str(e),
+                suggestion="记忆抽取失败已降级跳过本轮，不影响聊天主链路；请检查当前 LLM 端点稳定性。",
+            ):
+                logger.warning(f"[Memory] Topic-change extraction failed: {e}")
             return 0
 
     async def _save_extracted_item(self, item: dict, episode_id: str | None = None) -> str | None:
@@ -690,7 +697,13 @@ class MemoryManager:
                         self.store.save_episode(episode)
                         logger.info("[Memory] Session finalized: episode saved")
                 except Exception as e:
-                    logger.warning(f"[Memory] Episode generation failed: {e}")
+                    if record_health_event(
+                        "memory",
+                        "episode_generation",
+                        str(e),
+                        suggestion="会话 episode 生成失败已跳过；通常是 LLM 连接瞬断。",
+                    ):
+                        logger.warning(f"[Memory] Episode generation failed: {e}")
 
                 ep_id = episode.id if episode else None
                 saved_memory_ids: list[str] = []
@@ -718,7 +731,13 @@ class MemoryManager:
                             f"[Memory] Profile extraction: {saved}/{len(items)} items saved"
                         )
                 except Exception as e:
-                    logger.warning(f"[Memory] Profile extraction failed: {e}")
+                    if record_health_event(
+                        "memory",
+                        "profile_extraction",
+                        str(e),
+                        suggestion="用户画像抽取失败已跳过本轮；主聊天不受影响。",
+                    ):
+                        logger.warning(f"[Memory] Profile extraction failed: {e}")
 
                 # Track 2: Task experience extraction
                 try:
@@ -737,7 +756,13 @@ class MemoryManager:
                             f"[Memory] Experience extraction: {exp_saved}/{len(exp_items)} items saved"
                         )
                 except Exception as e:
-                    logger.warning(f"[Memory] Experience extraction failed: {e}")
+                    if record_health_event(
+                        "memory",
+                        "experience_extraction",
+                        str(e),
+                        suggestion="经验抽取失败已跳过本轮；可稍后手动整理记忆。",
+                    ):
+                        logger.warning(f"[Memory] Experience extraction failed: {e}")
 
                 # Back-fill bidirectional links between episode, memories, and turns
                 if ep_id:

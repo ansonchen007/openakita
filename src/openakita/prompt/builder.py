@@ -649,6 +649,17 @@ def build_system_prompt(
         except Exception:
             pass
 
+    # 9.6 Working facts 层：当前会话短期事实，优先于长期记忆。
+    if prompt_mode == PromptMode.FULL and session_context:
+        try:
+            from ..core.working_facts import format_working_facts
+
+            working_facts_section = format_working_facts(session_context.get("working_facts"))
+            if working_facts_section:
+                developer_parts.append(working_facts_section)
+        except Exception as e:
+            logger.debug("Failed to build working facts section: %s", e)
+
     # 10. Memory 层（仅 FULL 模式）
     if prompt_mode == PromptMode.FULL:
         if precomputed_memory is not None:
@@ -1781,7 +1792,11 @@ def _build_memory_section(
         parts.append(scratchpad_text)
 
     # Layer 1.5: Pinned Rules — 从 SQLite 查询 RULE 类型记忆，独立注入，不受裁剪
-    pinned_rules = _build_pinned_rules_section(memory_manager)
+    pinned_rules = _build_pinned_rules_section(
+        memory_manager,
+        task_description=task_description,
+        memory_keywords=memory_keywords,
+    )
     if pinned_rules:
         parts.append(pinned_rules)
 
@@ -1911,11 +1926,14 @@ _PINNED_RULES_CHARS_PER_TOKEN = 3
 
 def _build_pinned_rules_section(
     memory_manager: Optional["MemoryManager"],
+    task_description: str = "",
+    memory_keywords: list[str] | None = None,
 ) -> str:
-    """从 SQLite 查询所有活跃的 RULE 类型记忆，作为独立段落注入 system prompt。
+    """Query active RULE memories and inject only rules relevant to this turn.
 
-    这些规则不受 memory_budget 裁剪，确保用户设定的行为规则始终可见。
-    设置独立的 token 上限防止异常膨胀。
+    Global rules are treated as candidates instead of unconditional mandates.
+    This keeps stale project-specific numbers or constraints from polluting
+    unrelated tasks while preserving explicit session-scoped rules.
     """
     store = getattr(memory_manager, "store", None)
     if store is None:
@@ -1928,19 +1946,25 @@ def _build_pinned_rules_section(
         from datetime import datetime
 
         now = datetime.now()
-        active_rules = [
-            r for r in rules if not r.superseded_by and (not r.expires_at or r.expires_at > now)
-        ]
+        active_rules = []
+        query_text = f"{task_description} {' '.join(memory_keywords or [])}".lower()
+        query_terms = _rule_terms(query_text)
+        for r in rules:
+            if r.superseded_by or (r.expires_at and r.expires_at <= now):
+                continue
+            include, reason = _should_inject_rule(r, query_terms)
+            if include:
+                active_rules.append((r, reason))
         if not active_rules:
             return ""
 
-        active_rules.sort(key=lambda r: r.importance_score, reverse=True)
+        active_rules.sort(key=lambda item: item[0].importance_score, reverse=True)
 
-        lines = ["## 用户设定的规则（必须遵守）\n"]
+        lines = ["## 当前相关规则\n", "以下规则按来源与相关性注入；跨会话规则仅在相关时参考。"]
         total_chars = 0
         max_chars = _PINNED_RULES_MAX_TOKENS * _PINNED_RULES_CHARS_PER_TOKEN
         seen_prefixes: set[str] = set()
-        for r in active_rules:
+        for r, reason in active_rules:
             content = (r.content or "").strip()
             if not content:
                 continue
@@ -1948,7 +1972,13 @@ def _build_pinned_rules_section(
             if prefix in seen_prefixes:
                 continue
             seen_prefixes.add(prefix)
-            line = f"- {content}"
+            source = getattr(r, "source", "") or getattr(r, "source_episode_id", "") or "memory"
+            scope = getattr(r, "scope", "global") or "global"
+            confidence = getattr(r, "confidence", 0.0)
+            line = (
+                f"- [{scope}; reason={reason}; confidence={confidence:.2f}; source={source}] "
+                f"{content}"
+            )
             if total_chars + len(line) > max_chars:
                 break
             lines.append(line)
@@ -1960,6 +1990,44 @@ def _build_pinned_rules_section(
     except Exception as e:
         logger.debug(f"Failed to build pinned rules section: {e}")
         return ""
+
+
+def _rule_terms(text: str) -> set[str]:
+    import re
+
+    return {t.lower() for t in re.findall(r"[A-Za-z0-9_\-\u4e00-\u9fff]{2,}", text or "")}
+
+
+def _should_inject_rule(rule: object, query_terms: set[str]) -> tuple[bool, str]:
+    """Return whether a rule should be injected and the visible reason."""
+    content = (getattr(rule, "content", "") or "").lower()
+    scope = (getattr(rule, "scope", "") or "global").lower()
+    tags = [str(t).lower() for t in (getattr(rule, "tags", []) or [])]
+    subject = str(getattr(rule, "subject", "") or "").lower()
+
+    if scope == "session":
+        return True, "current-session"
+
+    terms = _rule_terms(" ".join([content, subject, " ".join(tags)]))
+    if query_terms and terms.intersection(query_terms):
+        return True, "entity-match"
+
+    general_rule_markers = (
+        "回复",
+        "语言",
+        "称呼",
+        "不要",
+        "必须",
+        "始终",
+        "always",
+        "never",
+        "format",
+        "style",
+    )
+    if any(marker in content for marker in general_rule_markers):
+        return True, "general-behavior"
+
+    return False, "unrelated"
 
 
 def _get_core_memory(memory_manager: Optional["MemoryManager"], max_chars: int = 600) -> str:
