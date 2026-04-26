@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>PPT Maker</title>
+    <script src="./_assets/bootstrap.js"></script>
+    <link rel="stylesheet" href="./_assets/styles.css" />
+  </head>
+  <body>
+    <main id="app" class="app-shell">
+      <section class="hero">
+        <p class="eyebrow">OpenAkita Plugin</p>
+        <h1>PPT 制作助手</h1>
+        <p>
+          通过需求梳理、大纲确认、表格洞察、企业模板适配和质量检查生成可编辑
+          PPTX。
+        </p>
+      </section>
+      <section class="grid">
+        <article>
+          <h2>Modes</h2>
+          <ul>
+            <li>topic_to_deck</li>
+            <li>files_to_deck</li>
+            <li>outline_to_deck</li>
+            <li>table_to_deck</li>
+            <li>template_deck</li>
+            <li>revise_deck</li>
+          </ul>
+        </article>
+        <article>
+          <h2>Health</h2>
+          <button id="healthButton" type="button">Check backend</button>
+          <pre id="healthOutput">Not checked yet.</pre>
+        </article>
+      </section>
+    </main>
+    <script src="./_assets/i18n.js"></script>
+    <script src="./_assets/icons.js"></script>
+    <script src="./_assets/markdown-mini.js"></script>
+    <script>
+      const healthButton = document.getElementById("healthButton");
+      const healthOutput = document.getElementById("healthOutput");
+
+      async function callHealth() {
+        healthOutput.textContent = "Checking...";
+        try {
+          const api = window.OpenAkita;
+          if (api && typeof api.request === "function") {
+            const data = await api.request("/healthz");
+            healthOutput.textContent = JSON.stringify(data, null, 2);
+          } else {
+            healthOutput.textContent = "OpenAkita bridge is not ready.";
+          }
+        } catch (error) {
+          healthOutput.textContent = error && error.message ? error.message : String(error);
+        }
+      }
+
+      healthButton.addEventListener("click", callHealth);
+    </script>
+  </body>
+</html>
+
