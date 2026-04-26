@@ -10,6 +10,8 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any, Optional
 
@@ -52,6 +54,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from openakita.plugins.api import PluginAPI, PluginBase
 
 PLUGIN_ID = "excel-maker"
+SETTINGS_KEY = "excel_maker_settings"
 
 
 class ProjectCreateRequest(ProjectCreate):
@@ -62,6 +65,7 @@ class ImportWorkbookRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     path: str
+    workbook_id: Optional[str] = None
     project_id: Optional[str] = None
     name: Optional[str] = None
 
@@ -103,6 +107,7 @@ class OperationsApplyRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     plan: dict[str, Any]
+    project_id: Optional[str] = None
     profile: Optional[dict[str, Any]] = None
 
 
@@ -154,7 +159,16 @@ class Plugin(PluginBase):
 
     def on_load(self, api: PluginAPI) -> None:
         self._api = api
-        data_dir = resolve_plugin_data_root(api.get_data_dir() or Path.cwd() / "data")
+        config = api.get_config() if hasattr(api, "get_config") else {}
+        configured = config.get(SETTINGS_KEY, {}) if isinstance(config, dict) else {}
+        configured_data_dir = configured.get("data_dir") if isinstance(configured, dict) else None
+        data_root = api.get_data_dir() or Path.cwd() / "data"
+        if configured_data_dir:
+            try:
+                data_root = write_probe(configured_data_dir)
+            except OSError as exc:
+                api.log(f"{PLUGIN_ID}: invalid configured data_dir, falling back: {exc}")
+        data_dir = resolve_plugin_data_root(data_root)
         self._data_dir = data_dir
         self._deps = PythonDepsManager(data_dir)
         router = APIRouter()
@@ -193,16 +207,26 @@ class Plugin(PluginBase):
 
         @router.post("/storage/open-folder")
         async def open_folder(payload: StorageOpenRequest) -> dict[str, Any]:
-            target = Path(payload.path).expanduser().resolve() if payload.path else data_dir
+            try:
+                target = ensure_child(data_dir, payload.path) if payload.path else data_dir
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
             if not target.exists():
                 raise HTTPException(status_code=404, detail="Folder not found")
             if os.name == "nt":
                 os.startfile(str(target))  # type: ignore[attr-defined]
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", str(target)])
+            else:
+                subprocess.Popen(["xdg-open", str(target)])
             return {"ok": True, "path": str(target)}
 
         @router.get("/storage/list-dir")
         async def list_dir(path: str | None = None) -> dict[str, Any]:
-            target = ensure_child(data_dir, path or data_dir)
+            try:
+                target = ensure_child(data_dir, path or data_dir)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
             if not target.is_dir():
                 raise HTTPException(status_code=400, detail="Path is not a directory")
             return {
@@ -221,8 +245,11 @@ class Plugin(PluginBase):
 
         @router.post("/storage/mkdir")
         async def mkdir(payload: StorageMkdirRequest) -> dict[str, Any]:
-            parent = ensure_child(data_dir, payload.parent or data_dir)
-            target = ensure_child(data_dir, parent / safe_name(payload.name, "folder"))
+            try:
+                parent = ensure_child(data_dir, payload.parent or data_dir)
+                target = ensure_child(data_dir, parent / safe_name(payload.name, "folder"))
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
             target.mkdir(parents=True, exist_ok=True)
             return {"ok": True, "path": str(target)}
 
@@ -281,21 +308,25 @@ class Plugin(PluginBase):
                 workbooks = await manager.list_workbooks(project_id)
                 artifacts = await manager.list_artifacts(project_id)
                 audit_items = await manager.list_audit_items(project_id)
+                operations = await manager.list_operations(project_id)
             if project is None:
                 raise HTTPException(status_code=404, detail="Project not found")
             return {
                 "ok": True,
                 "project": project.model_dump(mode="json"),
-                "workbooks": [item.model_dump(mode="json") for item in workbooks],
-                "artifacts": [item.model_dump(mode="json") for item in artifacts],
+                "workbooks": [self._public_workbook(item) for item in workbooks],
+                "artifacts": [self._public_artifact(item) for item in artifacts],
                 "audit_items": [item.model_dump(mode="json") for item in audit_items],
+                "operations": operations,
             }
 
         @router.delete("/projects/{project_id}")
         async def delete_project(project_id: str) -> dict[str, Any]:
             async with ExcelTaskManager(data_dir / "excel_maker.db") as manager:
+                workbooks = await manager.list_workbooks(project_id)
                 deleted = await manager.delete_project(project_id)
-            return {"ok": True, "deleted": deleted}
+            removed_dirs = self._cleanup_project_files(data_dir, project_id, [item.id for item in workbooks])
+            return {"ok": True, "deleted": deleted, "removed_dirs": removed_dirs}
 
         @router.post("/projects/{project_id}/cancel")
         async def cancel_project(project_id: str) -> dict[str, Any]:
@@ -326,7 +357,7 @@ class Plugin(PluginBase):
                     original_path=str(target),
                     metadata={"size": len(content), "preview_url": f"/uploads/{target.name}"},
                 )
-            return {"ok": True, "workbook": workbook.model_dump(mode="json"), "preview_url": f"/uploads/{target.name}"}
+            return {"ok": True, "workbook": self._public_workbook(workbook), "preview_url": f"/uploads/{target.name}"}
 
         @router.post("/workbooks/import")
         async def import_workbook(payload: ImportWorkbookRequest) -> dict[str, Any]:
@@ -341,7 +372,7 @@ class Plugin(PluginBase):
                 raise HTTPException(status_code=404, detail="Workbook not found")
             return {
                 "ok": True,
-                "workbook": workbook.model_dump(mode="json"),
+                "workbook": self._public_workbook(workbook),
                 "sheets": [item.model_dump(mode="json") for item in sheets],
             }
 
@@ -377,7 +408,7 @@ class Plugin(PluginBase):
                     project = await manager.get_project(payload.project_id)
                     if project:
                         title = project.title
-            plan = WorkbookPlanBuilder().build_default_plan(
+            plan = await self._generate_report_plan(
                 title=title,
                 workbook_id=payload.workbook_id,
                 profile=profile,
@@ -414,6 +445,9 @@ class Plugin(PluginBase):
                 result = ExcelOperationExecutor().apply_plan(plan, payload.profile)
             except (ValueError, OperationExecutionError) as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
+            if payload.project_id:
+                async with ExcelTaskManager(data_dir / "excel_maker.db") as manager:
+                    await manager.record_operations(payload.project_id, result.get("applied", []))
             return {"ok": True, "result": result}
 
         @router.post("/reports/{project_id}/build")
@@ -424,7 +458,7 @@ class Plugin(PluginBase):
         async def report_artifacts(project_id: str) -> dict[str, Any]:
             async with ExcelTaskManager(data_dir / "excel_maker.db") as manager:
                 artifacts = await manager.list_artifacts(project_id)
-            return {"ok": True, "artifacts": [item.model_dump(mode="json") for item in artifacts]}
+            return {"ok": True, "artifacts": [self._public_artifact(item) for item in artifacts]}
 
         @router.post("/reports/{project_id}/audit")
         async def audit_report(project_id: str) -> dict[str, Any]:
@@ -433,7 +467,13 @@ class Plugin(PluginBase):
             workbook_artifact = next((item for item in artifacts if item.kind == ArtifactKind.WORKBOOK), None)
             if workbook_artifact is None:
                 raise HTTPException(status_code=404, detail="Workbook artifact not found")
-            return await self._audit_report(data_dir, project_id, workbook_artifact.path, workbook_artifact.id)
+            return await self._audit_report(
+                data_dir,
+                project_id,
+                workbook_artifact.path,
+                workbook_artifact.id,
+                plan=self._load_saved_plan(data_dir, project_id),
+            )
 
         @router.get("/artifacts/{artifact_id}/download")
         async def download_artifact(artifact_id: str) -> FileResponse:
@@ -447,14 +487,14 @@ class Plugin(PluginBase):
         async def list_templates() -> dict[str, Any]:
             async with ExcelTaskManager(data_dir / "excel_maker.db") as manager:
                 templates = await manager.list_templates()
-            return {"ok": True, "templates": [item.model_dump(mode="json") for item in templates]}
+            return {"ok": True, "templates": [self._public_template(item) for item in templates]}
 
         @router.post("/templates")
         async def upload_template(payload: TemplateUploadRequest) -> dict[str, Any]:
             copied = copy_into(payload.path, data_dir / "templates", payload.name or Path(payload.path).name)
             async with ExcelTaskManager(data_dir / "excel_maker.db") as manager:
                 template = await manager.create_template(name=payload.name or copied.stem, original_path=str(copied))
-            return {"ok": True, "template": template.model_dump(mode="json")}
+            return {"ok": True, "template": self._public_template(template)}
 
         @router.post("/templates/{template_id}/diagnose")
         async def diagnose_template(template_id: str) -> dict[str, Any]:
@@ -474,29 +514,35 @@ class Plugin(PluginBase):
                     status=TemplateStatus.DIAGNOSED,
                     metadata={"diagnostic": diagnostic},
                 )
-            return {"ok": True, "template": updated.model_dump(mode="json") if updated else None, "diagnostic": diagnostic}
+            return {"ok": True, "template": self._public_template(updated) if updated else None, "diagnostic": diagnostic}
 
         @router.delete("/templates/{template_id}")
         async def delete_template(template_id: str) -> dict[str, Any]:
             async with ExcelTaskManager(data_dir / "excel_maker.db") as manager:
+                template = await manager.get_template(template_id)
                 deleted = await manager.delete_template(template_id)
-            return {"ok": True, "deleted": deleted}
+            removed_files = self._cleanup_template_files(template)
+            return {"ok": True, "deleted": deleted, "removed_files": removed_files}
 
         api.register_api_routes(router)
         api.register_tools(_tool_definitions(), self._handle_tool)
         api.log(f"{PLUGIN_ID}: loaded")
 
     async def _import_workbook(self, data_dir: Path, payload: ImportWorkbookRequest) -> dict[str, Any]:
-        source_path = Path(payload.path).expanduser().resolve()
-        if not source_path.is_file():
-            raise HTTPException(status_code=404, detail="Workbook file not found")
         async with ExcelTaskManager(data_dir / "excel_maker.db") as manager:
-            workbook = await manager.create_workbook(
-                project_id=payload.project_id,
-                filename=payload.name or source_path.name,
-                original_path=str(source_path),
-                metadata={"imported_from": str(source_path)},
-            )
+            workbook = await manager.get_workbook(payload.workbook_id) if payload.workbook_id else None
+            if workbook is None:
+                source_path = Path(payload.path).expanduser().resolve()
+                if not source_path.is_file():
+                    raise HTTPException(status_code=404, detail="Workbook file not found")
+                workbook = await manager.create_workbook(
+                    project_id=payload.project_id,
+                    filename=payload.name or source_path.name,
+                    original_path=str(source_path),
+                    metadata={"imported_from": str(source_path)},
+                )
+            else:
+                source_path = Path(workbook.original_path)
         try:
             imported = WorkbookImporter(data_dir).import_file(source_path, workbook.id)
         except WorkbookImportError as exc:
@@ -517,7 +563,7 @@ class Plugin(PluginBase):
         await self._broadcast("dataset_profiled", {"workbook_id": workbook.id if workbook else None})
         return {
             "ok": True,
-            "workbook": workbook.model_dump(mode="json") if workbook else None,
+            "workbook": self._public_workbook(workbook) if workbook else None,
             "sheets": [item.model_dump(mode="json") for item in sheets],
             "preview": imported.preview,
             "warnings": imported.warnings,
@@ -542,7 +588,7 @@ class Plugin(PluginBase):
             )
             if workbook and workbook.project_id:
                 await manager.update_project_safe(workbook.project_id, status=ProjectStatus.PROFILED)
-        return {"ok": True, "profile": profile, "profile_path": str(profile_path)}
+        return {"ok": True, "profile": profile}
 
     async def _clarify_questions(self, payload: ClarifyRequest) -> list[str]:
         profile = payload.profile
@@ -578,6 +624,46 @@ class Plugin(PluginBase):
             return fallback
         return fallback
 
+    async def _generate_report_plan(
+        self,
+        *,
+        title: str,
+        workbook_id: str | None,
+        profile: dict[str, Any] | None,
+        brief: dict[str, Any] | None,
+    ) -> WorkbookPlan:
+        builder = WorkbookPlanBuilder()
+        fallback = builder.build_default_plan(
+            title=title,
+            workbook_id=workbook_id,
+            profile=profile,
+            brief=brief,
+        )
+        brain = getattr(self._api, "brain", None) if self._api else None
+        access = getattr(brain, "access", None)
+        if not callable(access):
+            return fallback
+        try:
+            prompt = (
+                "你是 Excel 报表方案设计助手。请基于 brief 和 profile 生成 WorkbookPlan JSON。"
+                "只能返回 JSON 对象，不要 markdown。字段必须包含 title, purpose, source_workbook_id,"
+                "sheets, operations, formulas, style, audit_expectations。"
+                "operations 只能使用 rename_column/cast_type/fill_missing/drop_duplicates/derive_column/"
+                "groupby/pivot/sort/filter/write_formula；公式必须以 = 开头。\n"
+                f"title: {title}\nworkbook_id: {workbook_id}\n"
+                f"brief: {json.dumps(brief or {}, ensure_ascii=False)[:3000]}\n"
+                f"profile: {json.dumps(profile or {}, ensure_ascii=False)[:7000]}"
+            )
+            response = access(prompt)
+            if hasattr(response, "__await__"):
+                response = await response
+            candidate = parse_json_object(str(response))
+            candidate.setdefault("title", title)
+            candidate.setdefault("source_workbook_id", workbook_id)
+            return builder.validate_plan(candidate)
+        except Exception:
+            return fallback
+
     async def _load_profile_for_workbook(self, data_dir: Path, workbook_id: str | None) -> dict[str, Any] | None:
         if not workbook_id:
             return None
@@ -612,12 +698,18 @@ class Plugin(PluginBase):
                     preview = WorkbookImporter(data_dir).preview(workbook.profile_path)
                 except Exception:
                     preview = None
-        plan = WorkbookPlan.model_validate(payload.plan) if payload.plan else WorkbookPlanBuilder().build_default_plan(
-            title=project.title,
-            workbook_id=workbook_id,
-            profile=profile,
-            brief=project.report_brief,
-        )
+        plan = self._load_saved_plan(data_dir, project_id) if payload.plan is None else None
+        if plan is None:
+            plan = (
+                WorkbookPlan.model_validate(payload.plan)
+                if payload.plan
+                else WorkbookPlanBuilder().build_default_plan(
+                    title=project.title,
+                    workbook_id=workbook_id,
+                    profile=profile,
+                    brief=project.report_brief,
+                )
+            )
         async with ExcelTaskManager(data_dir / "excel_maker.db") as manager:
             version = await manager.next_artifact_version(project_id, ArtifactKind.WORKBOOK)
         output_path = export_dir(data_dir, project_id) / f"report_v{version}.xlsx"
@@ -635,12 +727,17 @@ class Plugin(PluginBase):
                 metadata={"workbook_id": workbook_id, "title": plan.title},
             )
             await manager.update_project_safe(project_id, status=ProjectStatus.GENERATED)
-        audit = await self._audit_report(data_dir, project_id, str(output_path), artifact.id)
+        audit = await self._audit_report(data_dir, project_id, str(output_path), artifact.id, plan=plan)
         await self._broadcast("workbook_generated", {"project_id": project_id, "artifact_id": artifact.id})
-        return {"ok": True, "artifact": artifact.model_dump(mode="json"), "audit": audit.get("audit")}
+        return {"ok": True, "artifact": self._public_artifact(artifact), "audit": audit.get("audit")}
 
     async def _audit_report(
-        self, data_dir: Path, project_id: str, workbook_path: str, artifact_id: str | None = None
+        self,
+        data_dir: Path,
+        project_id: str,
+        workbook_path: str,
+        artifact_id: str | None = None,
+        plan: WorkbookPlan | None = None,
     ) -> dict[str, Any]:
         audit_path = project_dir(data_dir, project_id) / "audit.json"
         audit = WorkbookAuditor().audit(workbook_path, audit_path)
@@ -653,13 +750,85 @@ class Plugin(PluginBase):
                 metadata={"ok": audit["ok"]},
             )
             await manager.update_project_safe(project_id, status=ProjectStatus.AUDITED)
+        if plan is not None:
+            WorkbookBuilder().update_audit_log(
+                workbook_path=workbook_path,
+                plan=plan,
+                audit_items=[item.model_dump(mode="json") for item in items],
+            )
         await self._broadcast("audit_ready", {"project_id": project_id, "ok": audit["ok"]})
         return {
             "ok": True,
-            "audit": audit,
+            "audit": self._public_audit(audit),
             "items": [item.model_dump(mode="json") for item in items],
-            "artifact": audit_artifact.model_dump(mode="json"),
+            "artifact": self._public_artifact(audit_artifact),
         }
+
+    def _public_workbook(self, workbook: Any) -> dict[str, Any]:
+        data = workbook.model_dump(mode="json")
+        for key in ("original_path", "imported_path", "profile_path"):
+            data.pop(key, None)
+        return data
+
+    def _public_artifact(self, artifact: Any) -> dict[str, Any]:
+        data = artifact.model_dump(mode="json")
+        path = Path(data.pop("path", ""))
+        data["filename"] = path.name
+        data["download_url"] = f"/artifacts/{artifact.id}/download"
+        return data
+
+    def _public_template(self, template: Any) -> dict[str, Any]:
+        data = template.model_dump(mode="json")
+        original = Path(data.pop("original_path", ""))
+        diagnostic = data.pop("diagnostic_path", None)
+        data["filename"] = original.name
+        data["has_diagnostic"] = bool(diagnostic)
+        return data
+
+    def _public_audit(self, audit: dict[str, Any]) -> dict[str, Any]:
+        data = dict(audit)
+        workbook_path = Path(str(data.pop("workbook_path", "")))
+        data["workbook_filename"] = workbook_path.name
+        return data
+
+    def _cleanup_project_files(self, data_dir: Path, project_id: str, workbook_ids: list[str]) -> list[str]:
+        candidates = [
+            data_dir / "projects" / safe_name(project_id),
+            data_dir / "exports" / safe_name(project_id),
+            *[data_dir / "workbooks" / safe_name(workbook_id) for workbook_id in workbook_ids],
+        ]
+        removed: list[str] = []
+        for candidate in candidates:
+            try:
+                target = ensure_child(data_dir, candidate)
+            except ValueError:
+                continue
+            if target.exists() and target.is_dir():
+                shutil.rmtree(target)
+                removed.append(str(target))
+        return removed
+
+    def _cleanup_template_files(self, template: Any | None) -> list[str]:
+        if template is None:
+            return []
+        removed: list[str] = []
+        for value in (template.original_path, template.diagnostic_path):
+            if not value:
+                continue
+            path = Path(value)
+            if path.exists() and path.is_file():
+                path.unlink()
+                removed.append(str(path))
+        return removed
+
+    def _load_saved_plan(self, data_dir: Path, project_id: str) -> WorkbookPlan | None:
+        plan_path = project_dir(data_dir, project_id) / "workbook_plan.json"
+        if not plan_path.exists():
+            return None
+        try:
+            return WorkbookPlan.model_validate(json.loads(plan_path.read_text(encoding="utf-8")))
+        except (OSError, ValueError, TypeError):
+            return None
 
     async def _handle_tool(self, tool_name: str, arguments: dict[str, Any]) -> str:
         if self._data_dir is None:
@@ -685,7 +854,7 @@ class Plugin(PluginBase):
                 return json.dumps(result, ensure_ascii=False)
             if tool_name == "excel_generate_report_plan":
                 profile = await self._load_profile_for_workbook(data_dir, arguments.get("workbook_id"))
-                plan = WorkbookPlanBuilder().build_default_plan(
+                plan = await self._generate_report_plan(
                     title=str(arguments.get("title") or "Excel Report"),
                     workbook_id=arguments.get("workbook_id"),
                     profile=profile,
@@ -740,6 +909,10 @@ class Plugin(PluginBase):
     def _settings(self) -> Settings:
         if self._data_dir is None:
             return Settings()
+        if self._api is not None:
+            config = self._api.get_config()
+            if isinstance(config, dict) and isinstance(config.get(SETTINGS_KEY), dict):
+                return Settings(**config[SETTINGS_KEY])
         path = self._settings_path()
         if not path.exists():
             return Settings(data_dir=str(self._data_dir), export_dir=str(self._data_dir / "exports"))
@@ -747,6 +920,9 @@ class Plugin(PluginBase):
         return Settings(**data)
 
     def _save_settings(self, settings: Settings) -> None:
+        data = settings.model_dump(mode="json")
+        if self._api is not None:
+            self._api.set_config({SETTINGS_KEY: data})
         self._settings_path().write_text(settings.model_dump_json(indent=2), encoding="utf-8")
 
     async def on_unload(self) -> None:

@@ -20,8 +20,9 @@ def _try_openpyxl():
     try:
         import openpyxl  # type: ignore
         from openpyxl.chart import BarChart, Reference  # type: ignore
+        from openpyxl.utils import get_column_letter  # type: ignore
 
-        return openpyxl, BarChart, Reference
+        return openpyxl, BarChart, Reference, get_column_letter
     except ImportError as exc:
         raise WorkbookBuildError(
             "openpyxl is required to build .xlsx reports. Install dependency group table_core."
@@ -38,7 +39,7 @@ class WorkbookBuilder:
         output_path: str | Path,
         audit_items: list[dict[str, Any]] | None = None,
     ) -> Path:
-        openpyxl, bar_chart_cls, reference_cls = _try_openpyxl()
+        openpyxl, bar_chart_cls, reference_cls, get_column_letter = _try_openpyxl()
         wb = openpyxl.Workbook()
         default = wb.active
         wb.remove(default)
@@ -49,7 +50,7 @@ class WorkbookBuilder:
         self._write_table(wb.create_sheet("Raw_Data"), raw_rows, brand_color)
         clean_ws = wb.create_sheet("Clean_Data")
         self._write_table(clean_ws, raw_rows, brand_color)
-        self._write_summary(wb.create_sheet("Summary"), raw_rows, brand_color)
+        self._write_summary(wb.create_sheet("Summary"), raw_rows, brand_color, get_column_letter)
         self._write_charts(wb.create_sheet("Charts"), raw_rows, brand_color, bar_chart_cls, reference_cls)
         self._write_formula_check(wb.create_sheet("Formula_Check"), plan, brand_color)
         self._write_audit_log(wb.create_sheet("Audit_Log"), plan, audit_items or [], brand_color)
@@ -58,6 +59,24 @@ class WorkbookBuilder:
         output.parent.mkdir(parents=True, exist_ok=True)
         wb.save(output)
         return output
+
+    def update_audit_log(
+        self,
+        *,
+        workbook_path: str | Path,
+        plan: WorkbookPlan,
+        audit_items: list[dict[str, Any]],
+    ) -> Path:
+        openpyxl, _, _, _ = _try_openpyxl()
+        path = Path(workbook_path)
+        wb = openpyxl.load_workbook(path)
+        if "Audit_Log" in wb.sheetnames:
+            del wb["Audit_Log"]
+        ws = wb.create_sheet("Audit_Log")
+        brand_color = str(plan.style.get("brand_color") or "#2563eb")
+        self._write_audit_log(ws, plan, audit_items, brand_color)
+        wb.save(path)
+        return path
 
     def _extract_rows(self, preview: dict[str, Any] | None) -> list[list[Any]]:
         if not preview:
@@ -90,7 +109,7 @@ class WorkbookBuilder:
             ws.append(row)
         apply_table_style(ws, brand_color=brand_color)
 
-    def _write_summary(self, ws, rows: list[list[Any]], brand_color: str) -> None:
+    def _write_summary(self, ws, rows: list[list[Any]], brand_color: str, get_column_letter) -> None:
         headers = rows[0] if rows else []
         data = rows[1:]
         ws.append(["Metric", "Value", "Formula/Source"])
@@ -107,7 +126,9 @@ class WorkbookBuilder:
                         pass
             if values:
                 numeric_columns.append((idx, header))
-                ws.append([f"Sum: {header}", sum(values), f"=SUM(Clean_Data!{idx}:{idx})"])
+                column_letter = get_column_letter(idx)
+                end_row = max(len(data) + 1, 2)
+                ws.append([f"Sum: {header}", sum(values), f"=SUM(Clean_Data!{column_letter}2:{column_letter}{end_row})"])
         if not numeric_columns:
             ws.append(["Numeric Columns", 0, "No numeric sample columns detected"])
         apply_table_style(ws, brand_color=brand_color)

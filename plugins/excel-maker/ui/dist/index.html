@@ -14,21 +14,107 @@
     <script type="text/babel">
       const { useEffect, useMemo, useState } = React;
 
-      const apiBase = "";
+      const PLUGIN_ID_DEFAULT = "excel-maker";
       const tabs = ["Create", "Projects", "Datasets", "Templates", "Settings"];
 
-      async function pluginFetch(path, options = {}) {
-        const response = await fetch(apiBase + path, {
-          ...options,
-          headers: options.body instanceof FormData
-            ? options.headers || {}
-            : { "Content-Type": "application/json", ...(options.headers || {}) },
+      let _ctx = null;
+      let _bridgeConnected = false;
+      const _pending = {};
+      const _handlers = {};
+      const _inIframe = window.parent && window.parent !== window;
+
+      function uid() {
+        return Math.random().toString(36).slice(2) + Date.now().toString(36);
+      }
+
+      function post(message) {
+        if (_inIframe) window.parent.postMessage(message, "*");
+      }
+
+      function detectApiBase() {
+        const loc = window.location;
+        if (loc.port === "5173" || loc.port === "1420") return "http://127.0.0.1:18900";
+        return loc.origin;
+      }
+
+      function pluginPath(path) {
+        const pluginId = (_ctx && _ctx.pluginId) || PLUGIN_ID_DEFAULT;
+        return "/api/plugins/" + pluginId + path;
+      }
+
+      async function directFetch(method, path, body) {
+        const response = await fetch(detectApiBase() + path, {
+          method,
+          headers: body instanceof FormData ? {} : { "Content-Type": "application/json" },
+          body: body instanceof FormData ? body : body == null || method === "GET" ? undefined : JSON.stringify(body),
         });
         const data = await response.json().catch(() => ({}));
-        if (!response.ok || data.ok === false) {
-          throw new Error(typeof data.detail === "string" ? data.detail : data.error || "Request failed");
+        return { ok: response.ok, status: response.status, body: data };
+      }
+
+      function apiCall(method, path, body) {
+        if (!_inIframe || !_bridgeConnected || body instanceof FormData) return directFetch(method, path, body);
+        return new Promise((resolve, reject) => {
+          const requestId = uid();
+          _pending[requestId] = { resolve, reject };
+          post({ type: "bridge:api-request", requestId, payload: { method, path, body } });
+          setTimeout(() => {
+            if (_pending[requestId]) {
+              delete _pending[requestId];
+              directFetch(method, path, body).then(resolve).catch(reject);
+            }
+          }, 5000);
+        });
+      }
+
+      function onEvent(type, handler) {
+        (_handlers[type] = _handlers[type] || []).push(handler);
+      }
+
+      window.addEventListener("message", (event) => {
+        const message = event.data || {};
+        if (message.type === "bridge:init") {
+          _ctx = message.ctx || message.payload || {};
+          _bridgeConnected = true;
+          return;
         }
-        return data;
+        if (message.type === "bridge:api-response" && message.requestId && _pending[message.requestId]) {
+          const pending = _pending[message.requestId];
+          delete _pending[message.requestId];
+          pending.resolve(message.payload || message.response || {});
+          return;
+        }
+        if (message.type === "bridge:event") {
+          const payload = message.payload || {};
+          const eventType = payload.eventType || message.eventType || payload.type;
+          const data = payload.data || payload.payload || {};
+          (_handlers[eventType] || []).forEach((handler) => handler(data));
+        }
+      });
+
+      if (_inIframe) {
+        const timer = setInterval(() => post({ type: "bridge:ready", pluginId: PLUGIN_ID_DEFAULT }), 300);
+        setTimeout(() => clearInterval(timer), 20000);
+      }
+
+      async function pluginFetch(path, options = {}) {
+        const method = options.method || "GET";
+        const body = options.body instanceof FormData
+          ? options.body
+          : typeof options.body === "string"
+            ? JSON.parse(options.body || "{}")
+            : options.body;
+        const result = await apiCall(method, pluginPath(path), body);
+        if (!result.ok || (result.body && result.body.ok === false)) {
+          const detail = result.body && result.body.detail;
+          throw new Error(typeof detail === "string" ? detail : (result.body && result.body.error) || "Request failed");
+        }
+        return result.body || {};
+      }
+
+      async function downloadArtifact(artifact) {
+        const url = detectApiBase() + pluginPath(artifact.download_url || ("/artifacts/" + artifact.id + "/download"));
+        window.open(url, "_blank");
       }
 
       function StatusBadge({ value }) {
@@ -89,7 +175,7 @@
           setWorkbook(wb);
           const imported = await pluginFetch("/workbooks/import", {
             method: "POST",
-            body: JSON.stringify({ path: wb.original_path, project_id: project && project.id, name: wb.filename }),
+            body: JSON.stringify({ path: "", workbook_id: wb.id, project_id: project && project.id, name: wb.filename }),
           });
           setWorkbook(imported.workbook);
           const profiled = await pluginFetch(`/workbooks/${imported.workbook.id}/profile`, {
@@ -151,7 +237,7 @@
               </div>
               {questions.length > 0 && <ul>{questions.map((q) => <li key={q}>{q}</li>)}</ul>}
               {plan && <pre>{JSON.stringify(plan, null, 2)}</pre>}
-              {artifact && <p>已生成：<a href={`/artifacts/${artifact.id}/download`}>{artifact.path.split(/[\\/]/).pop()}</a></p>}
+              {artifact && <p>已生成：<button className="btn" onClick={() => downloadArtifact(artifact)}>{artifact.filename || artifact.id}</button></p>}
             </div>
           </div>
         );
@@ -259,6 +345,11 @@
           setProjects(data.projects || []);
         }
         useEffect(() => { refresh().catch((e) => setError(e.message)); }, []);
+        useEffect(() => {
+          onEvent("plugin:excel-maker:project_update", refresh);
+          onEvent("plugin:excel-maker:workbook_generated", refresh);
+          onEvent("plugin:excel-maker:audit_ready", refresh);
+        }, []);
         return (
           <main className="app">
             <section className="hero">

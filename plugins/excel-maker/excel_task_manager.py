@@ -369,6 +369,48 @@ class ExcelTaskManager:
         )
         return [self._sheet_from_row(row) for row in rows]
 
+    async def record_operations(self, project_id: str, operations: list[dict[str, Any]]) -> int:
+        now = _now()
+        for operation in operations:
+            await self._conn.execute(
+                """
+                INSERT INTO operations
+                    (id, project_id, op, params_json, status, result_json, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    _new_id("op"),
+                    project_id,
+                    str(operation.get("op") or ""),
+                    _json(operation.get("params") or {}),
+                    str(operation.get("status") or "accepted"),
+                    _json(operation),
+                    now,
+                    now,
+                ),
+            )
+        await self._conn.commit()
+        return len(operations)
+
+    async def list_operations(self, project_id: str) -> list[dict[str, Any]]:
+        rows = await self._fetchall(
+            "SELECT * FROM operations WHERE project_id = ? ORDER BY created_at ASC",
+            (project_id,),
+        )
+        return [
+            {
+                "id": row["id"],
+                "project_id": row["project_id"],
+                "op": row["op"],
+                "params": _loads(row["params_json"], {}),
+                "status": row["status"],
+                "result": _loads(row["result_json"], {}),
+                "created_at": row["created_at"],
+                "updated_at": row["updated_at"],
+            }
+            for row in rows
+        ]
+
     async def create_artifact(
         self,
         *,

@@ -33,6 +33,15 @@ def _clean_cell(value: Any) -> Any:
     return value
 
 
+def _column_letter(index: int) -> str:
+    index = max(index, 1)
+    letters = ""
+    while index:
+        index, remainder = divmod(index - 1, 26)
+        letters = chr(65 + remainder) + letters
+    return letters
+
+
 def _try_openpyxl():
     try:
         import openpyxl  # type: ignore
@@ -164,6 +173,8 @@ class WorkbookImporter:
         headers = rows[header_row - 1] if header_row and header_row <= len(rows) else []
         data_rows = rows[header_row:] if header_row else rows
         column_count = max((len(row) for row in rows), default=0)
+        end_column = _column_letter(column_count)
+        end_row = max(len(rows), 1)
         sheet_name = "CSV_Data"
         sheets = [
             {
@@ -172,7 +183,7 @@ class WorkbookImporter:
                 "row_count": len(rows),
                 "column_count": column_count,
                 "header_row": header_row,
-                "data_range": f"A1:{column_count}:{len(rows)}",
+                "data_range": f"A1:{end_column}{end_row}",
                 "formula_count": 0,
                 "merged_range_count": 0,
                 "hidden_row_count": 0,

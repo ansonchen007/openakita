@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+from excel_maker_inline.file_utils import ensure_child
 from excel_models import ArtifactKind, ProjectCreate, ProjectStatus
 from excel_task_manager import ExcelTaskManager
 
@@ -31,6 +32,27 @@ async def test_project_workbook_artifact_crud(tmp_path) -> None:
         assert artifact.version == 1
         assert updated is not None
         assert updated.status == ProjectStatus.GENERATED
+
+
+@pytest.mark.asyncio
+async def test_records_operations(tmp_path) -> None:
+    async with ExcelTaskManager(tmp_path / "excel_maker.db") as manager:
+        project = await manager.create_project(ProjectCreate(title="Sales Report"))
+        count = await manager.record_operations(
+            project.id,
+            [{"op": "rename_column", "params": {"from": "old", "to": "new"}, "status": "accepted"}],
+        )
+        operations = await manager.list_operations(project.id)
+
+        assert count == 1
+        assert operations[0]["op"] == "rename_column"
+        assert operations[0]["params"] == {"from": "old", "to": "new"}
+
+
+def test_ensure_child_resolves_relative_paths_inside_root(tmp_path) -> None:
+    target = ensure_child(tmp_path, "uploads")
+
+    assert target == tmp_path.resolve() / "uploads"
 
 
 @pytest.mark.asyncio

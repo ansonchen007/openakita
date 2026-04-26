@@ -45,7 +45,8 @@ def unique_child(parent: str | Path, filename: str) -> Path:
 
 def ensure_child(root: str | Path, path: str | Path) -> Path:
     root_path = Path(root).resolve()
-    target = Path(path).expanduser().resolve()
+    raw = Path(path).expanduser()
+    target = raw.resolve() if raw.is_absolute() else (root_path / raw).resolve()
     if root_path != target and root_path not in target.parents:
         raise ValueError("Path is outside the plugin data directory")
     return target
