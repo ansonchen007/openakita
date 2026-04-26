@@ -5,60 +5,179 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>PPT Maker</title>
     <script src="./_assets/bootstrap.js"></script>
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <link rel="stylesheet" href="./_assets/styles.css" />
   </head>
   <body>
-    <main id="app" class="app-shell">
-      <section class="hero">
-        <p class="eyebrow">OpenAkita Plugin</p>
-        <h1>PPT 制作助手</h1>
-        <p>
-          通过需求梳理、大纲确认、表格洞察、企业模板适配和质量检查生成可编辑
-          PPTX。
-        </p>
-      </section>
-      <section class="grid">
-        <article>
-          <h2>Modes</h2>
-          <ul>
-            <li>topic_to_deck</li>
-            <li>files_to_deck</li>
-            <li>outline_to_deck</li>
-            <li>table_to_deck</li>
-            <li>template_deck</li>
-            <li>revise_deck</li>
-          </ul>
-        </article>
-        <article>
-          <h2>Health</h2>
-          <button id="healthButton" type="button">Check backend</button>
-          <pre id="healthOutput">Not checked yet.</pre>
-        </article>
-      </section>
-    </main>
+    <div id="root"></div>
     <script src="./_assets/i18n.js"></script>
     <script src="./_assets/icons.js"></script>
     <script src="./_assets/markdown-mini.js"></script>
-    <script>
-      const healthButton = document.getElementById("healthButton");
-      const healthOutput = document.getElementById("healthOutput");
+    <script type="text/babel">
+      const { useEffect, useMemo, useState } = React;
+      const tabs = ["Create", "Projects", "Sources", "Tables", "Templates", "Exports", "Settings"];
+      const modes = ["topic_to_deck", "files_to_deck", "outline_to_deck", "table_to_deck", "template_deck", "revise_deck"];
 
-      async function callHealth() {
-        healthOutput.textContent = "Checking...";
-        try {
-          const api = window.OpenAkita;
-          if (api && typeof api.request === "function") {
-            const data = await api.request("/healthz");
-            healthOutput.textContent = JSON.stringify(data, null, 2);
-          } else {
-            healthOutput.textContent = "OpenAkita bridge is not ready.";
-          }
-        } catch (error) {
-          healthOutput.textContent = error && error.message ? error.message : String(error);
+      function request(path, options = {}) {
+        const api = window.OpenAkita;
+        if (!api || typeof api.request !== "function") {
+          return Promise.reject(new Error("OpenAkita bridge is not ready."));
         }
+        return api.request(path, options);
       }
 
-      healthButton.addEventListener("click", callHealth);
+      function useDraft(key, initial) {
+        const [value, setValue] = useState(() => {
+          try { return JSON.parse(localStorage.getItem(key)) || initial; } catch (_) { return initial; }
+        });
+        useEffect(() => localStorage.setItem(key, JSON.stringify(value)), [key, value]);
+        return [value, setValue];
+      }
+
+      function ErrorPanel({ error }) {
+        return error ? <div className="error-panel">错误：{String(error.message || error)}</div> : null;
+      }
+
+      function ProgressPanel({ event }) {
+        if (!event) return <div className="muted">等待 task_update 进度事件...</div>;
+        return <div className="progress-card"><b>{event.status || event.step}</b><span>{Math.round((event.progress || 0) * 100)}%</span></div>;
+      }
+
+      function CostBreakdown({ draft }) {
+        const complexity = draft.mode === "table_to_deck" || draft.mode === "template_deck" ? "中" : "低";
+        return <div className="hint">预估：{draft.slide_count} 页，复杂度 {complexity}，会生成 outline/design/IR/audit。</div>;
+      }
+
+      function FileUploadZone() {
+        return <div className="upload-zone">拖拽上传区：PDF、DOCX、Markdown、PPTX、CSV、XLSX。后续可接 host uploadFile。</div>;
+      }
+
+      function CreateTab({ setError, refreshProjects }) {
+        const [draft, setDraft] = useDraft("ppt-maker:create", {
+          mode: "topic_to_deck",
+          title: "OpenAkita 插件生态路线图",
+          prompt: "面向企业管理层，科技商务风",
+          audience: "企业管理层",
+          style: "tech_business",
+          slide_count: 8,
+        });
+        const [result, setResult] = useState(null);
+        async function startProject() {
+          setError(null);
+          const data = await request("/projects", { method: "POST", body: draft });
+          setResult(data);
+          refreshProjects();
+        }
+        async function generateDeck() {
+          if (!result?.project?.id) return;
+          setError(null);
+          setResult(await request(`/projects/${result.project.id}/retry`, { method: "POST" }));
+          refreshProjects();
+        }
+        return (
+          <section className="panel">
+            <h2>Create</h2>
+            <div className="chips">{modes.map((mode) => <button key={mode} className={draft.mode === mode ? "chip active" : "chip"} onClick={() => setDraft({ ...draft, mode })}>{mode}</button>)}</div>
+            <label>标题<input value={draft.title} onChange={(e) => setDraft({ ...draft, title: e.target.value })} /></label>
+            <label>受众<input value={draft.audience} onChange={(e) => setDraft({ ...draft, audience: e.target.value })} /></label>
+            <label>页数<input type="number" value={draft.slide_count} onChange={(e) => setDraft({ ...draft, slide_count: Number(e.target.value) })} /></label>
+            <label>需求<textarea value={draft.prompt} onChange={(e) => setDraft({ ...draft, prompt: e.target.value })} /></label>
+            <div className="actions"><button onClick={startProject}>创建项目</button><button onClick={generateDeck} disabled={!result?.project?.id}>生成 PPTX</button></div>
+            <CostBreakdown draft={draft} />
+            <pre>{JSON.stringify(result, null, 2)}</pre>
+          </section>
+        );
+      }
+
+      function ProjectsTab({ projects, refreshProjects }) {
+        return <section className="panel"><h2>Projects</h2><button onClick={refreshProjects}>刷新</button><div className="table">{projects.map((p) => <div className="row" key={p.id}><b>{p.title}</b><span>{p.mode}</span><span>{p.status}</span><code>{p.id}</code></div>)}</div></section>;
+      }
+
+      function SourcesTab({ setError }) {
+        const [path, setPath] = useState("");
+        const [parsed, setParsed] = useState(null);
+        async function parse() {
+          setError(null);
+          setParsed(await request("/sources/parse", { method: "POST", body: { path } }));
+        }
+        return <section className="panel"><h2>Sources</h2><FileUploadZone /><label>文件路径<input value={path} onChange={(e) => setPath(e.target.value)} /></label><button onClick={parse}>解析资料</button><pre>{JSON.stringify(parsed, null, 2)}</pre></section>;
+      }
+
+      function TablesTab({ setError }) {
+        const [path, setPath] = useState("");
+        const [dataset, setDataset] = useState(null);
+        async function create() {
+          setError(null);
+          setDataset(await request("/datasets", { method: "POST", body: { path } }));
+        }
+        async function profile() {
+          if (!dataset?.dataset?.id) return;
+          setDataset(await request(`/datasets/${dataset.dataset.id}/profile`, { method: "POST" }));
+        }
+        return <section className="panel"><h2>Tables</h2><label>CSV/XLSX 路径<input value={path} onChange={(e) => setPath(e.target.value)} /></label><div className="actions"><button onClick={create}>登记数据集</button><button onClick={profile}>生成 profile/insights/chart specs</button></div><pre>{JSON.stringify(dataset, null, 2)}</pre></section>;
+      }
+
+      function TemplatesTab({ setError }) {
+        const [path, setPath] = useState("");
+        const [template, setTemplate] = useState(null);
+        async function upload() {
+          setError(null);
+          setTemplate(await request("/templates/upload", { method: "POST", body: { path } }));
+        }
+        async function diagnose() {
+          if (!template?.template?.id) return;
+          setTemplate(await request(`/templates/${template.template.id}/diagnose`, { method: "POST" }));
+        }
+        return <section className="panel"><h2>Templates</h2><label>企业 PPTX 模板路径<input value={path} onChange={(e) => setPath(e.target.value)} /></label><div className="actions"><button onClick={upload}>上传模板</button><button onClick={diagnose}>诊断模板</button></div><div className="hint">MVP 抽取 brand_tokens 和 layout_map，不承诺 1:1 复刻动画、SmartArt 或复杂母版。</div><pre>{JSON.stringify(template, null, 2)}</pre></section>;
+      }
+
+      function ExportsTab({ projects }) {
+        const exports = projects.flatMap((p) => (p.exports || []).map((e) => ({ ...e, project_title: p.title })));
+        return <section className="panel"><h2>Exports</h2><div className="table">{exports.map((e) => <div className="row" key={e.id}><b>{e.project_title}</b><span>{e.kind}</span><code>{e.id}</code></div>)}</div></section>;
+      }
+
+      function SettingsTab({ health, setHealth, setError }) {
+        async function checkHealth() {
+          setError(null);
+          setHealth(await request("/healthz"));
+        }
+        return <section className="panel"><h2>Settings</h2><button onClick={checkHealth}>健康检查</button><div className="hint">依赖管理面板将在 Phase 11 接入；当前必需依赖为 python-pptx。</div><pre>{JSON.stringify(health, null, 2)}</pre></section>;
+      }
+
+      function App() {
+        const [active, setActive] = useState("Create");
+        const [projects, setProjects] = useState([]);
+        const [health, setHealth] = useState(null);
+        const [error, setError] = useState(null);
+        const [event, setEvent] = useState(null);
+        async function refreshProjects() {
+          try {
+            const data = await request("/projects");
+            setProjects(data.projects || []);
+          } catch (err) { setError(err); }
+        }
+        useEffect(() => {
+          refreshProjects();
+          const onTask = (e) => setEvent(e.detail || e);
+          window.addEventListener("task_update", onTask);
+          return () => window.removeEventListener("task_update", onTask);
+        }, []);
+        const props = { projects, refreshProjects, health, setHealth, setError };
+        const body = useMemo(() => ({
+          Create: <CreateTab {...props} />,
+          Projects: <ProjectsTab {...props} />,
+          Sources: <SourcesTab {...props} />,
+          Tables: <TablesTab {...props} />,
+          Templates: <TemplatesTab {...props} />,
+          Exports: <ExportsTab {...props} />,
+          Settings: <SettingsTab {...props} />,
+        }[active]), [active, projects, health]);
+        return <main className="app-shell"><section className="hero"><p className="eyebrow">OpenAkita Plugin</p><h1>PPT 制作助手</h1><p>需求梳理、资料理解、表格洞察、模板适配、可编辑 PPTX 导出与质量检查。</p></section><nav className="tabs">{tabs.map((tab) => <button key={tab} className={active === tab ? "active" : ""} onClick={() => setActive(tab)}>{tab}</button>)}</nav><ErrorPanel error={error} /><ProgressPanel event={event} />{body}</main>;
+      }
+
+      ReactDOM.createRoot(document.getElementById("root")).render(<App />);
     </script>
   </body>
 </html>

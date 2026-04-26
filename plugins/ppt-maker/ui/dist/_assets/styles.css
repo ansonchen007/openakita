@@ -49,6 +49,103 @@ h2 {
   margin-top: 16px;
 }
 
+.tabs,
+.chips,
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 16px 0;
+}
+
+.tabs button,
+.chip {
+  background: #eef1ff;
+  color: #26355f;
+}
+
+.tabs button.active,
+.chip.active {
+  background: #5468ff;
+  color: #ffffff;
+}
+
+.panel {
+  margin-top: 16px;
+  padding: 24px;
+  border: 1px solid #e3e7ef;
+  border-radius: 20px;
+  background: #ffffff;
+  box-shadow: 0 18px 42px rgb(22 35 61 / 8%);
+}
+
+label {
+  display: grid;
+  gap: 6px;
+  margin: 12px 0;
+  font-weight: 700;
+}
+
+input,
+textarea {
+  box-sizing: border-box;
+  width: 100%;
+  border: 1px solid #d9dfec;
+  border-radius: 12px;
+  padding: 10px 12px;
+  font: inherit;
+}
+
+textarea {
+  min-height: 92px;
+  resize: vertical;
+}
+
+.hint,
+.muted,
+.upload-zone,
+.progress-card,
+.error-panel {
+  margin: 12px 0;
+  padding: 12px;
+  border-radius: 14px;
+}
+
+.hint,
+.muted,
+.upload-zone {
+  background: #f2f5fb;
+  color: #526075;
+}
+
+.progress-card {
+  display: flex;
+  justify-content: space-between;
+  background: #ecfff6;
+  color: #08704a;
+}
+
+.error-panel {
+  background: #fff0f0;
+  color: #b42318;
+}
+
+.table {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.row {
+  display: grid;
+  grid-template-columns: 2fr 1fr 1fr 1.5fr;
+  gap: 8px;
+  align-items: center;
+  padding: 10px 12px;
+  border: 1px solid #e7ebf3;
+  border-radius: 12px;
+}
+
 article {
   padding: 24px;
 }
@@ -80,8 +177,16 @@ pre {
 }
 
 [data-theme="dark"] .hero,
-[data-theme="dark"] article {
+[data-theme="dark"] article,
+[data-theme="dark"] .panel {
   border-color: #25304a;
   background: #151d31;
+}
+
+[data-theme="dark"] input,
+[data-theme="dark"] textarea {
+  border-color: #2b3650;
+  background: #0f1422;
+  color: #eef3ff;
 }
 
