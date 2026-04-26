@@ -27,7 +27,6 @@ export type SidebarProps = {
   desktopVersion: string;
   backendVersion: string | null;
   serviceRunning: boolean;
-  onBugReport: () => void;
   onRefreshStatus: () => Promise<void>;
   isWeb?: boolean;
   mobileOpen?: boolean;
@@ -93,7 +92,7 @@ export function Sidebar({
   disabledViews,
   storeVisible,
   desktopVersion, backendVersion, serviceRunning,
-  onBugReport, onRefreshStatus, isWeb, mobileOpen, httpApiBase,
+  onRefreshStatus, isWeb, mobileOpen, httpApiBase,
   unreadFeedbackCount,
 }: SidebarProps) {
   const { t, i18n } = useTranslation();
@@ -397,7 +396,7 @@ export function Sidebar({
         )}
       </div>
 
-      {/* Version info + website link + bug report at sidebar bottom */}
+      {/* Version info + website and feedback links at sidebar bottom */}
       {!collapsed && (
         <div style={{
           padding: "10px 16px",
@@ -419,16 +418,6 @@ export function Sidebar({
             >
               <IconGlobe size={11} />
               openakita.ai
-            </span>
-            <span
-              onClick={onBugReport}
-              title={t("feedback.trigger")}
-              style={{ cursor: "pointer", opacity: 1, color: "var(--accent, #5B8DEF)", display: "inline-flex", alignItems: "center", gap: 2 }}
-              onMouseEnter={(e) => { const s = e.currentTarget.querySelector<HTMLElement>(".feedbackText"); if (s) s.style.textDecoration = "underline"; }}
-              onMouseLeave={(e) => { const s = e.currentTarget.querySelector<HTMLElement>(".feedbackText"); if (s) s.style.textDecoration = "none"; }}
-            >
-              <IconBug size={12} />
-              <span className="feedbackText" style={{ fontSize: 11 }}>{t("feedback.trigger")}</span>
             </span>
             {serviceRunning && (
               <span
@@ -493,13 +482,6 @@ export function Sidebar({
               style={{ color: "var(--accent, #5B8DEF)", opacity: 0.5, display: "flex", cursor: "pointer" }}
             >
               <IconGlobe size={14} />
-            </span>
-            <span
-              onClick={onBugReport}
-              title={t("feedback.trigger")}
-              style={{ color: "var(--accent, #5B8DEF)", opacity: 0.5, display: "flex", cursor: "pointer" }}
-            >
-              <IconBug size={14} />
             </span>
             {serviceRunning && (
               <span
