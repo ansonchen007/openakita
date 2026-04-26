@@ -226,6 +226,7 @@ def apply_execution_environment(env: dict[str, str], spec: ExecutionEnvSpec) -> 
     merged["OPENAKITA_EXECUTION_ENV_KEY"] = spec.key
     merged["OPENAKITA_EXECUTION_ENV"] = str(spec.venv_path)
     merged["OPENAKITA_EXECUTION_PYTHON"] = str(spec.python_path)
+    merged["OPENAKITA_EXECUTION_DEPS_HASH"] = spec.deps_hash
     # Compatibility: existing prompts/tools look for OPENAKITA_AGENT_PYTHON.
     merged["OPENAKITA_AGENT_PYTHON"] = str(spec.python_path)
     merged["OPENAKITA_AGENT_BIN"] = bin_path

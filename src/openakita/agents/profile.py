@@ -369,6 +369,9 @@ class ProfileStore:
             "identity_mode",
             "memory_mode",
             "memory_inherit_global",
+            "runtime_env_mode",
+            "runtime_env_dependencies",
+            "runtime_env_python",
         }
     )
 

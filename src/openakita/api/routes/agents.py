@@ -119,6 +119,9 @@ class ProfileCreateRequest(BaseModel):
     identity_mode: Literal["shared", "custom"] = "shared"
     memory_mode: Literal["shared", "isolated"] = "shared"
     memory_inherit_global: bool = True
+    runtime_env_mode: Literal["shared", "agent", "custom"] = "shared"
+    runtime_env_dependencies: list[str] = Field(default_factory=list)
+    runtime_env_python: str | None = Field(None, max_length=1000)
 
 
 class ProfileUpdateRequest(BaseModel):
@@ -140,6 +143,9 @@ class ProfileUpdateRequest(BaseModel):
     identity_mode: Literal["shared", "custom"] | None = None
     memory_mode: Literal["shared", "isolated"] | None = None
     memory_inherit_global: bool | None = None
+    runtime_env_mode: Literal["shared", "agent", "custom"] | None = None
+    runtime_env_dependencies: list[str] | None = None
+    runtime_env_python: str | None = Field(None, max_length=1000)
 
 
 class ProfileVisibilityRequest(BaseModel):
@@ -492,6 +498,9 @@ async def create_agent_profile(body: ProfileCreateRequest):
         identity_mode=body.identity_mode,
         memory_mode=body.memory_mode,
         memory_inherit_global=body.memory_inherit_global,
+        runtime_env_mode=body.runtime_env_mode,
+        runtime_env_dependencies=body.runtime_env_dependencies,
+        runtime_env_python=body.runtime_env_python,
         created_by="user",
     )
 

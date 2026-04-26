@@ -1,6 +1,7 @@
 import json
 
 from openakita.agents.profile import AgentProfile
+from openakita.api.routes.agents import ProfileCreateRequest, create_agent_profile
 from openakita.experience import ToolExperienceTracker
 from openakita.runtime_envs import (
     apply_execution_environment,
@@ -23,6 +24,30 @@ def test_agent_profile_runtime_policy_roundtrip():
 
     assert restored.runtime_env_mode == "agent"
     assert restored.runtime_env_dependencies == ["pandas==2.2.0"]
+
+
+def test_agent_profile_create_api_persists_runtime_policy(monkeypatch, tmp_path):
+    from openakita.agents import profile as profile_module
+
+    store = profile_module.ProfileStore(tmp_path / "agents")
+    monkeypatch.setattr(profile_module, "get_profile_store", lambda: store)
+
+    body = ProfileCreateRequest(
+        id="runtime-writer",
+        name="Runtime Writer",
+        runtime_env_mode="agent",
+        runtime_env_dependencies=["packaging==24.2"],
+    )
+
+    result = create_agent_profile(body)
+    try:
+        result = result.send(None)
+    except StopIteration as exc:
+        result = exc.value
+
+    profile = result["profile"]
+    assert profile["runtime_env_mode"] == "agent"
+    assert profile["runtime_env_dependencies"] == ["packaging==24.2"]
 
 
 def test_execution_env_resolvers_are_scoped(monkeypatch, tmp_path):
@@ -53,6 +78,7 @@ def test_apply_execution_environment_prefers_managed_python(monkeypatch, tmp_pat
 
     assert env["OPENAKITA_EXECUTION_ENV_SCOPE"] == "agent"
     assert env["OPENAKITA_AGENT_PYTHON"] == str(spec.python_path)
+    assert env["OPENAKITA_EXECUTION_DEPS_HASH"] == spec.deps_hash
     assert env["PATH"].startswith(str(spec.bin_path))
     assert env["PYTHONNOUSERSITE"] == "1"
 

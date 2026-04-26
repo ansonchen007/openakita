@@ -561,6 +561,11 @@ class ToolExecutor:
         error_type: str = "",
     ) -> None:
         try:
+            # run_skill_script resolves its effective environment inside the
+            # skills handler; the agent-level spec here can be misleading.
+            if tool_name == "run_skill_script":
+                return
+
             from ..experience import get_tool_experience_tracker
             from ..runtime_envs import describe_execution_env
 

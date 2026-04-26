@@ -394,8 +394,10 @@ class SkillsHandler:
         python_executable: str | None = None
         script_env: dict[str, str] | None = None
         env_scope = "legacy"
+        deps_hash = ""
         try:
             import os
+            import time
 
             deps = list(getattr(skill_entry, "python_dependencies", []) or []) if skill_entry else []
             py_env = (getattr(skill_entry, "python_env", "") or "").strip().lower() if skill_entry else ""
@@ -409,6 +411,7 @@ class SkillsHandler:
 
                 spec = ensure_execution_env(resolve_skill_env(skill_entry.skill_id, deps=deps))
                 env_scope = "skill"
+                deps_hash = spec.deps_hash
                 python_executable = str(spec.python_path)
                 script_env = apply_execution_environment(os.environ.copy(), spec)
             elif getattr(self.agent, "_execution_env_spec", None) is not None:
@@ -416,11 +419,13 @@ class SkillsHandler:
 
                 spec = ensure_execution_env(getattr(self.agent, "_execution_env_spec"))
                 env_scope = "agent"
+                deps_hash = spec.deps_hash
                 python_executable = str(spec.python_path)
                 script_env = apply_execution_environment(os.environ.copy(), spec)
         except Exception as exc:
             return f"❌ 技能 Python 环境准备失败:\n{exc}"
 
+        started_at = time.monotonic()
         success, output = self.agent.skill_loader.run_script(
             skill_name,
             script_name,
@@ -438,7 +443,9 @@ class SkillsHandler:
                 agent_profile_id=getattr(self.agent, "_agent_profile_id", "default"),
                 skill_name=skill_entry.skill_id if skill_entry else skill_name,
                 env_scope=env_scope,
+                deps_hash=deps_hash,
                 success=success,
+                duration_ms=(time.monotonic() - started_at) * 1000,
                 output=output,
             )
         except Exception:
