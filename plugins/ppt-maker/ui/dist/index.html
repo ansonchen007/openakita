@@ -332,6 +332,61 @@
         );
       }
 
+      function CreateResultPanel({ draft, result, busy, phase, onNavigate, onGenerate }) {
+        const project = result?.project || result?.result?.project || null;
+        const projectId = project?.id || result?.project_id || result?.result?.project_id || null;
+        const status = project?.status || result?.status || result?.result?.status || "draft";
+        const modeName = (modes.find((item) => item.id === draft.mode) || modes[0]).title;
+        if (busy) {
+          return (
+            <div className="create-result create-result--busy">
+              <div className="create-result__hero">
+                <span className="create-spinner" />
+                <strong>{phase || "正在处理..."}</strong>
+                <p>请稍候，系统正在提交任务并刷新项目列表。完成后会在这里展示下一步操作。</p>
+              </div>
+            </div>
+          );
+        }
+        if (!result) {
+          return (
+            <div className="create-result">
+              <div className="create-result__hero">
+                <strong>创建前预览</strong>
+                <p>填写左侧必填信息后，点击“创建项目”。项目创建后不会立即导出，会先进入项目页完成大纲确认和设计确认。</p>
+              </div>
+              <div className="project-detail__grid">
+                <div><span>模式</span><strong>{modeName}</strong></div>
+                <div><span>页数</span><strong>{draft.slide_count || "默认 8"} 页</strong></div>
+                <div><span>数据集</span><strong>{draft.dataset_id ? shortId(draft.dataset_id) : "未绑定"}</strong></div>
+                <div><span>模板</span><strong>{draft.template_id ? shortId(draft.template_id) : "未绑定"}</strong></div>
+              </div>
+              <div className="create-next-tip">建议：素材和模板准备完成后再创建项目，后续推进会更稳定。</div>
+            </div>
+          );
+        }
+        return (
+          <div className="create-result">
+            <div className="create-result__hero">
+              <strong>{project ? "项目已创建" : "本次操作已完成"}</strong>
+              <span className={"badge badge-" + statusClass(status)}>{status}</span>
+              <p>{project ? "下一步请前往项目页继续推进。通常需要先确认大纲，再确认设计，最后生成并导出 PPTX。" : "操作结果已返回，可查看摘要或继续下一步。"}</p>
+            </div>
+            <div className="project-detail__grid">
+              <div><span>项目 ID</span><strong>{shortId(projectId) || "-"}</strong></div>
+              <div><span>当前状态</span><strong>{status}</strong></div>
+              <div><span>模式</span><strong>{project?.mode || modeName}</strong></div>
+              <div><span>页数</span><strong>{project?.slide_count || draft.slide_count || "默认 8"}</strong></div>
+            </div>
+            <div className="create-result__actions">
+              <button className="btn btn-primary" onClick={() => onNavigate("Projects")}>去项目页推进后续</button>
+              <button className="btn" onClick={onGenerate} disabled={!projectId}>继续生成</button>
+            </div>
+            <details className="template-raw"><summary>查看原始返回 JSON</summary><JsonBlock value={result} /></details>
+          </div>
+        );
+      }
+
       function FileUploadZone({ hint = "拖入文件或点击上传。", accept = "", multiple = false, disabled = false, manual = false, uploadExtra = {}, onFilesSelected, onUploaded, onUploads }) {
         const inputId = `upload-${Math.random().toString(36).slice(2)}`;
         async function handleChange(e) {
@@ -573,30 +628,47 @@
           template_id: "",
         });
         const [result, setResult] = useState(null);
+        const [createBusy, setCreateBusy] = useState(false);
+        const [generateBusy, setGenerateBusy] = useState(false);
+        const [createPhase, setCreatePhase] = useState("");
         const update = (key, value) => setDraft({ ...draft, [key]: value });
         async function startProject() {
           setError(null);
-          const body = {
-            mode: draft.mode,
-            title: draft.title,
-            prompt: draft.prompt,
-            audience: draft.audience,
-            style: draft.style === "custom" ? (draft.custom_style || "custom") : draft.style,
-            slide_count: Number(draft.slide_count || 8),
-            dataset_id: draft.dataset_id || null,
-            template_id: draft.template_id || null,
-            metadata: { source: "ppt-maker-ui" },
-          };
-          const data = await request("/projects", { method: "POST", body });
-          setResult(data);
-          refreshProjects();
+          setCreateBusy(true);
+          setCreatePhase("正在创建项目...");
+          try {
+            const body = {
+              mode: draft.mode,
+              title: draft.title,
+              prompt: draft.prompt,
+              audience: draft.audience,
+              style: draft.style === "custom" ? (draft.custom_style || "custom") : draft.style,
+              slide_count: Number(draft.slide_count || 8),
+              dataset_id: draft.dataset_id || null,
+              template_id: draft.template_id || null,
+              metadata: { source: "ppt-maker-ui" },
+            };
+            const data = await request("/projects", { method: "POST", body });
+            setResult(data);
+            refreshProjects();
+          } finally {
+            setCreatePhase("");
+            setCreateBusy(false);
+          }
         }
         async function generateDeck() {
           const projectId = result?.project?.id;
           if (!projectId) return;
           setError(null);
-          setResult(await request(`/projects/${projectId}/retry`, { method: "POST" }));
-          refreshProjects();
+          setGenerateBusy(true);
+          setCreatePhase("正在推进生成流程...");
+          try {
+            setResult(await request(`/projects/${projectId}/retry`, { method: "POST" }));
+            refreshProjects();
+          } finally {
+            setCreatePhase("");
+            setGenerateBusy(false);
+          }
         }
         return (
           <div className="split-layout">
@@ -655,12 +727,12 @@
                 <CostBreakdown draft={draft} />
               </div>
               <div className="flex gap-2" style={{marginTop: 14}}>
-                <button className="btn btn-primary btn-block" onClick={startProject}>创建项目</button>
-                <button className="btn" onClick={generateDeck} disabled={!result?.project?.id}>继续生成</button>
+                <button className="btn btn-primary btn-block" onClick={() => startProject().catch(setError)} disabled={createBusy || generateBusy}>{createBusy ? "创建中..." : "创建项目"}</button>
+                <button className="btn" onClick={() => generateDeck().catch(setError)} disabled={!result?.project?.id || createBusy || generateBusy}>{generateBusy ? "推进中..." : "继续生成"}</button>
               </div>
             </div>
-            <PreviewShell title="暂无项目预览" hint="在左侧填写需求并创建项目">
-              {result && <div style={{width: "100%"}}><div className="card-title">本次生成状态</div><JsonBlock value={result} /></div>}
+            <PreviewShell title="创建结果与下一步" hint="创建后请到项目页推进大纲和设计确认">
+              <CreateResultPanel draft={draft} result={result} busy={createBusy || generateBusy} phase={createPhase} onNavigate={onNavigate} onGenerate={() => generateDeck().catch(setError)} />
             </PreviewShell>
           </div>
         );
