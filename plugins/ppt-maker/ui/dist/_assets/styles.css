@@ -1812,6 +1812,72 @@ body {
   line-height: 1.55;
 }
 
+.create-result {
+  display: grid;
+  width: 100%;
+  gap: 12px;
+}
+
+.create-result__hero {
+  display: grid;
+  gap: 8px;
+  padding: 16px;
+  border: 1px solid rgba(232, 77, 42, .18);
+  border-radius: 12px;
+  background: linear-gradient(180deg, rgba(232, 77, 42, .08), rgba(255, 255, 255, .8));
+}
+
+.create-result__hero strong {
+  color: var(--text);
+  font-size: 18px;
+}
+
+.create-result__hero p {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.create-result__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.create-next-tip {
+  padding: 10px 12px;
+  border: 1px dashed rgba(232, 77, 42, .22);
+  border-radius: 8px;
+  background: rgba(232, 77, 42, .04);
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.create-result--busy .create-result__hero {
+  grid-template-columns: auto 1fr;
+  align-items: center;
+}
+
+.create-result--busy .create-result__hero p {
+  grid-column: 2;
+}
+
+.create-spinner {
+  width: 22px;
+  height: 22px;
+  border: 3px solid rgba(232, 77, 42, .18);
+  border-top-color: var(--primary);
+  border-radius: 999px;
+  animation: spin .8s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .project-detail__grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
