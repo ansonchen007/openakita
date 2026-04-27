@@ -4298,7 +4298,7 @@ class ReasoningEngine:
                             self._record_tool_result(
                                 _tc_name,
                                 success=not is_error,
-                                tool_args=_stc.get("input", _stc.get("arguments", {})),
+                                tool_args=tc_rec.get("input", tc_rec.get("arguments", {})),
                             )
 
                     # 收集工具结果到 trace（保存完整内容，不截断）

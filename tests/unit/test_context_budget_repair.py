@@ -1,10 +1,11 @@
+import inspect
+
 import pytest
 
 from openakita.core.context_manager import ContextManager
-from openakita.core.reasoning_engine import ReasoningEngine
 from openakita.core.loop_budget_guard import LoopBudgetGuard
 from openakita.core.microcompact import microcompact
-from openakita.prompt.budget import BudgetConfig
+from openakita.core.reasoning_engine import ReasoningEngine
 from openakita.prompt.builder import _build_catalogs_section
 
 
@@ -199,6 +200,13 @@ def test_tool_failures_are_tracked_by_exact_invocation():
 
     assert max(engine._tool_failure_counter.values()) == 1
     assert len(engine._persistent_tool_failures) == ReasoningEngine.CONSECUTIVE_FAIL_THRESHOLD
+
+
+def test_stream_tool_failure_tracking_uses_current_tool_call():
+    source = inspect.getsource(ReasoningEngine.reason_stream)
+
+    assert 'tool_args=_stc.get("input", _stc.get("arguments", {}))' not in source
+    assert 'tool_args=tc_rec.get("input", tc_rec.get("arguments", {}))' in source
 
 
 def test_plugin_catalog_is_budgeted():
