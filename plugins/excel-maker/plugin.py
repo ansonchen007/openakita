@@ -13,7 +13,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from excel_auditor import WorkbookAuditor
 from excel_executor import ExcelOperationExecutor, OperationExecutionError
@@ -65,9 +65,9 @@ class ImportWorkbookRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     path: str
-    workbook_id: Optional[str] = None
-    project_id: Optional[str] = None
-    name: Optional[str] = None
+    workbook_id: str | None = None
+    project_id: str | None = None
+    name: str | None = None
 
 
 class ProfileWorkbookRequest(BaseModel):
@@ -79,19 +79,19 @@ class ProfileWorkbookRequest(BaseModel):
 class ClarifyRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    project_id: Optional[str] = None
-    workbook_id: Optional[str] = None
+    project_id: str | None = None
+    workbook_id: str | None = None
     goal: str = ""
-    profile: Optional[dict[str, Any]] = None
+    profile: dict[str, Any] | None = None
 
 
 class ReportPlanRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    project_id: Optional[str] = None
-    workbook_id: Optional[str] = None
+    project_id: str | None = None
+    workbook_id: str | None = None
     brief: dict[str, Any] = Field(default_factory=dict)
-    profile: Optional[dict[str, Any]] = None
+    profile: dict[str, Any] | None = None
 
 
 class FormulaRequest(BaseModel):
@@ -107,45 +107,45 @@ class OperationsApplyRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     plan: dict[str, Any]
-    project_id: Optional[str] = None
-    profile: Optional[dict[str, Any]] = None
+    project_id: str | None = None
+    profile: dict[str, Any] | None = None
 
 
 class BuildReportRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    workbook_id: Optional[str] = None
-    plan: Optional[dict[str, Any]] = None
+    workbook_id: str | None = None
+    plan: dict[str, Any] | None = None
 
 
 class TemplateUploadRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     path: str
-    name: Optional[str] = None
+    name: str | None = None
 
 
 class SettingsUpdateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    data_dir: Optional[str] = None
-    export_dir: Optional[str] = None
-    default_style: Optional[str] = None
-    brand_color: Optional[str] = None
-    font_family: Optional[str] = None
-    number_format: Optional[str] = None
+    data_dir: str | None = None
+    export_dir: str | None = None
+    default_style: str | None = None
+    brand_color: str | None = None
+    font_family: str | None = None
+    number_format: str | None = None
 
 
 class StorageOpenRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    path: Optional[str] = None
+    path: str | None = None
 
 
 class StorageMkdirRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    parent: Optional[str] = None
+    parent: str | None = None
     name: str
 
 
@@ -285,6 +285,14 @@ class Plugin(PluginBase):
             assert self._deps is not None
             try:
                 return {"ok": True, "dependency": await self._deps.start_install(dep_id)}
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        @router.post("/system/python-deps/{dep_id}/uninstall")
+        async def uninstall_python_dep(dep_id: str) -> dict[str, Any]:
+            assert self._deps is not None
+            try:
+                return {"ok": True, "dependency": await self._deps.start_uninstall(dep_id)}
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -475,8 +483,8 @@ class Plugin(PluginBase):
                 plan=self._load_saved_plan(data_dir, project_id),
             )
 
-        @router.get("/artifacts/{artifact_id}/download")
-        async def download_artifact(artifact_id: str) -> FileResponse:
+        @router.get("/artifacts/{artifact_id}/download", response_class=FileResponse)
+        async def download_artifact(artifact_id: str):
             async with ExcelTaskManager(data_dir / "excel_maker.db") as manager:
                 artifact = await manager.get_artifact(artifact_id)
             if artifact is None or not Path(artifact.path).is_file():

@@ -15,7 +15,13 @@
       const { useEffect, useMemo, useState } = React;
 
       const PLUGIN_ID_DEFAULT = "excel-maker";
-      const tabs = ["Create", "Projects", "Datasets", "Templates", "Settings"];
+      const tabs = [
+        { id: "Create", label: "创建", icon: "✦" },
+        { id: "Projects", label: "项目", icon: "▦" },
+        { id: "Datasets", label: "数据集", icon: "▤" },
+        { id: "Templates", label: "模板库", icon: "◇" },
+        { id: "Settings", label: "设置", icon: "⚙" },
+      ];
 
       let _ctx = null;
       let _bridgeConnected = false;
@@ -117,6 +123,22 @@
         window.open(url, "_blank");
       }
 
+      function Ico({ children }) {
+        return <span className="ico">{children}</span>;
+      }
+
+      function ExcelLogoIcon() {
+        return (
+          <svg viewBox="0 0 24 24" aria-hidden="true" className="excel-logo-icon">
+            <g fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5">
+              <path d="M15.12 12h8.13m-8.13-5h8.13M4 9l5 6m0-6l-5 6M15.13 2.25V17h8.12" />
+              <path d="M7 18v3a1 1 0 0 0 1 1h14.25a1 1 0 0 0 1-1V3a1 1 0 0 0-1-1H8a1 1 0 0 0-1 1v3" />
+              <path d="M1.75 6h10s1 0 1 1v10s0 1-1 1h-10s-1 0-1-1V7s0-1 1-1" />
+            </g>
+          </svg>
+        );
+      }
+
       function StatusBadge({ value }) {
         return <span className="status">{value || "unknown"}</span>;
       }
@@ -145,6 +167,74 @@
           <div className="upload">
             <p>上传 .xlsx / .csv / .tsv，源文件不会被覆盖。</p>
             <input type="file" accept=".xlsx,.csv,.tsv" disabled={busy} onChange={(e) => upload(e.target.files[0])} />
+          </div>
+        );
+      }
+
+      function PreviewEmpty({ title, desc, icon = "▤" }) {
+        return (
+          <div className="preview-empty">
+            <div className="preview-empty-icon">{icon}</div>
+            <strong>{title}</strong>
+            <div>{desc}</div>
+          </div>
+        );
+      }
+
+      function WorkbookPreview({ project, workbook, profile, questions, plan, artifact }) {
+        if (!project && !workbook && !profile && !plan && !artifact) {
+          return <PreviewEmpty title="暂无报表任务" desc="在左侧填写目标、上传表格后开始生成 Excel 报表" icon="▥" />;
+        }
+        const sheets = (profile && profile.sheets) || [];
+        const firstSheet = sheets[0] || null;
+        return (
+          <div>
+            <div className="preview-title"><Ico>▥</Ico> 报表预览</div>
+            <div className="metric-grid">
+              <div className="metric">
+                <div className="metric-value">{sheets.length || 0}</div>
+                <div className="metric-label">已识别 Sheet</div>
+              </div>
+              <div className="metric">
+                <div className="metric-value">{firstSheet ? firstSheet.column_count || 0 : 0}</div>
+                <div className="metric-label">首个 Sheet 列数</div>
+              </div>
+              <div className="metric">
+                <div className="metric-value">{artifact ? "1" : "0"}</div>
+                <div className="metric-label">导出文件</div>
+              </div>
+            </div>
+            <div className="preview-section">
+              <div className="card-title"><Ico>◎</Ico> 当前状态</div>
+              <div className="steps">
+                <div className="step"><span className="step-num">1</span><div><b>项目</b><br /><span className="muted">{project ? project.title : "未创建"}</span></div></div>
+                <div className="step"><span className="step-num">2</span><div><b>输入工作簿</b><br /><span className="muted">{workbook ? workbook.filename : "未上传"}</span></div></div>
+                <div className="step"><span className="step-num">3</span><div><b>输出</b><br />{artifact ? <button className="btn primary" onClick={() => downloadArtifact(artifact)}>下载 {artifact.filename || "report.xlsx"}</button> : <span className="muted">等待生成 .xlsx</span>}</div></div>
+              </div>
+            </div>
+            {questions.length > 0 && (
+              <div className="preview-section">
+                <div className="card-title"><Ico>?</Ico> AI 追问</div>
+                <ul>{questions.map((q) => <li key={q}>{q}</li>)}</ul>
+              </div>
+            )}
+            {firstSheet && (
+              <div className="preview-section">
+                <div className="card-title"><Ico>▤</Ico> 数据结构</div>
+                <div className="pill-list">
+                  <span className="pill">{firstSheet.name}</span>
+                  <span className="pill">{firstSheet.row_count || 0} 行</span>
+                  <span className="pill">{firstSheet.column_count || 0} 列</span>
+                  <span className="pill">{firstSheet.formula_count || 0} 个公式</span>
+                </div>
+              </div>
+            )}
+            {plan && (
+              <div className="preview-section">
+                <div className="card-title"><Ico>JSON</Ico> WorkbookPlan</div>
+                <pre className="json-preview">{JSON.stringify(plan, null, 2)}</pre>
+              </div>
+            )}
           </div>
         );
       }
@@ -212,54 +302,98 @@
         }
 
         return (
-          <div>
-            <ErrorPanel error={error} onClose={() => setError("")} />
-            <div className="grid">
-              <div className="card">
-                <h2>1. 新建报表项目</h2>
-                <div className="field"><label>标题</label><input value={title} onChange={(e) => setTitle(e.target.value)} /></div>
-                <div className="field"><label>目标</label><textarea rows="3" value={goal} onChange={(e) => setGoal(e.target.value)} /></div>
-                <button className="btn primary" onClick={() => createProject().catch((e) => setError(e.message))}>创建项目</button>
-                {project && <p>当前项目：<b>{project.title}</b> <StatusBadge value={project.status} /></p>}
+          <div className="workspace">
+            <div className="left-pane">
+              <ErrorPanel error={error} onClose={() => setError("")} />
+              <div className="banner">
+                <Ico>!</Ico>
+                <div>
+                  <b>Excel-first 工作流</b>
+                  <div>左侧整理输入与口径，右侧实时预览报表结构和导出结果。</div>
+                </div>
               </div>
               <div className="card">
-                <h2>2. 上传并分析</h2>
+                <div className="card-title"><Ico>①</Ico> 报表目标</div>
+                <div className="field"><label>报表标题</label><input value={title} onChange={(e) => setTitle(e.target.value)} /></div>
+                <div className="field"><label>生成目标 / 业务口径</label><textarea rows="4" value={goal} onChange={(e) => setGoal(e.target.value)} /></div>
+                <div className="row">
+                  <button className="btn primary" onClick={() => createProject().catch((e) => setError(e.message))}>创建项目</button>
+                  {project && <StatusBadge value={project.status} />}
+                </div>
+              </div>
+              <div className="card">
+                <div className="card-title"><Ico>②</Ico> 上传表格并剖析</div>
                 <FileUploadZone projectId={project && project.id} onUploaded={(wb) => importAndProfile(wb).catch((e) => setError(e.message))} />
-                {workbook && <p>工作簿：{workbook.filename} <StatusBadge value={workbook.status} /></p>}
+                {workbook && <p className="muted">当前工作簿：<b>{workbook.filename}</b> <StatusBadge value={workbook.status} /></p>}
+              </div>
+              <div className="card soft">
+                <div className="card-title"><Ico>③</Ico> 方案与导出</div>
+                <div className="steps">
+                  <div className="step"><span className="step-num">A</span><div>先让 AI 根据 profile 追问缺失口径。</div></div>
+                  <div className="step"><span className="step-num">B</span><div>生成受控 WorkbookPlan，确认 Sheet、公式和审计项。</div></div>
+                  <div className="step"><span className="step-num">C</span><div>后端确定性生成 `.xlsx`，并写入审计结果。</div></div>
+                </div>
+                <div className="row" style={{ marginTop: 12 }}>
+                  <button className="btn" disabled={!profile} onClick={() => clarify().catch((e) => setError(e.message))}>生成追问</button>
+                  <button className="btn" disabled={!profile} onClick={() => makePlan().catch((e) => setError(e.message))}>生成方案</button>
+                  <button className="btn primary" disabled={!project || !plan} onClick={() => build().catch((e) => setError(e.message))}>生成 XLSX</button>
+                </div>
               </div>
             </div>
-            <div className="card">
-              <h2>3. 需求澄清与方案</h2>
-              <div className="row">
-                <button className="btn" disabled={!profile} onClick={() => clarify().catch((e) => setError(e.message))}>生成追问</button>
-                <button className="btn" disabled={!profile} onClick={() => makePlan().catch((e) => setError(e.message))}>生成 WorkbookPlan</button>
-                <button className="btn primary" disabled={!project || !plan} onClick={() => build().catch((e) => setError(e.message))}>生成 XLSX 报表</button>
-              </div>
-              {questions.length > 0 && <ul>{questions.map((q) => <li key={q}>{q}</li>)}</ul>}
-              {plan && <pre>{JSON.stringify(plan, null, 2)}</pre>}
-              {artifact && <p>已生成：<button className="btn" onClick={() => downloadArtifact(artifact)}>{artifact.filename || artifact.id}</button></p>}
+            <div className="right-pane">
+              <WorkbookPreview project={project} workbook={workbook} profile={profile} questions={questions} plan={plan} artifact={artifact} />
             </div>
           </div>
         );
       }
 
       function ProjectsTab({ projects, refresh }) {
+        const [activeProject, setActiveProject] = useState(null);
         return (
-          <div className="card">
-            <h2>Projects</h2>
-            <table>
-              <thead><tr><th>标题</th><th>状态</th><th>创建时间</th><th>操作</th></tr></thead>
-              <tbody>
-                {projects.map((p) => (
-                  <tr key={p.id}>
-                    <td>{p.title}<br /><small>{p.goal}</small></td>
-                    <td><StatusBadge value={p.status} /></td>
-                    <td>{new Date(p.created_at * 1000).toLocaleString()}</td>
-                    <td><button className="btn" onClick={() => refresh()}>刷新</button></td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          <div className="workspace">
+            <div className="left-pane">
+              <div className="card">
+                <div className="card-title"><Ico>▦</Ico> 报表项目</div>
+                <p className="card-desc">查看已创建的 Excel 报表项目，右侧显示当前项目详情与下载入口。</p>
+                <button className="btn" onClick={() => refresh()}>刷新列表</button>
+              </div>
+              <div className="card">
+                <table>
+                  <thead><tr><th>标题</th><th>状态</th><th>创建时间</th></tr></thead>
+                  <tbody>
+                    {projects.map((p) => (
+                      <tr key={p.id} onClick={() => setActiveProject(p)} style={{ cursor: "pointer" }}>
+                        <td>{p.title}<br /><small className="muted">{p.goal}</small></td>
+                        <td><StatusBadge value={p.status} /></td>
+                        <td>{new Date(p.created_at * 1000).toLocaleString()}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+            <div className="right-pane">
+              {activeProject ? (
+                <div>
+                  <div className="preview-title"><Ico>▦</Ico> 项目详情</div>
+                  <div className="preview-section">
+                    <div className="card-title">{activeProject.title}</div>
+                    <p className="muted">{activeProject.goal || "未填写目标"}</p>
+                    <div className="pill-list">
+                      <span className="pill">{activeProject.id}</span>
+                      <span className="pill">{activeProject.status}</span>
+                      <span className="pill">{new Date(activeProject.updated_at * 1000).toLocaleString()}</span>
+                    </div>
+                  </div>
+                  <div className="preview-section">
+                    <div className="card-title"><Ico>→</Ico> 下一步</div>
+                    <p className="muted">如需查看产物和审计详情，可在 Create 流程生成后通过下载按钮验收工作簿。</p>
+                  </div>
+                </div>
+              ) : (
+                <PreviewEmpty title="未选择项目" desc="点击左侧项目行查看详情" icon="▦" />
+              )}
+            </div>
           </div>
         );
       }
@@ -269,14 +403,29 @@
         const [preview, setPreview] = useState(null);
         const [error, setError] = useState("");
         return (
-          <div className="card">
-            <h2>Datasets</h2>
-            <ErrorPanel error={error} onClose={() => setError("")} />
-            <div className="row">
-              <input placeholder="workbook_id" value={id} onChange={(e) => setId(e.target.value)} />
-              <button className="btn" onClick={() => pluginFetch(`/workbooks/${id}/preview`).then((d) => setPreview(d.preview)).catch((e) => setError(e.message))}>查看预览</button>
+          <div className="workspace">
+            <div className="left-pane">
+              <ErrorPanel error={error} onClose={() => setError("")} />
+              <div className="card">
+                <div className="card-title"><Ico>▤</Ico> 数据集预览</div>
+                <p className="card-desc">输入工作簿 ID，查看后端采样后的 Sheet 预览。这里不会展示服务端绝对路径。</p>
+                <div className="field">
+                  <label>Workbook ID</label>
+                  <input value={id} onChange={(e) => setId(e.target.value)} placeholder="wb_xxxxxxxxxxxx" />
+                </div>
+                <button className="btn primary" onClick={() => pluginFetch(`/workbooks/${id}/preview`).then((d) => setPreview(d.preview)).catch((e) => setError(e.message))}>查看预览</button>
+              </div>
             </div>
-            {preview && <pre>{JSON.stringify(preview, null, 2)}</pre>}
+            <div className="right-pane">
+              {preview ? (
+                <div>
+                  <div className="preview-title"><Ico>▤</Ico> Sheet 采样</div>
+                  <pre className="json-preview">{JSON.stringify(preview, null, 2)}</pre>
+                </div>
+              ) : (
+                <PreviewEmpty title="暂无数据预览" desc="在左侧输入 workbook_id 后查看采样内容" icon="▤" />
+              )}
+            </div>
           </div>
         );
       }
@@ -291,14 +440,41 @@
         }
         useEffect(() => { load().catch((e) => setError(e.message)); }, []);
         return (
-          <div className="card">
-            <h2>Templates</h2>
-            <ErrorPanel error={error} onClose={() => setError("")} />
-            <div className="row">
-              <input placeholder="服务端模板路径 .xlsx" value={path} onChange={(e) => setPath(e.target.value)} />
-              <button className="btn" onClick={() => pluginFetch("/templates", { method: "POST", body: JSON.stringify({ path }) }).then(load).catch((e) => setError(e.message))}>登记模板</button>
+          <div className="workspace">
+            <div className="left-pane">
+              <ErrorPanel error={error} onClose={() => setError("")} />
+              <div className="card">
+                <div className="card-title"><Ico>◇</Ico> 模板登记</div>
+                <p className="card-desc">登记已有 `.xlsx` 模板，后端会诊断 Sheet、冻结窗格、公式、合并区域和命名区域。</p>
+                <div className="field">
+                  <label>服务端模板路径</label>
+                  <input placeholder="D:\OpenAkita\test-materials\excel-maker\report_template.xlsx" value={path} onChange={(e) => setPath(e.target.value)} />
+                </div>
+                <button className="btn primary" onClick={() => pluginFetch("/templates", { method: "POST", body: JSON.stringify({ path }) }).then(load).catch((e) => setError(e.message))}>登记模板</button>
+              </div>
+              <div className="card">
+                <div className="card-title"><Ico>▧</Ico> 模板库</div>
+                <table><tbody>{templates.map((t) => <tr key={t.id}><td>{t.name}<br /><small className="muted">{t.filename}</small></td><td><StatusBadge value={t.status} /></td><td><button className="btn" onClick={() => pluginFetch(`/templates/${t.id}/diagnose`, { method: "POST", body: "{}" }).then(load).catch((e) => setError(e.message))}>诊断</button></td></tr>)}</tbody></table>
+              </div>
             </div>
-            <table><tbody>{templates.map((t) => <tr key={t.id}><td>{t.name}</td><td><StatusBadge value={t.status} /></td><td><button className="btn" onClick={() => pluginFetch(`/templates/${t.id}/diagnose`, { method: "POST", body: "{}" }).then(load).catch((e) => setError(e.message))}>诊断</button></td></tr>)}</tbody></table>
+            <div className="right-pane">
+              {templates.length ? (
+                <div>
+                  <div className="preview-title"><Ico>◇</Ico> 模板诊断预览</div>
+                  <div className="metric-grid">
+                    <div className="metric"><div className="metric-value">{templates.length}</div><div className="metric-label">模板数量</div></div>
+                    <div className="metric"><div className="metric-value">{templates.filter((t) => t.has_diagnostic).length}</div><div className="metric-label">已诊断</div></div>
+                    <div className="metric"><div className="metric-value">XLSX</div><div className="metric-label">模板类型</div></div>
+                  </div>
+                  <div className="preview-section">
+                    <div className="card-title"><Ico>✓</Ico> 验收重点</div>
+                    <p className="muted">诊断模板时应能识别 Sheet 名、冻结窗格、合并区域、公式和命名区域；原始模板文件不应被覆盖。</p>
+                  </div>
+                </div>
+              ) : (
+                <PreviewEmpty title="暂无模板" desc="在左侧登记 xlsx 模板后进行诊断" icon="◇" />
+              )}
+            </div>
           </div>
         );
       }
@@ -314,23 +490,40 @@
         }
         useEffect(() => { load().catch((e) => setError(e.message)); }, []);
         return (
-          <div className="grid">
-            <div className="card">
-              <h2>Settings</h2>
+          <div className="workspace">
+            <div className="left-pane">
               <ErrorPanel error={error} onClose={() => setError("")} />
-              {settings && <pre>{JSON.stringify(settings, null, 2)}</pre>}
-              <button className="btn" onClick={() => pluginFetch("/storage/open-folder", { method: "POST", body: JSON.stringify({}) }).catch((e) => setError(e.message))}>打开数据目录</button>
+              <div className="card">
+                <div className="card-title"><Ico>⚙</Ico> 插件设置</div>
+                <p className="card-desc">管理数据目录、依赖状态和存储占用。目录打开动作会限制在插件数据目录内。</p>
+                <button className="btn primary" onClick={() => pluginFetch("/storage/open-folder", { method: "POST", body: JSON.stringify({}) }).catch((e) => setError(e.message))}>打开数据目录</button>
+              </div>
+              <div className="card">
+                <div className="card-title"><Ico>⌁</Ico> Python 依赖</div>
+                {deps.map((dep) => (
+                  <div key={dep.id} className="step">
+                    <span className="step-num">{dep.busy ? "…" : dep.installed ? "✓" : "!"}</span>
+                    <div style={{ flex: 1 }}>
+                      <b>{dep.id}</b> <StatusBadge value={dep.status} />
+                      <div className="muted">{dep.description}</div>
+                      {dep.log_tail && dep.log_tail.length > 0 && <pre className="json-preview">{dep.log_tail.slice(-8).join("\n")}</pre>}
+                    </div>
+                    <button className="btn" disabled={dep.detect_only || dep.installed || dep.busy} onClick={() => pluginFetch(`/system/python-deps/${dep.id}/install`, { method: "POST", body: "{}" }).then(load).catch((e) => setError(e.message))}>安装</button>
+                    <button className="btn danger" disabled={dep.detect_only || !dep.installed || dep.busy} onClick={() => pluginFetch(`/system/python-deps/${dep.id}/uninstall`, { method: "POST", body: "{}" }).then(load).catch((e) => setError(e.message))}>卸载</button>
+                  </div>
+                ))}
+              </div>
             </div>
-            <div className="card">
-              <h2>Dependencies</h2>
-              {deps.map((dep) => (
-                <div key={dep.id} className="row" style={{ marginBottom: 8 }}>
-                  <b>{dep.id}</b><StatusBadge value={dep.status} />
-                  <button className="btn" disabled={dep.detect_only || dep.installed} onClick={() => pluginFetch(`/system/python-deps/${dep.id}/install`, { method: "POST", body: "{}" }).then(load).catch((e) => setError(e.message))}>安装</button>
-                </div>
-              ))}
-              <h3>Storage</h3>
-              {stats && <pre>{JSON.stringify(stats, null, 2)}</pre>}
+            <div className="right-pane">
+              <div className="preview-title"><Ico>⚙</Ico> 配置预览</div>
+              <div className="preview-section">
+                <div className="card-title">Settings JSON</div>
+                {settings ? <pre className="json-preview">{JSON.stringify(settings, null, 2)}</pre> : <p className="muted">加载中...</p>}
+              </div>
+              <div className="preview-section">
+                <div className="card-title">Storage Stats</div>
+                {stats ? <pre className="json-preview">{JSON.stringify(stats, null, 2)}</pre> : <p className="muted">加载中...</p>}
+              </div>
             </div>
           </div>
         );
@@ -352,17 +545,28 @@
         }, []);
         return (
           <main className="app">
-            <section className="hero">
-              <h1>Excel 报表助手</h1>
-              <p>上传表格、梳理口径、生成可编辑 XLSX，并附带公式解释和质量审计。</p>
-            </section>
+            <header className="header">
+              <div className="brand">
+                <div className="brand-icon"><ExcelLogoIcon /></div>
+                <div>
+                  <div className="brand-title">Excel 报表工作台</div>
+                  <div className="brand-subtitle">XLSX REPORT / PROFILE / FORMULA / AUDIT</div>
+                </div>
+              </div>
+              <div className="header-right">
+                <span>主产物：可编辑 .xlsx</span>
+                <span>OPENAKITA</span>
+              </div>
+            </header>
             <ErrorPanel error={error} onClose={() => setError("")} />
-            <nav className="tabs">{tabs.map((tab) => <button key={tab} className={"tab " + (active === tab ? "active" : "")} onClick={() => setActive(tab)}>{tab}</button>)}</nav>
-            {active === "Create" && <CreateTab refresh={refresh} />}
-            {active === "Projects" && <ProjectsTab projects={projects} refresh={refresh} />}
-            {active === "Datasets" && <DatasetsTab />}
-            {active === "Templates" && <TemplatesTab />}
-            {active === "Settings" && <SettingsTab />}
+            <nav className="tabs">{tabs.map((tab) => <button key={tab.id} className={"tab " + (active === tab.id ? "active" : "")} onClick={() => setActive(tab.id)}><span>{tab.icon}</span>{tab.label}</button>)}</nav>
+            <section className="content">
+              {active === "Create" && <CreateTab refresh={refresh} />}
+              {active === "Projects" && <ProjectsTab projects={projects} refresh={refresh} />}
+              {active === "Datasets" && <DatasetsTab />}
+              {active === "Templates" && <TemplatesTab />}
+              {active === "Settings" && <SettingsTab />}
+            </section>
           </main>
         );
       }

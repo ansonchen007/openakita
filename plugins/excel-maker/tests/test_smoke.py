@@ -8,6 +8,8 @@ def test_manifest_is_excel_first() -> None:
     manifest = json.loads((Path(__file__).resolve().parents[1] / "plugin.json").read_text(encoding="utf-8"))
 
     assert manifest["id"] == "excel-maker"
+    assert manifest["icon"] == "icon.svg"
+    assert manifest["ui"]["icon"] == "icon.svg"
     assert "brain.access" in manifest["permissions"]
     assert "excel_build_workbook" in manifest["provides"]["tools"]
     assert "ppt" not in " ".join(manifest["provides"]["tools"])
@@ -95,6 +97,8 @@ def test_ui_asset_exists() -> None:
 
     assert (root / "ui" / "dist" / "index.html").is_file()
     assert (root / "ui" / "dist" / "_assets" / "styles.css").is_file()
+    assert (root / "icon.svg").is_file()
+    assert (root / "ui" / "dist" / "icon.svg").is_file()
 
 
 def test_ui_uses_plugin_bridge_and_no_absolute_upload_path() -> None:
@@ -105,4 +109,16 @@ def test_ui_uses_plugin_bridge_and_no_absolute_upload_path() -> None:
     assert "/api/plugins/" in html
     assert "workbook_id: wb.id" in html
     assert "wb.original_path" not in html
+
+
+def test_ui_uses_excel_iconify_icon_and_green_theme() -> None:
+    root = Path(__file__).resolve().parents[1]
+    html = (root / "ui" / "dist" / "index.html").read_text(encoding="utf-8")
+    css = (root / "ui" / "dist" / "_assets" / "styles.css").read_text(encoding="utf-8")
+    icon = (root / "icon.svg").read_text(encoding="utf-8")
+
+    assert "M15.12 12h8.13m-8.13-5h8.13" in html
+    assert "streamline-ultimate:microsoft-excel-logo" in icon
+    assert "#107c41" in css.lower()
+    assert "/system/python-deps/${dep.id}/uninstall" in html
 
