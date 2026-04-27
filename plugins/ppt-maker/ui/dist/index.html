@@ -21,9 +21,9 @@
       const tabs = [
         ["Create", "创建"],
         ["Projects", "项目"],
+        ["Exports", "导出"],
         ["Materials", "素材"],
         ["Templates", "模板"],
-        ["Exports", "导出"],
         ["Settings", "设置"],
       ];
       const modes = [
@@ -267,27 +267,36 @@
       function DeleteAssetConfirmModal({ target, onClose, onConfirm }) {
         const [deleteFiles, setDeleteFiles] = useState(false);
         if (!target) return null;
+        const hasFolder = !!target.ids;
+        const title = target.title || (hasFolder ? "确认删除该数据集文件夹？" : "确认删除该素材？");
+        const targetTag = target.targetTag || (hasFolder ? "目标文件夹" : "目标素材");
+        const description = target.description || `默认只删除素材库里的登记记录，不影响磁盘上的原始文件。删除后，${hasFolder ? "这个文件夹及其中素材" : "这条素材"}不会再出现在当前列表中。`;
+        const showDeleteFiles = target.showDeleteFiles !== false;
+        const deleteFilesLabel = target.deleteFilesLabel || "同时删除插件存储目录里的文件和分析结果";
+        const hint = target.hint || "为避免误删，系统只会删除插件保存目录内的内容；手动登记的外部路径会自动保留。";
         return (
           <div className="modal-mask" onClick={onClose}>
             <div className="modal-card delete-modal" onClick={(e) => e.stopPropagation()}>
               <div className="delete-modal__head">
                 <div className="delete-modal__icon" aria-hidden="true">!</div>
                 <div className="delete-modal__title">
-                  <strong>{target.ids ? "确认删除该数据集文件夹？" : "确认删除该素材？"}</strong>
+                  <strong>{title}</strong>
                   <div className="delete-modal__target">
-                    <span className="delete-modal__tag">{target.ids ? "目标文件夹" : "目标素材"}</span>
+                    <span className="delete-modal__tag">{targetTag}</span>
                     <span className="delete-modal__name" title={target.name || target.id}>{target.name || target.id}</span>
                   </div>
                 </div>
                 <button className="btn btn-sm" onClick={onClose}>关闭</button>
               </div>
               <div className="delete-modal__body">
-                <p>默认只删除素材库里的登记记录，不影响磁盘上的原始文件。删除后，{target.ids ? "这个文件夹及其中素材" : "这条素材"}不会再出现在当前列表中。</p>
-                <label className="delete-modal__option">
-                  <input type="checkbox" checked={deleteFiles} onChange={(e) => setDeleteFiles(e.target.checked)} />
-                  <span>同时删除插件存储目录里的文件和分析结果</span>
-                </label>
-                <div className="delete-modal__hint">为避免误删，系统只会删除插件保存目录内的内容；手动登记的外部路径会自动保留。</div>
+                <p>{description}</p>
+                {showDeleteFiles && (
+                  <label className="delete-modal__option">
+                    <input type="checkbox" checked={deleteFiles} onChange={(e) => setDeleteFiles(e.target.checked)} />
+                    <span>{deleteFilesLabel}</span>
+                  </label>
+                )}
+                {showDeleteFiles && <div className="delete-modal__hint">{hint}</div>}
               </div>
               <div className="modal-actions">
                 <button className="btn" onClick={onClose}>取消</button>
@@ -738,9 +747,237 @@
         );
       }
 
-      function ProjectsTab({ projects, refreshProjects, setError }) {
-        const [detail, setDetail] = useState(null);
+      const ACTIVITY_STAGE_LABELS = {
+        run: "整体流程",
+        setup: "初始化",
+        ingest: "解析资料",
+        table_profile: "表格画像",
+        template_diagnose: "模板诊断",
+        requirements: "需求复核",
+        outline: "大纲",
+        layout_plan: "版式选择",
+        design: "设计方案",
+        ir: "页面 IR",
+        slide_content: "页面内容",
+        export: "导出",
+        audit_finalize: "审计归档",
+        context: "补充上下文",
+        web_search: "Web 搜索",
+        assets: "配图/图标",
+      };
+      function activityStageLabel(stage) {
+        if (!stage) return "事件";
+        if (ACTIVITY_STAGE_LABELS[stage]) return ACTIVITY_STAGE_LABELS[stage];
+        if (stage.startsWith("brain.")) return "Brain · " + stage.slice(6);
+        return stage;
+      }
+      function activityStatusEmoji(status, level) {
+        if (status === "start") return "▶";
+        if (status === "success") return "✓";
+        if (status === "fallback") return "↩";
+        if (status === "error") return "✗";
+        if (level === "warn") return "!";
+        return "•";
+      }
+      function activityStatusClass(status, level) {
+        if (status === "error" || level === "error") return "is-error";
+        if (status === "fallback" || level === "warn") return "is-warn";
+        if (status === "success") return "is-success";
+        if (status === "start") return "is-running";
+        return "is-info";
+      }
+      function formatActivityTime(iso, ts) {
+        if (iso) {
+          try { return new Date(iso).toLocaleTimeString(); } catch (_) {}
+        }
+        if (ts) return new Date(ts * 1000).toLocaleTimeString();
+        return "";
+      }
+      function ActivityLogPanel({ projectId, onError }) {
+        const [events, setEvents] = useState([]);
+        const [loading, setLoading] = useState(true);
+        const [autoScroll, setAutoScroll] = useState(true);
+        const [expanded, setExpanded] = useState({});
         const [filter, setFilter] = useState("all");
+        const containerRef = useRef(null);
+        const seenRef = useRef(new Set());
+        useEffect(() => {
+          if (!projectId) return;
+          let cancelled = false;
+          seenRef.current = new Set();
+          setEvents([]);
+          setLoading(true);
+          (async () => {
+            try {
+              const data = await request("/projects/" + projectId + "/activity?limit=500");
+              if (cancelled) return;
+              const list = Array.isArray(data?.events) ? data.events : [];
+              const dedup = [];
+              for (const ev of list) {
+                const key = (ev.ts || "") + "|" + (ev.stage || "") + "|" + (ev.status || "") + "|" + (ev.message || "");
+                if (seenRef.current.has(key)) continue;
+                seenRef.current.add(key);
+                dedup.push(ev);
+              }
+              setEvents(dedup);
+            } catch (err) {
+              if (onError) onError(err);
+            } finally {
+              if (!cancelled) setLoading(false);
+            }
+          })();
+          const onActivity = (e) => {
+            const ev = (e && e.detail) || e;
+            if (!ev || ev.project_id !== projectId) return;
+            const key = (ev.ts || "") + "|" + (ev.stage || "") + "|" + (ev.status || "") + "|" + (ev.message || "");
+            if (seenRef.current.has(key)) return;
+            seenRef.current.add(key);
+            setEvents((prev) => [...prev, ev]);
+          };
+          window.addEventListener("ppt_activity", onActivity);
+          return () => {
+            cancelled = true;
+            window.removeEventListener("ppt_activity", onActivity);
+          };
+        }, [projectId]);
+        useEffect(() => {
+          if (!autoScroll) return;
+          const el = containerRef.current;
+          if (el) el.scrollTop = el.scrollHeight;
+        }, [events, autoScroll]);
+        const visible = events.filter((ev) => {
+          if (filter === "all") return true;
+          if (filter === "errors") return ev.status === "error" || ev.status === "fallback" || ev.level === "error" || ev.level === "warn";
+          if (filter === "brain") return (ev.stage || "").startsWith("brain.");
+          return true;
+        });
+        async function refresh() {
+          if (!projectId) return;
+          try {
+            const data = await request("/projects/" + projectId + "/activity?limit=500");
+            const list = Array.isArray(data?.events) ? data.events : [];
+            seenRef.current = new Set();
+            for (const ev of list) {
+              seenRef.current.add((ev.ts || "") + "|" + (ev.stage || "") + "|" + (ev.status || "") + "|" + (ev.message || ""));
+            }
+            setEvents(list);
+          } catch (err) { if (onError) onError(err); }
+        }
+        return (
+          <div className="activity-panel">
+            <div className="activity-head">
+              <div>
+                <strong className="section-title">处理过程日志</strong>
+                <p className="text-xs text-muted">实时记录 Brain 调用、版式选择、Web 搜索、配图获取等关键交互；事件也会同步写入 <code>data/projects/&lt;id&gt;/logs/activity.jsonl</code>。</p>
+              </div>
+              <div className="activity-toolbar">
+                <div className="activity-filter">
+                  <button className={"btn btn-xs " + (filter === "all" ? "btn-primary" : "")} onClick={() => setFilter("all")}>全部</button>
+                  <button className={"btn btn-xs " + (filter === "brain" ? "btn-primary" : "")} onClick={() => setFilter("brain")}>Brain</button>
+                  <button className={"btn btn-xs " + (filter === "errors" ? "btn-primary" : "")} onClick={() => setFilter("errors")}>异常/兜底</button>
+                </div>
+                <label className="text-xs" style={{display:'flex',alignItems:'center',gap:4}}>
+                  <input type="checkbox" checked={autoScroll} onChange={(e) => setAutoScroll(e.target.checked)} /> 自动滚动
+                </label>
+                <button className="btn btn-xs" onClick={refresh}>刷新</button>
+              </div>
+            </div>
+            <div className="activity-stream" ref={containerRef}>
+              {loading && <div className="empty-note">加载中...</div>}
+              {!loading && visible.length === 0 && <div className="empty-note">暂无活动记录。点击“继续生成”后即可看到 Brain 调用、版式选择等过程信息。</div>}
+              {visible.map((ev, idx) => {
+                const key = (ev.ts || idx) + "_" + (ev.stage || "") + "_" + (ev.status || "") + "_" + idx;
+                const cls = activityStatusClass(ev.status, ev.level);
+                const hasDetails = ev.details && typeof ev.details === "object" && Object.keys(ev.details).length > 0;
+                const isOpen = !!expanded[key];
+                return (
+                  <div className={"activity-row " + cls} key={key}>
+                    <div className="activity-row__time">{formatActivityTime(ev.iso, ev.ts)}</div>
+                    <div className="activity-row__icon">{activityStatusEmoji(ev.status, ev.level)}</div>
+                    <div className="activity-row__body">
+                      <div className="activity-row__line">
+                        <span className="activity-row__stage">{activityStageLabel(ev.stage)}</span>
+                        <span className="activity-row__msg">{ev.message || ev.status || ""}</span>
+                        {hasDetails && (
+                          <button className="btn btn-xs activity-row__toggle" onClick={() => setExpanded((prev) => ({ ...prev, [key]: !prev[key] }))}>{isOpen ? "收起" : "详情"}</button>
+                        )}
+                      </div>
+                      {isOpen && hasDetails && (
+                        <pre className="activity-row__details">{JSON.stringify(ev.details, null, 2)}</pre>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        );
+      }
+      function ProjectsTab({ projects, refreshProjects, setError, onNavigate }) {
+        const [detail, setDetail] = useState(null);
+        const [detailOpen, setDetailOpen] = useState(false);
+        const [filter, setFilter] = useState("all");
+        const [runningProjectId, setRunningProjectId] = useState("");
+        const [reviewBusy, setReviewBusy] = useState("");
+        const [draftSlides, setDraftSlides] = useState([]);
+        const [draftDesign, setDraftDesign] = useState("");
+        const [draftSpecLock, setDraftSpecLock] = useState({});
+        const [pageError, setPageError] = useState("");
+        const [projectErrors, setProjectErrors] = useState({});
+        const [deleteTarget, setDeleteTarget] = useState(null);
+        const steps = [
+          ["draft", "需求"],
+          ["outline_ready", "大纲"],
+          ["outline_confirmed", "大纲确认"],
+          ["design_ready", "设计"],
+          ["design_confirmed", "设计确认"],
+          ["ready", "导出"],
+        ];
+        const stepIndex = (status) => {
+          if (status === "failed" || status === "cancelled") return 0;
+          const idx = steps.findIndex(([id]) => id === status);
+          return idx >= 0 ? idx : 0;
+        };
+        const nextAction = (status) => {
+          if (status === "draft") return "点击继续后生成大纲";
+          if (status === "outline_ready") return "请打开大纲确认面板";
+          if (status === "outline_confirmed") return "点击继续后生成设计";
+          if (status === "design_ready") return "请打开设计确认面板";
+          if (status === "design_confirmed") return "点击继续后生成 PPTX";
+          if (status === "ready") return "已完成，可到导出页下载";
+          if (status === "failed") return "生成失败，请查看原因后重新生成";
+          if (status === "cancelled") return "已取消，可删除或重新创建";
+          return "等待推进";
+        };
+        const primaryActionLabel = (status) => {
+          if (status === "outline_ready") return "确认大纲";
+          if (status === "design_ready") return "确认设计";
+          if (status === "outline_confirmed") return "生成设计";
+          if (status === "design_confirmed") return "生成 PPTX";
+          if (status === "ready") return "去导出页";
+          if (status === "failed") return "重新生成";
+          if (status === "cancelled") return "已取消";
+          return "继续生成";
+        };
+        const outlineSlides = (outline) => outline?.outline?.slides || outline?.slides || [];
+        const designMarkdown = (design) => design?.design_markdown || design?.design_spec_markdown || design?.spec_lock?.design_spec_markdown || "";
+        const normalizeSlides = (slides) => (slides || []).map((slide, index) => ({
+          ...slide,
+          id: slide.id || `slide_${String(index + 1).padStart(2, "0")}`,
+          index: index + 1,
+          title: slide.title || slide.heading || `页面 ${index + 1}`,
+          purpose: slide.purpose || slide.notes || "说明这一页要表达的重点。",
+          slide_type: slide.slide_type || slide.type || "content",
+          key_points: slide.key_points || [],
+        }));
+        const syncReviewDrafts = (data) => {
+          setDraftSlides(normalizeSlides(outlineSlides(data?.outline)));
+          setDraftDesign(designMarkdown(data?.design));
+          setDraftSpecLock(data?.design?.spec_lock || {});
+        };
+        const updateTheme = (key, value) => {
+          setDraftSpecLock((prev) => ({ ...prev, theme: { ...(prev.theme || {}), [key]: value } }));
+        };
         const readyCount = projects.filter((item) => item.status === "ready").length;
         const activeCount = projects.filter((item) => !["ready", "failed", "cancelled"].includes(item.status)).length;
         const failedCount = projects.filter((item) => item.status === "failed").length;
@@ -749,10 +986,114 @@
           if (filter === "active") return !["ready", "failed", "cancelled"].includes(item.status);
           return item.status === filter;
         });
-        async function load(projectId) { setError(null); setDetail(await request(`/projects/${projectId}`)); }
-        async function retry(projectId) { setError(null); const data = await request(`/projects/${projectId}/retry`, { method: "POST" }); setDetail(data); refreshProjects(); }
+        async function load(projectId) {
+          setError(null);
+          setPageError("");
+          const data = await request(`/projects/${projectId}`);
+          setDetail(data);
+          syncReviewDrafts(data);
+          setDetailOpen(true);
+        }
+        async function retry(projectId) {
+          setError(null);
+          setPageError("");
+          setRunningProjectId(projectId);
+          setProjectErrors((prev) => ({ ...prev, [projectId]: "" }));
+          try {
+            await request(`/projects/${projectId}/retry`, { method: "POST" });
+            const data = await request(`/projects/${projectId}`);
+            setDetail(data);
+            syncReviewDrafts(data);
+            await refreshProjects({ local: true });
+          } catch (err) {
+            setProjectErrors((prev) => ({ ...prev, [projectId]: String(err.message || err) }));
+          } finally {
+            setRunningProjectId("");
+          }
+        }
+        async function openReview(projectId) {
+          await load(projectId);
+        }
+        function updateDraftSlide(index, patch) {
+          setDraftSlides((prev) => prev.map((slide, idx) => idx === index ? { ...slide, ...patch } : slide));
+        }
+        function addDraftSlide() {
+          setDraftSlides((prev) => normalizeSlides([
+            ...prev,
+            { title: `新增页面 ${prev.length + 1}`, slide_type: "content", purpose: "补充需要表达的内容。", key_points: [] },
+          ]));
+        }
+        function removeDraftSlide(index) {
+          setDraftSlides((prev) => normalizeSlides(prev.filter((_, idx) => idx !== index)));
+        }
+        function buildOutlinePayload() {
+          const base = detail?.outline?.outline || {};
+          const slides = normalizeSlides(draftSlides);
+          return { ...base, slides, storyline: slides.map((slide) => slide.purpose) };
+        }
+        async function saveReview(kind) {
+          const projectId = selectedProject?.id;
+          if (!projectId) return;
+          setError(null);
+          setPageError("");
+          setReviewBusy(kind + "-save");
+          setProjectErrors((prev) => ({ ...prev, [projectId]: "" }));
+          try {
+            if (kind === "outline") {
+              await request(`/projects/${projectId}/outline`, { method: "PUT", body: { outline: buildOutlinePayload(), confirmed: false } });
+            } else {
+              await request(`/projects/${projectId}/design/confirm`, { method: "PUT", body: { design: { design_spec_markdown: draftDesign, spec_lock: draftSpecLock }, confirmed: false } });
+            }
+            const data = await request(`/projects/${projectId}`);
+            setDetail(data);
+            syncReviewDrafts(data);
+            await refreshProjects({ local: true });
+          } catch (err) {
+            setProjectErrors((prev) => ({ ...prev, [projectId]: String(err.message || err) }));
+            setPageError(String(err.message || err));
+          } finally {
+            setReviewBusy("");
+          }
+        }
+        async function confirmReview(kind) {
+          const projectId = selectedProject?.id;
+          if (!projectId) return;
+          setError(null);
+          setPageError("");
+          setReviewBusy(kind);
+          setProjectErrors((prev) => ({ ...prev, [projectId]: "" }));
+          try {
+            if (kind === "outline") {
+              if (!draftSlides.length) throw new Error("当前项目还没有可确认的大纲，请先点击继续生成大纲。");
+              await request(`/projects/${projectId}/outline`, { method: "PUT", body: { outline: buildOutlinePayload(), confirmed: true } });
+            } else {
+              const design = { design_spec_markdown: draftDesign, spec_lock: draftSpecLock };
+              if (!design.design_spec_markdown && !Object.keys(design.spec_lock).length) throw new Error("当前项目还没有可确认的设计方案，请先点击继续生成设计。");
+              await request(`/projects/${projectId}/design/confirm`, { method: "PUT", body: { design, confirmed: true } });
+            }
+            const data = await request(`/projects/${projectId}`);
+            setDetail(data);
+            syncReviewDrafts(data);
+            await refreshProjects({ local: true });
+            await retry(projectId);
+          } catch (err) {
+            setProjectErrors((prev) => ({ ...prev, [projectId]: String(err.message || err) }));
+            setPageError(String(err.message || err));
+          } finally {
+            setReviewBusy("");
+          }
+        }
         async function cancel(projectId) { setError(null); await request(`/projects/${projectId}/cancel`, { method: "POST" }); if (detail?.project?.id === projectId) setDetail(null); refreshProjects(); }
-        async function remove(projectId) { setError(null); await request(`/projects/${projectId}`, { method: "DELETE" }); if (detail?.project?.id === projectId) setDetail(null); refreshProjects(); }
+        async function remove(projectId) { setError(null); await request(`/projects/${projectId}`, { method: "DELETE" }); if (detail?.project?.id === projectId) setDetail(null); setDeleteTarget(null); refreshProjects(); }
+        async function refreshProjectBoard() {
+          setError(null);
+          setPageError("");
+          try {
+            await refreshProjects({ local: true });
+          } catch (err) {
+            setPageError(String(err.message || err));
+          }
+        }
         const selectedProject = detail?.project || detail;
         return (
           <div className="asset-workspace project-workspace">
@@ -760,63 +1101,148 @@
               <div><div className="label">项目管理</div><p>项目会按“大纲确认 → 设计确认 → 页面生成 → 质量检查 → 导出”推进。停在确认点时，需要在这里继续或重试。</p></div>
               <div className="asset-stats"><span>全部 <strong>{projects.length}</strong></span><span>进行中 <strong>{activeCount}</strong></span><span>已完成 <strong>{readyCount}</strong></span><span>失败 <strong>{failedCount}</strong></span></div>
             </div>
-            <div className="asset-grid-layout project-grid-layout">
-              <div className="asset-main card">
-                <div className="asset-main__head"><strong className="section-title">项目列表</strong><span>{visibleProjects.length} 个项目</span></div>
-                <div className="asset-main__controls">
-                  <div className="asset-filter">
-                    <span className="asset-filter__label">状态</span>
-                    <button className={filter === "all" ? "active" : ""} onClick={() => setFilter("all")}>全部</button>
-                    <button className={filter === "active" ? "active" : ""} onClick={() => setFilter("active")}>进行中</button>
-                    <button className={filter === "ready" ? "active" : ""} onClick={() => setFilter("ready")}>已完成</button>
-                    <button className={filter === "failed" ? "active" : ""} onClick={() => setFilter("failed")}>失败</button>
-                  </div>
-                  <button className="btn btn-primary" onClick={refreshProjects}>刷新项目</button>
+            <div className="project-board card">
+              <div className="asset-main__head"><strong className="section-title">项目列表</strong><span>{visibleProjects.length} 个项目</span></div>
+              <div className="asset-main__controls">
+                <div className="asset-filter">
+                  <span className="asset-filter__label">状态</span>
+                  <button className={filter === "all" ? "active" : ""} onClick={() => setFilter("all")}>全部</button>
+                  <button className={filter === "active" ? "active" : ""} onClick={() => setFilter("active")}>进行中</button>
+                  <button className={filter === "ready" ? "active" : ""} onClick={() => setFilter("ready")}>已完成</button>
+                  <button className={filter === "failed" ? "active" : ""} onClick={() => setFilter("failed")}>失败</button>
                 </div>
-                <div className="project-card-grid">
-                  {visibleProjects.map((p) => (
-                    <div className={"project-card " + (selectedProject?.id === p.id ? "selected" : "")} key={p.id} onClick={() => load(p.id).catch(setError)}>
+                <button className="btn btn-primary" onClick={() => refreshProjectBoard()}>刷新项目</button>
+              </div>
+              {pageError && <div className="project-card__error">项目列表刷新失败：{pageError}</div>}
+              <div className="project-card-grid">
+                {visibleProjects.map((p) => {
+                  const running = runningProjectId === p.id;
+                  const currentStep = stepIndex(p.status);
+                  return (
+                    <div className={"project-card project-card--wide " + (running ? "is-running " : "") + (selectedProject?.id === p.id ? "selected" : "")} key={p.id}>
                       <div className="project-card__head">
                         <strong>{p.title || "未命名项目"}</strong>
-                        <span className={"badge badge-" + statusClass(p.status)}>{p.status}</span>
+                        <span className={"badge badge-" + statusClass(p.status)}>{running ? "处理中" : p.status}</span>
                       </div>
                       <div className="project-card__meta">
                         <span>{p.mode}</span><span>{p.slide_count || "?"} 页</span><span>{shortId(p.id)}</span>
                       </div>
+                      <div className="project-timeline">
+                        {steps.map(([id, label], index) => (
+                          <div className={"project-timeline__step " + (index < currentStep ? "done " : "") + (index === currentStep ? "active " : "") + (running && index === currentStep ? "running" : "")} key={id}>
+                            <i>{index + 1}</i><span>{label}</span>
+                          </div>
+                        ))}
+                      </div>
                       <div className="project-stage-line">
-                        <span className={statusClass(p.status) === "done" ? "done" : "active"}>{p.status === "ready" ? "已可导出" : p.status === "failed" ? "生成失败" : "等待推进"}</span>
+                        <span className={p.status === "ready" ? "done" : "active"}>{running ? "正在推进，请稍候..." : nextAction(p.status)}</span>
                         <em>{p.updated_at ? new Date(p.updated_at * 1000).toLocaleString() : "暂无更新时间"}</em>
                       </div>
-                      <div className="project-card__actions">
-                        <button className="btn btn-sm btn-primary" onClick={(e) => { e.stopPropagation(); retry(p.id).catch(setError); }}>继续/重试</button>
-                        <button className="btn btn-sm" onClick={(e) => { e.stopPropagation(); cancel(p.id).catch(setError); }}>取消</button>
-                        <button className="btn btn-sm btn-danger" onClick={(e) => { e.stopPropagation(); remove(p.id).catch(setError); }}>删除</button>
+                      {projectErrors[p.id] && <div className="project-card__error">推进失败：{projectErrors[p.id]}</div>}
+                      <div className="project-card__actions project-card__actions--split">
+                        <button className="btn btn-sm btn-primary project-card__primary-action" onClick={() => { if (p.status === "ready") onNavigate("Exports"); else (p.status === "outline_ready" || p.status === "design_ready" ? openReview(p.id) : retry(p.id)).catch(setError); }} disabled={!!runningProjectId || p.status === "cancelled"}>{running ? "处理中..." : primaryActionLabel(p.status)}</button>
+                        <div className="project-card__secondary-actions">
+                          <button className="btn btn-sm" onClick={() => load(p.id).catch(setError)}>详情</button>
+                          {!["ready", "failed", "cancelled"].includes(p.status) && <button className="btn btn-sm" onClick={() => cancel(p.id).catch(setError)} disabled={!!runningProjectId}>取消</button>}
+                          <button className="btn btn-sm btn-danger" onClick={() => setDeleteTarget({ id: p.id, name: p.title || p.id, title: "确认删除该项目？", targetTag: "目标项目", showDeleteFiles: false, description: "删除后，这个项目、任务记录、页面记录和导出记录会从项目列表中移除。已生成的本地文件不会在这里同步删除。" })} disabled={!!runningProjectId}>删除</button>
+                        </div>
                       </div>
                     </div>
-                  ))}
-                  {visibleProjects.length === 0 && <div className="empty-note">暂无符合条件的项目。创建页生成项目后，会出现在这里。</div>}
-                </div>
-              </div>
-              <div className="asset-sidebar project-detail-panel card">
-                <div className="section-title">项目详情</div>
-                {detail ? (
-                  <div className="project-detail">
-                    <div className="project-detail__hero">
-                      <strong>{selectedProject?.title || "项目详情"}</strong>
-                      <span className={"badge badge-" + statusClass(selectedProject?.status)}>{selectedProject?.status || "unknown"}</span>
-                      <p>{selectedProject?.prompt || "暂无需求描述"}</p>
-                    </div>
-                    <div className="project-detail__grid">
-                      <div><span>模式</span><strong>{selectedProject?.mode || "-"}</strong></div>
-                      <div><span>页数</span><strong>{selectedProject?.slide_count || "-"}</strong></div>
-                      <div><span>数据集</span><strong>{shortId(selectedProject?.dataset_id) || "未绑定"}</strong></div>
-                      <div><span>模板</span><strong>{shortId(selectedProject?.template_id) || "未绑定"}</strong></div>
-                    </div>
-                    <details className="template-raw"><summary>查看原始项目 JSON</summary><JsonBlock value={detail} /></details>
-                  </div>
-                ) : <div className="empty-note">在左侧选择一个项目，可查看当前状态、绑定素材、生成结果和原始详情。</div>}
+                  );
+                })}
+                {visibleProjects.length === 0 && <div className="empty-note">暂无符合条件的项目。创建页生成项目后，会出现在这里。</div>}
               </div>
             </div>
+            {detailOpen && (
+              <div className="modal-mask" onClick={() => setDetailOpen(false)}>
+                <div className="modal-card project-detail-modal" onClick={(e) => e.stopPropagation()}>
+                  <div className="analysis-modal__head">
+                    <div><strong>项目详情</strong><span>{selectedProject?.title || selectedProject?.id || "项目"}</span></div>
+                    <button className="btn btn-sm" onClick={() => setDetailOpen(false)}>关闭</button>
+                  </div>
+                  <div className="analysis-modal__body">
+                    <div className="project-detail">
+                      <div className="project-detail__hero">
+                        <strong>{selectedProject?.title || "项目详情"}</strong>
+                        <span className={"badge badge-" + statusClass(selectedProject?.status)}>{selectedProject?.status || "unknown"}</span>
+                        <p>{selectedProject?.prompt || "暂无需求描述"}</p>
+                      </div>
+                      <div className="project-detail__grid">
+                        <div><span>模式</span><strong>{selectedProject?.mode || "-"}</strong></div>
+                        <div><span>页数</span><strong>{selectedProject?.slide_count || "-"}</strong></div>
+                        <div><span>数据集</span><strong>{shortId(selectedProject?.dataset_id) || "未绑定"}</strong></div>
+                        <div><span>模板</span><strong>{shortId(selectedProject?.template_id) || "未绑定"}</strong></div>
+                      </div>
+                      {selectedProject?.id && (
+                        <ActivityLogPanel projectId={selectedProject.id} onError={setError} />
+                      )}
+                      {selectedProject?.status === "outline_ready" && (
+                        <div className="project-review-panel">
+                          <div className="project-review-head">
+                            <div><div className="section-title">大纲编辑与确认</div><p>请调整页面顺序、标题和每页用途。确认后，设计方案会基于这里的大纲重新推进。</p></div>
+                            <button className="btn btn-sm btn-primary" onClick={addDraftSlide}>新增页面</button>
+                          </div>
+                          <div className="project-review-list">
+                            {draftSlides.map((slide, index) => (
+                              <div className="project-review-item" key={index}>
+                                <div className="project-review-item__head">
+                                  <strong>第 {index + 1} 页</strong>
+                                  <button className="btn btn-sm btn-danger" onClick={() => removeDraftSlide(index)} disabled={draftSlides.length <= 1}>删除</button>
+                                </div>
+                                <input className="input" value={slide.title || ""} onChange={(e) => updateDraftSlide(index, { title: e.target.value })} placeholder="页面标题" />
+                                <textarea className="input textarea project-review-textarea" value={slide.purpose || ""} onChange={(e) => updateDraftSlide(index, { purpose: e.target.value })} placeholder="这一页要说明什么、希望听众理解什么" />
+                              </div>
+                            ))}
+                            {draftSlides.length === 0 && <div className="empty-note">还没有可确认的大纲。请先关闭弹窗，点击项目卡片的“继续/重试”生成大纲。</div>}
+                          </div>
+                          <div className="project-review-actions">
+                            <button className="btn" onClick={() => saveReview("outline").catch(setError)} disabled={!!reviewBusy || draftSlides.length === 0}>{reviewBusy === "outline-save" ? "保存中..." : "保存修改"}</button>
+                            <button className="btn btn-primary" onClick={() => confirmReview("outline").catch(setError)} disabled={!!reviewBusy || draftSlides.length === 0}>{reviewBusy === "outline" ? "确认中..." : "确认并进入设计生成"}</button>
+                          </div>
+                        </div>
+                      )}
+                      {selectedProject?.status === "design_ready" && (
+                        <div className="project-review-panel">
+                          <div className="section-title">设计编辑与确认</div>
+                          <p>请检查并编辑版式方向、品牌色、字体和页面类型匹配。确认后项目会进入 PPTX 生成与导出阶段。</p>
+                          <div className="project-design-fields">
+                            <div className="form-row"><div className="form-label-title">主色 <span>影响标题、重点数字和关键装饰</span></div><input className="input" value={draftSpecLock?.theme?.primary_color || ""} onChange={(e) => updateTheme("primary_color", e.target.value)} placeholder="#e84d2a" /></div>
+                            <div className="form-row"><div className="form-label-title">辅助色 <span>用于次级强调和背景层次</span></div><input className="input" value={draftSpecLock?.theme?.secondary_color || ""} onChange={(e) => updateTheme("secondary_color", e.target.value)} placeholder="#f97316" /></div>
+                            <div className="form-row"><div className="form-label-title">强调色 <span>用于图表高亮和提示信息</span></div><input className="input" value={draftSpecLock?.theme?.accent_color || ""} onChange={(e) => updateTheme("accent_color", e.target.value)} placeholder="#0f172a" /></div>
+                            <div className="form-row"><div className="form-label-title">标题字体 <span>影响每页标题和章节标题</span></div><input className="input" value={draftSpecLock?.theme?.font_heading || ""} onChange={(e) => updateTheme("font_heading", e.target.value)} placeholder="Microsoft YaHei" /></div>
+                            <div className="form-row"><div className="form-label-title">正文字体 <span>影响正文、备注和图表说明</span></div><input className="input" value={draftSpecLock?.theme?.font_body || ""} onChange={(e) => updateTheme("font_body", e.target.value)} placeholder="Microsoft YaHei" /></div>
+                          </div>
+                          <div className="project-design-preview">
+                            {draftDesign ? <textarea className="input textarea project-design-editor" value={draftDesign} onChange={(e) => setDraftDesign(e.target.value)} /> : <div className="empty-note">还没有可确认的设计方案。请先关闭弹窗，点击项目卡片的“继续/重试”生成设计。</div>}
+                          </div>
+                          <div className="project-review-actions">
+                            <button className="btn" onClick={() => saveReview("design").catch(setError)} disabled={!!reviewBusy || !draftDesign}>{reviewBusy === "design-save" ? "保存中..." : "保存修改"}</button>
+                            <button className="btn btn-primary" onClick={() => confirmReview("design").catch(setError)} disabled={!!reviewBusy || !draftDesign}>{reviewBusy === "design" ? "确认中..." : "确认并生成 PPTX"}</button>
+                          </div>
+                        </div>
+                      )}
+                      {["outline_confirmed", "design_confirmed", "ready", "failed", "cancelled"].includes(selectedProject?.status) && (
+                        <div className={"project-next-panel " + (selectedProject?.status === "ready" ? "is-ready" : selectedProject?.status === "failed" ? "is-failed" : "")}>
+                          <div>
+                            <strong>{selectedProject?.status === "ready" ? "项目已完成" : selectedProject?.status === "failed" ? "项目生成失败" : selectedProject?.status === "cancelled" ? "项目已取消" : "下一步操作"}</strong>
+                            <p>{selectedProject?.status === "ready" ? "PPTX 已生成，可以前往导出页下载文件。" : selectedProject?.status === "failed" ? "流程执行失败，可以重新生成；如果多次失败，请查看原始项目 JSON 或错误提示。" : selectedProject?.status === "outline_confirmed" ? "大纲已确认，下一步会生成设计方案并等待你确认。" : selectedProject?.status === "design_confirmed" ? "设计已确认，下一步会生成 PPTX 并进入导出阶段。" : "该项目已取消，不会继续推进。"}</p>
+                          </div>
+                          <div className="project-next-panel__actions">
+                            {selectedProject?.status === "ready" && <button className="btn btn-primary" onClick={() => { setDetailOpen(false); onNavigate("Exports"); }}>去导出页下载</button>}
+                            {selectedProject?.status === "failed" && <button className="btn btn-primary" onClick={() => retry(selectedProject.id).catch(setError)} disabled={!!runningProjectId}>重新生成</button>}
+                            {selectedProject?.status === "outline_confirmed" && <button className="btn btn-primary" onClick={() => retry(selectedProject.id).catch(setError)} disabled={!!runningProjectId}>生成设计方案</button>}
+                            {selectedProject?.status === "design_confirmed" && <button className="btn btn-primary" onClick={() => retry(selectedProject.id).catch(setError)} disabled={!!runningProjectId}>生成 PPTX</button>}
+                          </div>
+                        </div>
+                      )}
+                      {projectErrors[selectedProject?.id] && <div className="project-card__error">操作失败：{projectErrors[selectedProject.id]}</div>}
+                      <details className="template-raw"><summary>查看原始项目 JSON</summary><JsonBlock value={detail} /></details>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+            <DeleteAssetConfirmModal target={deleteTarget} onClose={() => setDeleteTarget(null)} onConfirm={() => remove(deleteTarget.id).catch(setError)} />
           </div>
         );
       }
@@ -1394,13 +1820,56 @@
         );
       }
 
-      function ExportsTab({ projects }) {
+      function ExportsTab({ projects, refreshProjects, setError }) {
         const exports = projects.flatMap((p) => (p.exports || []).map((e) => ({ ...e, project_title: p.title })));
         const [selectedExport, setSelectedExport] = useState(exports[0] || null);
+        const [downloadingId, setDownloadingId] = useState("");
+        const [downloadError, setDownloadError] = useState("");
+        const [openStatus, setOpenStatus] = useState("");
+        const [deleteTarget, setDeleteTarget] = useState(null);
+        const exportTime = (item) => item?.created_at ? new Date(item.created_at * 1000).toLocaleString() : "暂无生成时间";
         useEffect(() => {
           if (!selectedExport && exports.length) setSelectedExport(exports[0]);
           if (selectedExport && !exports.some((item) => item.id === selectedExport.id)) setSelectedExport(exports[0] || null);
         }, [exports.length]);
+        async function downloadExport(item) {
+          if (!item?.id) return;
+          setDownloadError("");
+          setDownloadingId(item.id);
+          try {
+            const iframe = document.createElement("iframe");
+            iframe.style.display = "none";
+            iframe.src = `${PLUGIN_BASE}/exports/${item.id}/download`;
+            document.body.appendChild(iframe);
+            window.setTimeout(() => {
+              iframe.remove();
+              setDownloadingId("");
+            }, 3000);
+          } catch (err) {
+            setDownloadError(`下载触发失败：${String(err.message || err)}。可以点击“打开文件位置”查看导出文件。`);
+            setDownloadingId("");
+          }
+        }
+        async function openExportFolder(item) {
+          if (!item?.id) return;
+          setDownloadError("");
+          setOpenStatus("正在打开导出目录...");
+          try {
+            const data = await request(`/exports/${item.id}/open-folder`, { method: "POST" });
+            setOpenStatus(`已打开导出目录：${data.file || "导出文件"}`);
+          } catch (err) {
+            setOpenStatus("");
+            setDownloadError(`打开导出目录失败：${String(err.message || err)}。请根据下方路径手动打开文件。`);
+          }
+        }
+        async function confirmDeleteExport(deleteFiles) {
+          if (!deleteTarget?.id) return;
+          setDownloadError("");
+          await request(`/exports/${deleteTarget.id}`, { method: "DELETE", body: { delete_files: deleteFiles } });
+          setDeleteTarget(null);
+          setSelectedExport(null);
+          await refreshProjects({ local: true });
+        }
         return (
           <div className="asset-workspace export-workspace">
             <div className="asset-toolbar card">
@@ -1416,10 +1885,9 @@
                       <div className="export-card__icon">PPTX</div>
                       <div className="export-card__main">
                         <strong>{e.project_title || "未命名项目"}</strong>
-                        <span>{e.kind || "pptx"} · {shortId(e.id)}</span>
+                        <span>{e.kind || "pptx"} · {shortId(e.id)} · {exportTime(e)}</span>
                         <code title={e.path}>{e.path || "导出路径待返回"}</code>
                       </div>
-                      <a className="btn btn-primary btn-sm" href={`${PLUGIN_BASE}/exports/${e.id}/download`} target="_blank" onClick={(event) => event.stopPropagation()}>下载</a>
                     </div>
                   ))}
                   {exports.length === 0 && <div className="empty-note">暂无导出文件。项目状态 ready 后，会在这里出现可下载的 PPTX。</div>}
@@ -1439,13 +1907,19 @@
                       <div><span>类型</span><strong>{selectedExport.kind || "pptx"}</strong></div>
                       <div><span>来源项目</span><strong>{selectedExport.project_title || "-"}</strong></div>
                       <div><span>状态</span><strong>可下载</strong></div>
+                      <div><span>生成时间</span><strong>{exportTime(selectedExport)}</strong></div>
                     </div>
                     <code className="export-detail__path">{selectedExport.path || "未返回路径"}</code>
-                    <a className="btn btn-primary btn-block" href={`${PLUGIN_BASE}/exports/${selectedExport.id}/download`} target="_blank">下载 PPTX</a>
+                    {openStatus && <div className="create-next-tip">{openStatus}</div>}
+                    {downloadError && <div className="project-card__error">{downloadError}</div>}
+                    <button className="btn btn-primary btn-block" onClick={() => downloadExport(selectedExport)} disabled={downloadingId === selectedExport.id}>{downloadingId === selectedExport.id ? "正在触发下载..." : "下载 PPTX"}</button>
+                    <button className="btn btn-block" onClick={() => openExportFolder(selectedExport)}>打开文件位置</button>
+                    <button className="btn btn-danger btn-block" onClick={() => setDeleteTarget({ id: selectedExport.id, name: selectedExport.project_title || selectedExport.id, title: "确认删除该导出文件？", targetTag: "目标导出", description: "默认只删除导出列表里的记录，不影响本地 PPTX 文件。删除后，这条导出记录不会再出现在导出列表中。", deleteFilesLabel: "同时删除本地 PPTX 文件", hint: "为避免误删，系统只会删除插件导出目录内的 PPTX 文件；外部路径会自动保留。" })}>删除导出记录</button>
                   </div>
                 ) : <div className="empty-note">左侧选择一个导出文件后，这里会显示下载信息。</div>}
               </div>
             </div>
+            <DeleteAssetConfirmModal target={deleteTarget} onClose={() => setDeleteTarget(null)} onConfirm={(deleteFiles) => confirmDeleteExport(deleteFiles).catch(setError)} />
           </div>
         );
       }
@@ -1707,6 +2181,92 @@
               </div>
 
               <div className="setting-section">
+                <h3 className="setting-title">AI 内容生成</h3>
+                <div className="deps-help">
+                  <strong>本插件直接复用主程序的 Brain 接口，无需另配大模型 Key。</strong>
+                  <div>下方控制每页的篇幅（concise/balanced/detailed）、语气与是否在大纲阶段调用主程序内置的 Web 搜索补充上下文。所有设置即时保存。</div>
+                </div>
+                <div className="grid-2">
+                  <div className="form-row">
+                    <div className="text-xs text-muted">每页篇幅</div>
+                    <select className="input select" value={settings.verbosity || "balanced"} onChange={(e) => saveSettings({ verbosity: e.target.value }).catch(setError)}>
+                      <option value="concise">精简（约 20 词，3 条要点）</option>
+                      <option value="balanced">均衡（约 40 词，4 条要点）</option>
+                      <option value="detailed">详尽（约 60 词，5 条要点）</option>
+                    </select>
+                  </div>
+                  <div className="form-row">
+                    <div className="text-xs text-muted">语气</div>
+                    <select className="input select" value={settings.tone || "professional"} onChange={(e) => saveSettings({ tone: e.target.value }).catch(setError)}>
+                      <option value="professional">专业 / 商务</option>
+                      <option value="conversational">轻松 / 对话</option>
+                      <option value="academic">学术 / 严谨</option>
+                      <option value="bold">激进 / 颠覆</option>
+                    </select>
+                  </div>
+                </div>
+                <div className="grid-2">
+                  <div className="form-row">
+                    <div className="text-xs text-muted">输出语言</div>
+                    <select className="input select" value={settings.language || "zh-CN"} onChange={(e) => saveSettings({ language: e.target.value }).catch(setError)}>
+                      <option value="zh-CN">简体中文</option>
+                      <option value="en-US">English</option>
+                      <option value="zh-TW">繁體中文</option>
+                      <option value="ja-JP">日本語</option>
+                    </select>
+                  </div>
+                  <div className="form-row">
+                    <div className="text-xs text-muted">高级开关</div>
+                    <label className="text-xs" style={{display: 'flex', alignItems: 'center', gap: 6}}>
+                      <input type="checkbox" checked={(settings.web_search_enabled || "false") === "true"} onChange={(e) => saveSettings({ web_search_enabled: e.target.checked ? "true" : "false" }).catch(setError)} />
+                      启用 Web 搜索补充事实（使用主程序内置搜索）
+                    </label>
+                    <label className="text-xs" style={{display: 'flex', alignItems: 'center', gap: 6}}>
+                      <input type="checkbox" checked={(settings.single_shot_mode || "false") === "true"} onChange={(e) => saveSettings({ single_shot_mode: e.target.checked ? "true" : "false" }).catch(setError)} />
+                      Single-shot 模式（跳过用户确认环节，自动产出 PPT）
+                    </label>
+                  </div>
+                </div>
+              </div>
+
+              <div className="setting-section">
+                <h3 className="setting-title">图片资源（独立配置，与其它插件不联动）</h3>
+                <div className="deps-help">
+                  <strong>三选一：免费图库 Pexels / Pixabay，或自配百炼 DashScope Key 直接调用 AI 生图。</strong>
+                  <div>选择 “none” 时只渲染图标 / 占位，导出仍可正常完成。Key 仅保存在本机 settings.json 中，不会上传到主程序。</div>
+                </div>
+                <div className="form-row">
+                  <div className="text-xs text-muted">图片来源</div>
+                  <select className="input select" value={settings.image_provider || "none"} onChange={(e) => saveSettings({ image_provider: e.target.value }).catch(setError)}>
+                    <option value="none">不启用图片（仅图标 / 占位）</option>
+                    <option value="pexels">Pexels（免费图库）</option>
+                    <option value="pixabay">Pixabay（免费图库）</option>
+                    <option value="dashscope">百炼 DashScope（AI 生成）</option>
+                  </select>
+                </div>
+                <div className="form-row">
+                  <div className="text-xs text-muted">Pexels API Key</div>
+                  <input type="password" className="input" placeholder="https://www.pexels.com/api/ 申请" value={settings.pexels_api_key || ""} onChange={(e) => setSettings({ ...settings, pexels_api_key: e.target.value })} onBlur={(e) => saveSettings({ pexels_api_key: e.target.value }).catch(setError)} />
+                </div>
+                <div className="form-row">
+                  <div className="text-xs text-muted">Pixabay API Key</div>
+                  <input type="password" className="input" placeholder="https://pixabay.com/api/docs/ 申请" value={settings.pixabay_api_key || ""} onChange={(e) => setSettings({ ...settings, pixabay_api_key: e.target.value })} onBlur={(e) => saveSettings({ pixabay_api_key: e.target.value }).catch(setError)} />
+                </div>
+                <div className="form-row">
+                  <div className="text-xs text-muted">百炼 DashScope API Key</div>
+                  <input type="password" className="input" placeholder="https://dashscope.console.aliyun.com 申请" value={settings.dashscope_api_key || ""} onChange={(e) => setSettings({ ...settings, dashscope_api_key: e.target.value })} onBlur={(e) => saveSettings({ dashscope_api_key: e.target.value }).catch(setError)} />
+                </div>
+                <div className="form-row">
+                  <div className="text-xs text-muted">百炼图像模型</div>
+                  <select className="input select" value={settings.dashscope_image_model || "wanx-v1"} onChange={(e) => saveSettings({ dashscope_image_model: e.target.value }).catch(setError)}>
+                    <option value="wanx-v1">wanx-v1（通用）</option>
+                    <option value="wanx2.1-t2i-turbo">wanx2.1-t2i-turbo（速度优先）</option>
+                    <option value="wanx2.1-t2i-plus">wanx2.1-t2i-plus（质量优先）</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="setting-section">
                 <h3 className="setting-title">文件夹、归集与命名</h3>
                 <div className="deps-help">
                   <strong>每类目录都可以自定义，适合大量客户资料、表格和模板分开管理。</strong>
@@ -1795,8 +2355,14 @@
         const [health, setHealth] = useState(null);
         const [error, setError] = useState(null);
         const [event, setEvent] = useState(null);
-        async function refreshProjects() {
-          try { const data = await request("/projects"); setProjects(data.projects || []); } catch (err) { setError(err); }
+        async function refreshProjects(options = {}) {
+          try {
+            const data = await request("/projects");
+            setProjects(data.projects || []);
+          } catch (err) {
+            if (options.local) throw err;
+            setError(err);
+          }
         }
         async function refreshData() {
           try {
@@ -1835,7 +2401,7 @@
             <nav className="tabs">{tabs.map(([id, label]) => <button key={id} className={"tab " + (active === id ? "active" : "")} onClick={() => setActive(id)}>{label}</button>)}</nav>
             <section className="content">
               <div className="tab-body" data-tab={active}>
-                <ErrorPanel error={error} />
+                {active !== "Projects" && <ErrorPanel error={error} />}
                 <ProgressPanel event={event} />
                 {body}
               </div>
