@@ -317,6 +317,17 @@ class ResponseHandler:
             logger.info("[TaskVerify] Bypassed (supervisor intervention active)")
             return True
 
+        # 内层兜底：当 user_request 是「[用户指令最终汇总] / [系统] / [组织]」
+        # 等系统合成元指令时，上游 reasoning_engine 计算 is_summary_round 可能因
+        # history 时间戳前缀、消息压缩等边界情况失误，导致 bypass=False。这里
+        # 直接看 user_request 头部前缀做最终防线，避免汇总轮被错误判 INCOMPLETE
+        # 进而 emit task_failed 事件。
+        if user_request and user_request.lstrip().startswith(self._SYSTEM_REQUEST_PREFIXES):
+            logger.info(
+                "[TaskVerify] Bypassed (system/org-synthesized request prefix matched)"
+            )
+            return True
+
         delivery_receipts = delivery_receipts or []
 
         # === Deterministic Validation (Agent Harness) ===
