@@ -25,7 +25,10 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+import os
+import platform
 import re
+import sys
 import tempfile
 import time
 from dataclasses import dataclass, field
@@ -103,6 +106,79 @@ def _build_file_caption(*, header: str = "", fallback_text: str | None = None) -
         lines.extend(f"- {item[:120]}" for item in highlights)
     caption = "\n".join(lines).strip()
     return caption[:900]
+
+
+def _bundled_runtime_roots() -> list[Path]:
+    """Return possible PyInstaller resource roots for bundled browser assets."""
+    roots: list[Path] = []
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        roots.append(Path(meipass))
+
+    exe_dir = Path(sys.executable).parent
+    candidates = [exe_dir]
+    if exe_dir.name != "_internal":
+        candidates.append(exe_dir / "_internal")
+    for candidate in candidates:
+        if candidate.is_dir() and candidate not in roots:
+            roots.append(candidate)
+    return roots
+
+
+def _find_bundled_chromium() -> tuple[str | None, Path | None]:
+    """Find bundled Playwright Chromium and its browser root, if packaged.
+
+    Playwright's default lookup may prefer chromium_headless_shell for
+    headless launches. The installer currently bundles regular Chromium, so
+    PDF rendering must pass chrome.exe explicitly in packaged runtime.
+    """
+    system = platform.system()
+    is_win = system == "Windows"
+    is_mac = system == "Darwin"
+    exe_name = "chrome.exe" if is_win else "chrome"
+
+    for root in _bundled_runtime_roots():
+        for browsers_name in ("playwright-browsers", "playwright-browser"):
+            browsers_root = root / browsers_name
+            if not browsers_root.is_dir():
+                continue
+            for chromium_dir in sorted(browsers_root.glob("chromium-*"), reverse=True):
+                candidates: list[Path] = []
+                if is_win:
+                    candidates.extend(
+                        chromium_dir / win_dir / exe_name
+                        for win_dir in ("chrome-win64", "chrome-win")
+                    )
+                elif is_mac:
+                    candidates.extend(
+                        chromium_dir
+                        / mac_dir
+                        / "Chromium.app"
+                        / "Contents"
+                        / "MacOS"
+                        / "Chromium"
+                        for mac_dir in ("chrome-mac-arm64", "chrome-mac")
+                    )
+                else:
+                    candidates.append(chromium_dir / "chrome-linux" / exe_name)
+
+                for candidate in candidates:
+                    if candidate.is_file():
+                        return str(candidate), browsers_root
+    return None, None
+
+
+def _configure_pdf_playwright_launch() -> dict[str, Any]:
+    """Build launch kwargs for PDF rendering in packaged and source runtimes."""
+    launch_kwargs: dict[str, Any] = {"headless": True}
+    executable, browsers_root = _find_bundled_chromium()
+    if browsers_root is not None:
+        os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(browsers_root)
+        logger.info("[fin-pulse] Using bundled Playwright browsers: %s", browsers_root)
+    if executable:
+        launch_kwargs["executable_path"] = executable
+        logger.info("[fin-pulse] Rendering PDF with bundled Chromium: %s", executable)
+    return launch_kwargs
 
 
 class DispatchService:
@@ -302,13 +378,14 @@ class DispatchService:
                 tmp_dir.cleanup()
 
     async def _render_html_to_pdf(self, html: str, out_path: Path) -> None:
+        launch_kwargs = _configure_pdf_playwright_launch()
         try:
             from playwright.async_api import async_playwright
         except ImportError as exc:
             raise RuntimeError("playwright_unavailable") from exc
 
         async with async_playwright() as pw:
-            browser = await pw.chromium.launch(headless=True)
+            browser = await pw.chromium.launch(**launch_kwargs)
             try:
                 page = await browser.new_page()
                 await page.set_content(html, wait_until="load")
