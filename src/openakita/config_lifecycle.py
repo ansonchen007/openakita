@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import sys
 from collections.abc import Iterable
 from dataclasses import dataclass
 from enum import StrEnum
@@ -279,9 +280,9 @@ def reload_config_components(plan: ConfigChangePlan) -> dict[str, str]:
             continue
         try:
             if component == "desktop":
-                from openakita.tools.desktop.config import reset_config
-
-                reset_config()
+                desktop_config = sys.modules.get("openakita.tools.desktop.config")
+                if desktop_config is not None:
+                    desktop_config.reset_config()
             results[component] = "reloaded"
         except Exception:
             logger.exception("Failed to reload configuration component: %s", component)

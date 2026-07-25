@@ -1,4 +1,5 @@
 import json
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -202,15 +203,13 @@ async def test_write_env_reloads_desktop_component_without_process_restart(
     monkeypatch,
 ):
     from openakita.api.routes.config import EnvUpdateRequest, write_env
-    from openakita.tools.desktop import config as desktop_config
 
-    monkeypatch.delenv("DESKTOP_MAX_WIDTH", raising=False)
-    monkeypatch.setattr(
-        desktop_config,
-        "_config",
-        desktop_config.DesktopConfig(
-            capture=desktop_config.CaptureConfig(max_width=1200),
-        ),
+    monkeypatch.setenv("DESKTOP_MAX_WIDTH", "1200")
+    reset_calls: list[bool] = []
+    monkeypatch.setitem(
+        sys.modules,
+        "openakita.tools.desktop.config",
+        SimpleNamespace(reset_config=lambda: reset_calls.append(True)),
     )
     request = SimpleNamespace(
         app=SimpleNamespace(state=SimpleNamespace(agent=None, agent_pool=None))
@@ -225,4 +224,4 @@ async def test_write_env_reloads_desktop_component_without_process_restart(
     assert response["component_reloads"] == {"desktop": "reloaded"}
     assert response["restart_required"] is False
     assert response["hot_reloadable"] is True
-    assert desktop_config._config is None
+    assert reset_calls == [True]

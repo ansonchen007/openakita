@@ -1,3 +1,6 @@
+import sys
+from types import SimpleNamespace
+
 from openakita.config_lifecycle import (
     ConfigApplyMode,
     classify_config_changes,
@@ -80,14 +83,21 @@ def test_desktop_settings_reload_the_component_without_process_restart():
 
 
 def test_desktop_component_reload_resets_cached_config(monkeypatch):
-    from openakita.tools.desktop import config as desktop_config
-
-    sentinel = desktop_config.DesktopConfig(enabled=False)
-    monkeypatch.setattr(desktop_config, "_config", sentinel)
+    reset_calls: list[bool] = []
+    desktop_config = SimpleNamespace(reset_config=lambda: reset_calls.append(True))
+    monkeypatch.setitem(sys.modules, "openakita.tools.desktop.config", desktop_config)
     plan = classify_config_changes(["DESKTOP_ENABLED"])
 
     assert reload_config_components(plan) == {"desktop": "reloaded"}
-    assert desktop_config._config is None
+    assert reset_calls == [True]
+
+
+def test_desktop_component_reload_does_not_import_unloaded_platform_module(monkeypatch):
+    monkeypatch.delitem(sys.modules, "openakita.tools.desktop.config", raising=False)
+    plan = classify_config_changes(["DESKTOP_ENABLED"])
+
+    assert reload_config_components(plan) == {"desktop": "reloaded"}
+    assert "openakita.tools.desktop.config" not in sys.modules
 
 
 def test_unknown_environment_key_is_not_claimed_as_hot_reloadable():

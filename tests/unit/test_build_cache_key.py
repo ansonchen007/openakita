@@ -3,9 +3,8 @@ from pathlib import Path
 from scripts.build_cache_key import INPUTS, fingerprint
 
 
-def test_cache_inputs_separate_backend_and_rust_ownership() -> None:
-    assert "src/openakita" in INPUTS["backend"]
-    assert "apps/setup-center/src-tauri/src" not in INPUTS["backend"]
+def test_cache_inputs_track_only_the_desktop_binary() -> None:
+    assert set(INPUTS) == {"rust"}
     assert "apps/setup-center/src-tauri/src" in INPUTS["rust"]
     assert "src/openakita" not in INPUTS["rust"]
 
