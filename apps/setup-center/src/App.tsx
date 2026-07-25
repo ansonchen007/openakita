@@ -56,6 +56,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import logoUrl from "./assets/logo.png";
 import "highlight.js/styles/github.css";
 import { getThemePref, setThemePref, THEME_CHANGE_EVENT, type Theme } from "./theme";
@@ -118,6 +119,7 @@ import { Toaster } from "@/components/ui/sonner";
 import { toast } from "sonner";
 import { useVersionCheck } from "./hooks/useVersionCheck";
 import { useEnvManager } from "./hooks/useEnvManager";
+import { useConfigApplyPreview } from "./hooks/useConfigApplyPreview";
 import { AdvancedView } from "./views/AdvancedView";
 import { ToolsView } from "./views/ToolsView";
 import { ErrorBoundary } from "./components/ErrorBoundary";
@@ -831,14 +833,23 @@ function MainApp() {
     status: string; error: string | null; lastCheckedAt: string | null; progress?: { percent?: number | null } | null;
   }>>({});
   const {
-    envDraft, setEnvDraft,
+    envDraft, envBaseline, setEnvDraft,
     secretShown, setSecretShown,
     ensureEnvLoaded, saveEnvKeys,
-    resetEnvLoaded, markEnvLoaded,
+    resetEnvLoaded, markEnvLoaded, mergeEffectiveEnvDefaults,
   } = useEnvManager({
     currentWorkspaceId,
     shouldUseHttpApi,
     httpApiBase,
+  });
+  const footerSaveConfig = view === "wizard" ? getFooterSaveConfig() : null;
+  const configApplyPreview = useConfigApplyPreview({
+    keys: footerSaveConfig?.keys ?? [],
+    draft: envDraft,
+    baseline: envBaseline,
+    enabled: shouldUseHttpApi(),
+    apiBase: httpApiBase(),
+    onEffectiveValues: mergeEffectiveEnvDefaults,
   });
 
   const envFieldCtx = useMemo<EnvFieldCtx>(() => ({
@@ -2280,24 +2291,6 @@ function MainApp() {
     }
   }
 
-  /**
-   * 保存 .env 配置后触发服务重启，并轮询等待服务恢复。
-   * 如果服务未运行，仅保存不重启并提示。
-   */
-  async function applyAndRestart(keys: string[]): Promise<void> {
-    setRestartOverlay({ phase: "saving" });
-    try {
-      await saveEnvKeys(keys);
-    } catch (e) {
-      setRestartOverlay(null);
-      notifyError(String(e));
-      return;
-    }
-    await restartService();
-  }
-
-
-
   /** 根据当前步骤返回需要自动保存的 env key 列表 */
   function getAutoSaveKeysForStep(sid: StepId): string[] {
     switch (sid) {
@@ -2517,7 +2510,7 @@ function MainApp() {
           const envData = await envRes.json();
           httpEnv = envData.env || {};
           setEnvDraft((prev) => ({ ...prev, ...httpEnv }));
-          markEnvLoaded(currentWorkspaceId || "__remote__");
+          markEnvLoaded(currentWorkspaceId || "__remote__", httpEnv);
           envAlreadyLoaded = true;
 
           const epRes = await safeFetch(`${effectiveApiBaseUrl}/api/config/endpoints`);
@@ -3304,8 +3297,12 @@ function MainApp() {
             },
           },
         );
+      } else if (result.applyMode === "next_task") {
+        notifySuccess(
+          t("config.savedNextTask", "配置已保存，将从下一任务开始生效"),
+        );
       } else {
-      notifySuccess(successText);
+        notifySuccess(successText);
       }
     } finally {
       dismissLoading(_busyId);
@@ -3324,7 +3321,6 @@ function MainApp() {
         {..._configViewProps}
         venvDir={venvDir}
         apiBaseUrl={apiBaseUrl}
-        onRequestRestart={restartService}
         wizardMode={wizardMode}
       />
     );
@@ -5414,21 +5410,61 @@ function MainApp() {
         <Toaster position="top-right" richColors closeButton />
 
         {view === "wizard" ? (() => {
-          const saveConfig = getFooterSaveConfig();
+          const saveConfig = footerSaveConfig;
           return saveConfig ? (
             <div className="footer" style={{ gridRow: 4, justifyContent: "flex-end" }}>
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <Button variant="secondary"
-                  onClick={() => renderIntegrationsSave(saveConfig.keys, saveConfig.savedMsg)}
-                  disabled={!currentWorkspaceId || !!busy}>
-                  {t("config.saveEnv")}
-                </Button>
-                <Button
-                  onClick={() => applyAndRestart(saveConfig.keys)}
-                  disabled={!currentWorkspaceId || !!busy || !!restartOverlay}
-                  title={t("config.applyRestartHint")}>
-                  {t("config.applyRestart")}
-                </Button>
+                <TooltipProvider delayDuration={180}>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span className="inline-flex">
+                        <Button
+                          onClick={() => renderIntegrationsSave(configApplyPreview.dirtyKeys, saveConfig.savedMsg)}
+                          disabled={
+                            !currentWorkspaceId
+                            || !!busy
+                            || !!restartOverlay
+                            || configApplyPreview.dirtyKeys.length === 0
+                          }>
+                          {t("config.apply", "应用")}
+                        </Button>
+                      </span>
+                    </TooltipTrigger>
+                    <TooltipContent side="top" align="end" className="max-w-xs text-left">
+                      <div className="space-y-1">
+                        {configApplyPreview.dirtyKeys.length === 0 ? (
+                          <div>{t("config.applyNoChanges", "没有待应用的修改")}</div>
+                        ) : (
+                          <>
+                            <div className="font-medium">
+                              {t("config.applyPendingCount", "待应用 {{count}} 项修改", {
+                                count: configApplyPreview.dirtyKeys.length,
+                              })}
+                            </div>
+                            {configApplyPreview.counts.immediate > 0 && (
+                              <div>{t("config.applyImmediateCount", "{{count}} 项立即生效", { count: configApplyPreview.counts.immediate })}</div>
+                            )}
+                            {configApplyPreview.counts.next_task > 0 && (
+                              <div>{t("config.applyNextTaskCount", "{{count}} 项从下一任务开始生效", { count: configApplyPreview.counts.next_task })}</div>
+                            )}
+                            {configApplyPreview.counts.component_reload > 0 && (
+                              <div>{t("config.applyComponentCount", "{{count}} 项需要重载组件", { count: configApplyPreview.counts.component_reload })}</div>
+                            )}
+                            {configApplyPreview.counts.process_restart > 0 && (
+                              <div>{t("config.applyRestartCount", "{{count}} 项需要重启后端", { count: configApplyPreview.counts.process_restart })}</div>
+                            )}
+                            {configApplyPreview.pendingCount > 0 && (
+                              <div>{t("config.applyCheckingCount", "正在判断 {{count}} 项修改…", { count: configApplyPreview.pendingCount })}</div>
+                            )}
+                            {configApplyPreview.unknownCount > 0 && (
+                              <div>{t("config.applyUnknownCount", "{{count}} 项暂时无法判断生效方式", { count: configApplyPreview.unknownCount })}</div>
+                            )}
+                          </>
+                        )}
+                      </div>
+                    </TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
               </div>
             </div>
           ) : null;

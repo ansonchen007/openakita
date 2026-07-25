@@ -1275,7 +1275,7 @@ function GroupPolicyTab({ apiBase }: { apiBase: string }) {
 
 // ─── Bot Configuration Tab ──────────────────────────────────────────────
 
-export function BotConfigTab({ apiBase, onRequestRestart, venvDir, apiBaseUrl }: { apiBase: string; onRequestRestart?: () => void; venvDir?: string; apiBaseUrl?: string; enabledChannels?: string[] }) {
+export function BotConfigTab({ apiBase, venvDir, apiBaseUrl }: { apiBase: string; venvDir?: string; apiBaseUrl?: string; enabledChannels?: string[] }) {
   const { t } = useTranslation();
   const [bots, setBots] = useState<IMBot[]>([]);
   const [profiles, setProfiles] = useState<AgentProfile[]>([]);
@@ -1294,9 +1294,6 @@ export function BotConfigTab({ apiBase, onRequestRestart, venvDir, apiBaseUrl }:
   const [, setTgPairingLoading] = useState(false);
   const [isAutoId, setIsAutoId] = useState(false);
   const [wizardOpen, setWizardOpen] = useState(false);
-  const [restartPending, setRestartPending] = useState(false);
-  const restartPendingRef = useRef(false);
-  const restartRequestedAtRef = useRef(0);
 
   const loadTgPairingCode = useCallback(async () => {
     setTgPairingLoading(true);
@@ -1317,33 +1314,7 @@ export function BotConfigTab({ apiBase, onRequestRestart, venvDir, apiBaseUrl }:
       const res = await safeFetch(`${apiBase}/api/agents/bots`);
       const data = await res.json();
       const nextBots = (data.bots || []) as IMBot[];
-      setBots((previousBots) => {
-        const previousById = new Map(previousBots.map((bot) => [bot.id, bot]));
-        return nextBots.map((bot) => {
-          const previous = previousById.get(bot.id);
-          if (
-            bot.enabled
-            && bot.runtime_status === "unknown"
-            && (restartPendingRef.current || previous?.runtime_status === "starting")
-          ) {
-            return { ...bot, runtime_status: "starting", runtime_progress: null };
-          }
-          return bot;
-        });
-      });
-      const sawTransient = nextBots.some((bot) =>
-        bot.enabled && TRANSIENT_IM_STATUSES.has(bot.runtime_status || "unknown")
-      );
-      const allEnabledBotsSettled = nextBots.every((bot) =>
-        !bot.enabled || !["unknown", "starting"].includes(bot.runtime_status || "unknown")
-      );
-      if (
-        sawTransient
-        || (allEnabledBotsSettled && Date.now() - restartRequestedAtRef.current >= 5000)
-      ) {
-        restartPendingRef.current = false;
-        setRestartPending(false);
-      }
+      setBots(nextBots);
       setLoading(false);
       return true;
     } catch (e) {
@@ -1376,7 +1347,7 @@ export function BotConfigTab({ apiBase, onRequestRestart, venvDir, apiBaseUrl }:
     return () => { cancelled = true; clearTimeout(retryTimer); };
   }, [fetchBots, fetchProfiles]);
 
-  const hasFastPollingBot = restartPending || bots.some((bot) =>
+  const hasFastPollingBot = bots.some((bot) =>
     bot.enabled && (
       bot.runtime_status === "unknown"
       || TRANSIENT_IM_STATUSES.has(bot.runtime_status || "unknown")
@@ -1388,16 +1359,6 @@ export function BotConfigTab({ apiBase, onRequestRestart, venvDir, apiBaseUrl }:
     const timer = setInterval(fetchBots, interval);
     return () => clearInterval(timer);
   }, [fetchBots, hasFastPollingBot]);
-
-  const requestRestart = useCallback(() => {
-    restartPendingRef.current = true;
-    restartRequestedAtRef.current = Date.now();
-    setRestartPending(true);
-    setBots((current) => current.map((bot) => bot.enabled
-      ? { ...bot, runtime_status: "starting", runtime_progress: null }
-      : bot));
-    onRequestRestart?.();
-  }, [onRequestRestart]);
 
   useEffect(() => {
     return onWsEvent((event) => {
@@ -1465,49 +1426,6 @@ export function BotConfigTab({ apiBase, onRequestRestart, venvDir, apiBaseUrl }:
       closeEditor();
       fetchBots();
       toast.success(t("im.botSaveSuccess"));
-    } catch (e) {
-      toast.error(String(e) || t("im.botSaveFailed"));
-    }
-    setSaving(false);
-  };
-
-  const handleSaveAndRestart = async () => {
-    if (!editingBot.id.trim()) return;
-    if (editingBot.enabled && !areCredsFilled(editingBot.type, editingBot.credentials)) {
-      toast.error(t("im.wizardCredRequired"));
-      return;
-    }
-    setSaving(true);
-    try {
-      const url = isCreating
-        ? `${apiBase}/api/agents/bots`
-        : `${apiBase}/api/agents/bots/${editingBot.id}`;
-      const method = isCreating ? "POST" : "PUT";
-      const payload = isCreating
-        ? {
-            id: editingBot.id,
-            type: editingBot.type,
-            name: editingBot.name,
-            agent_profile_id: editingBot.agent_profile_id,
-            enabled: editingBot.enabled,
-            credentials: editingBot.credentials,
-          }
-        : {
-            type: editingBot.type,
-            name: editingBot.name,
-            agent_profile_id: editingBot.agent_profile_id,
-            enabled: editingBot.enabled,
-            credentials: editingBot.credentials,
-          };
-
-      await safeFetch(url, {
-        method,
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      closeEditor();
-      toast.success(t("im.botSaveSuccess"));
-      requestRestart();
     } catch (e) {
       toast.error(String(e) || t("im.botSaveFailed"));
     }
@@ -2134,10 +2052,7 @@ export function BotConfigTab({ apiBase, onRequestRestart, venvDir, apiBaseUrl }:
           <DialogFooter className="border-t pt-4 mt-2">
             <Button variant="outline" onClick={closeEditor}>{t("common.cancel")}</Button>
             <Button onClick={handleSave} disabled={saving || !editingBot.id.trim()}>
-              {saving ? "..." : t("im.botSaveOnly")}
-            </Button>
-            <Button className="btnApplyRestart" onClick={handleSaveAndRestart} disabled={saving || !editingBot.id.trim()} title={t("im.botApplyRestartHint")}>
-              {saving ? "..." : t("im.botApplyRestart")}
+              {saving ? "..." : t("im.botApply")}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -2200,7 +2115,6 @@ export function BotConfigTab({ apiBase, onRequestRestart, venvDir, apiBaseUrl }:
         onClose={() => setWizardOpen(false)}
         apiBase={apiBase}
         profiles={profiles}
-        onRequestRestart={requestRestart}
         venvDir={venvDir}
         apiBaseUrl={apiBaseUrl}
         onCreated={fetchBots}
@@ -2281,7 +2195,6 @@ function BotCreationWizard({
   onClose,
   apiBase,
   profiles,
-  onRequestRestart,
   venvDir,
   apiBaseUrl,
   onCreated,
@@ -2290,7 +2203,6 @@ function BotCreationWizard({
   onClose: () => void;
   apiBase: string;
   profiles: AgentProfile[];
-  onRequestRestart?: () => void;
   venvDir?: string;
   apiBaseUrl?: string;
   onCreated: () => void;
@@ -2351,7 +2263,7 @@ function BotCreationWizard({
     setCredWarning(false);
   };
 
-  const handleSave = async (restart: boolean) => {
+  const handleSave = async () => {
     if (!bot.id.trim()) return;
     setSaving(true);
     try {
@@ -2370,7 +2282,6 @@ function BotCreationWizard({
       toast.success(t("im.wizardSaved"));
       onCreated();
       onClose();
-      if (restart) onRequestRestart?.();
     } catch (e) {
       toast.error(String(e));
     }
@@ -2894,14 +2805,9 @@ function BotCreationWizard({
                 </span>
               )}
               {step === "done" ? (
-                <>
-                  <Button variant="outline" onClick={() => handleSave(false)} disabled={saving || !bot.id.trim()}>
-                    {saving ? "..." : t("im.botSaveOnly")}
-                  </Button>
-                  <Button onClick={() => handleSave(true)} disabled={saving || !bot.id.trim()}>
-                    {saving ? "..." : t("im.botApplyRestart")}
-                  </Button>
-                </>
+                <Button onClick={handleSave} disabled={saving || !bot.id.trim()}>
+                  {saving ? "..." : t("im.botApply")}
+                </Button>
               ) : (
                 <>
                   <Button variant="outline" onClick={onClose}>{t("common.cancel")}</Button>

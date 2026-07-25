@@ -100,7 +100,13 @@ async def test_write_env_persists_persona_to_runtime_state_and_refreshes_agents(
     assert agent.persona_manager.switched_to == "jarvis"
     assert agent.cache_invalidated is True
     assert agent._context.system == "persona=jarvis"
-    assert pool.reasons == ["runtime_config:persona_name"]
+    assert pool.reasons == ["runtime_config:OPENAI_API_KEY,persona_name"]
+    assert response["apply_mode"] == "next_task"
+    assert response["apply_modes"] == {
+        "OPENAI_API_KEY": "next_task",
+        "PERSONA_NAME": "next_task",
+    }
+    assert response["restart_required"] is False
 
 
 @pytest.mark.asyncio
@@ -127,3 +133,96 @@ async def test_write_env_invalid_runtime_value_does_not_partially_update(
         )
 
     assert settings.persona_name == "default"
+
+
+@pytest.mark.asyncio
+async def test_write_env_marks_network_binding_as_process_restart(
+    isolated_runtime_state,
+    monkeypatch,
+):
+    from openakita.api.routes.config import EnvUpdateRequest, write_env
+    from openakita.config import settings
+
+    monkeypatch.delenv("API_PORT", raising=False)
+    monkeypatch.setattr(settings, "api_port", 18900)
+    pool = _DummyPool()
+    request = SimpleNamespace(
+        app=SimpleNamespace(state=SimpleNamespace(agent=None, agent_pool=pool))
+    )
+
+    response = await write_env(
+        EnvUpdateRequest(entries={"API_PORT": "19001"}, delete_keys=[]),
+        request,
+    )
+
+    assert response["apply_mode"] == "process_restart"
+    assert response["apply_modes"] == {"API_PORT": "process_restart"}
+    assert response["restart_required"] is True
+    assert response["hot_reloadable"] is False
+    assert pool.reasons == []
+
+
+@pytest.mark.asyncio
+async def test_write_env_invalidates_agent_pool_for_next_task_settings(
+    isolated_runtime_state,
+    monkeypatch,
+):
+    from openakita.api.routes.config import EnvUpdateRequest, write_env
+    from openakita.config import settings
+
+    monkeypatch.delenv("MAX_ITERATIONS", raising=False)
+    monkeypatch.delenv("MCP_TIMEOUT", raising=False)
+    monkeypatch.setattr(settings, "max_iterations", 100)
+    monkeypatch.setattr(settings, "mcp_timeout", 60)
+    pool = _DummyPool()
+    request = SimpleNamespace(
+        app=SimpleNamespace(state=SimpleNamespace(agent=None, agent_pool=pool))
+    )
+
+    response = await write_env(
+        EnvUpdateRequest(
+            entries={"MAX_ITERATIONS": "321", "MCP_TIMEOUT": "45"},
+            delete_keys=[],
+        ),
+        request,
+    )
+
+    assert response["apply_mode"] == "next_task"
+    assert response["restart_required"] is False
+    assert response["apply_modes"] == {
+        "MAX_ITERATIONS": "next_task",
+        "MCP_TIMEOUT": "next_task",
+    }
+    assert pool.reasons == ["runtime_config:MAX_ITERATIONS,MCP_TIMEOUT"]
+
+
+@pytest.mark.asyncio
+async def test_write_env_reloads_desktop_component_without_process_restart(
+    isolated_runtime_state,
+    monkeypatch,
+):
+    from openakita.api.routes.config import EnvUpdateRequest, write_env
+    from openakita.tools.desktop import config as desktop_config
+
+    monkeypatch.delenv("DESKTOP_MAX_WIDTH", raising=False)
+    monkeypatch.setattr(
+        desktop_config,
+        "_config",
+        desktop_config.DesktopConfig(
+            capture=desktop_config.CaptureConfig(max_width=1200),
+        ),
+    )
+    request = SimpleNamespace(
+        app=SimpleNamespace(state=SimpleNamespace(agent=None, agent_pool=None))
+    )
+
+    response = await write_env(
+        EnvUpdateRequest(entries={"DESKTOP_MAX_WIDTH": "1600"}, delete_keys=[]),
+        request,
+    )
+
+    assert response["apply_mode"] == "component_reload"
+    assert response["component_reloads"] == {"desktop": "reloaded"}
+    assert response["restart_required"] is False
+    assert response["hot_reloadable"] is True
+    assert desktop_config._config is None

@@ -166,6 +166,10 @@ class EnvUpdateRequest(BaseModel):
     delete_keys: list[str] = []
 
 
+class ConfigClassifyRequest(BaseModel):
+    keys: list[str] = Field(default_factory=list)
+
+
 class SkillsWriteRequest(BaseModel):
     content: dict  # Full JSON content of skills.json
 
@@ -546,6 +550,21 @@ async def read_env():
     return {"env": env, "has_value": has_value, "raw": content}
 
 
+@router.post("/api/config/classify")
+async def classify_config(body: ConfigClassifyRequest):
+    """Preview lifecycle modes without persisting or applying configuration."""
+    from openakita.config_lifecycle import classify_config_changes, effective_config_values
+
+    plan = classify_config_changes(body.keys)
+    return {
+        "apply_mode": plan.apply_mode.value,
+        "apply_modes": {key: mode.value for key, mode in plan.modes.items()},
+        "effective_values": effective_config_values(body.keys),
+        "restart_required": plan.restart_required,
+        "hot_reloadable": plan.hot_reloadable,
+    }
+
+
 @router.post("/api/config/env")
 async def write_env(body: EnvUpdateRequest, request: Request):
     """Update .env file with key-value entries (merge, preserving comments).
@@ -635,92 +654,50 @@ async def write_env(body: EnvUpdateRequest, request: Request):
     # read ``getattr(settings, ...)`` on each task (e.g. LoopBudgetGuard,
     # ContextManager.calculate_context_pressure, ReasoningEngine ratio
     # injection) see the new values without a process restart.
+    settings_changed: list[str] = []
     try:
         from openakita.config import settings as _settings
 
-        _settings_changed = _settings.reload()
-        if _settings_changed:
-            logger.info("[Config API] Settings hot-reloaded fields: %s", _settings_changed)
+        settings_changed = _settings.reload()
+        if settings_changed:
+            logger.info("[Config API] Settings hot-reloaded fields: %s", settings_changed)
     except Exception as exc:
         logger.warning("[Config API] Settings.reload() failed: %s", exc)
 
-    # Determine if any changed keys require a service restart
-    _RESTART_REQUIRED_PREFIXES = (
-        "TELEGRAM_",
-        "FEISHU_",
-        "DINGTALK_",
-        "WEWORK_",
-        "ONEBOT_",
-        "QQ_",
-        "WECHAT_",
-        "IM_",
-        "REDIS_",
-        "DATABASE_",
-        "SANDBOX_",
-    )
-    _HOT_RELOAD_PREFIXES = (
-        "OPENAI_",
-        "ANTHROPIC_",
-        "LLM_",
-        "DEFAULT_MODEL",
-        "TEMPERATURE",
-        "MAX_TOKENS",
-        "OPENAKITA_THEME",
-        "LANGUAGE",
-        # Context / long-task / task-budget knobs — read fresh on each task
-        # so they hot-reload as soon as Settings.reload() above runs.
-        "CONTEXT_",
-        "TASK_BUDGET_",
-        "API_TOOLS_",
-        "SAME_TOOL_",
-        "READONLY_STAGNATION_",
-        "MAX_ITERATIONS",
-        "THINKING_MODE",
-        "PROGRESS_TIMEOUT_",
-        "HARD_TIMEOUT_",
-        "TOOL_MAX_PARALLEL",
-        "FORCE_TOOL_CALL_",
-        "CONFIRMATION_TEXT_",
-        "ALLOW_PARALLEL_TOOLS",
-        "MEMORY_",
-        "PERSONA_",
-        "AGENT_NAME",
-        "PROACTIVE_",
-        "STICKER_",
-        "SCHEDULER_",
-        "SELFCHECK_",
-        "DESKTOP_NOTIFY_",
-    )
     if runtime_changed_fields:
         _sync_runtime_agent_settings(request, runtime_changed_fields)
-        _notify_runtime_config_changed(
-            request,
-            "runtime_config:" + ",".join(sorted(runtime_changed_fields)),
-        )
 
     changed_keys = (
         {k for k, v in safe_entries.items() if v}
         | set(runtime_entries.keys())
         | set(body.delete_keys)
     )
-    restart_required = any(
-        any(k.upper().startswith(p) for p in _RESTART_REQUIRED_PREFIXES) for k in changed_keys
-    )
-    hot_reloadable = (
-        all(
-            any(k.upper().startswith(p) for p in _HOT_RELOAD_PREFIXES)
-            or k.upper().startswith("OPENAKITA_")
-            for k in changed_keys
+    from openakita.config_lifecycle import classify_config_changes, reload_config_components
+
+    change_plan = classify_config_changes(changed_keys)
+    component_reloads = reload_config_components(change_plan)
+    component_reload_failed = "failed" in component_reloads.values()
+    runtime_env_keys = {key.upper() for key in runtime_entries}
+    next_task_changes = {
+        key for key in change_plan.next_task_keys if key not in runtime_env_keys
+    }
+    next_task_changes.update(runtime_changed_fields)
+    if next_task_changes:
+        _notify_runtime_config_changed(
+            request,
+            "runtime_config:" + ",".join(sorted(next_task_changes)),
         )
-        if changed_keys
-        else True
-    )
 
     return {
         "status": "ok",
         "updated_keys": list(safe_entries.keys()) + list(runtime_entries.keys()),
-        "restart_required": restart_required,
-        "hot_reloadable": hot_reloadable,
+        "restart_required": change_plan.restart_required or component_reload_failed,
+        "hot_reloadable": change_plan.hot_reloadable and not component_reload_failed,
+        "apply_mode": (
+            "process_restart" if component_reload_failed else change_plan.apply_mode.value
+        ),
+        "apply_modes": {key: mode.value for key, mode in change_plan.modes.items()},
+        "component_reloads": component_reloads,
     }
 
 

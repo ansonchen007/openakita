@@ -1306,7 +1306,7 @@ button:where(
 }
 
 button:where(
-  :not([data-slot]):not([role="tab"]):not([aria-label]):not([data-close-button]):not(.btnPrimary):not(.btnDanger):not(.btnApplyRestart)
+  :not([data-slot]):not([role="tab"]):not([aria-label]):not([data-close-button]):not(.btnPrimary):not(.btnDanger)
 ):hover {
   background: var(--bg-app);
   border-color: var(--muted2);
@@ -1328,16 +1328,6 @@ button.btnPrimary {
 button.btnPrimary:hover {
   background: var(--brand2);
   color: #fff;
-}
-
-button.btnApplyRestart {
-  background: #0e7490;
-  color: #fff;
-  border: 1px solid transparent;
-}
-
-button.btnApplyRestart:hover {
-  background: #0c6a82;
 }
 
 .btnDanger {

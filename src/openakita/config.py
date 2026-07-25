@@ -1457,7 +1457,7 @@ class Settings(BaseSettings):
         _skip = set(_PERSISTABLE_KEYS)
         fresh = Settings()
         changed: list[str] = []
-        for field_name in self.model_fields:
+        for field_name in type(self).model_fields:
             if field_name in _skip:
                 continue
             old_val = getattr(self, field_name)
