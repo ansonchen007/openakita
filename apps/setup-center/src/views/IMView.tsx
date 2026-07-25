@@ -42,7 +42,7 @@ type IMChannel = {
   channel: string;
   channel_type?: string;
   name: string;
-  status: "online" | "offline";
+  status: IMRuntimeStatus;
   sessionCount: number;
   lastActive: string | null;
   agentProfileId?: string;
@@ -97,9 +97,22 @@ type IMBot = {
   configured?: boolean;
   missing_credentials?: string[];
   runtime_seen?: boolean;
-  runtime_status?: "online" | "offline" | "unknown";
+  runtime_status?: IMRuntimeStatus;
   runtime_error?: string | null;
 };
+
+type IMRuntimeStatus =
+  | "installing_dependencies"
+  | "starting"
+  | "online"
+  | "offline"
+  | "error"
+  | "unknown";
+
+const TRANSIENT_IM_STATUSES = new Set<IMRuntimeStatus>([
+  "installing_dependencies",
+  "starting",
+]);
 
 type AgentProfile = {
   id: string;
@@ -435,7 +448,6 @@ function MessagesTab({ serviceRunning, apiBase }: { serviceRunning: boolean; api
   }, [serviceRunning, selectedSessionId, fetchMessages, dateFrom, dateTo]);
 
   useEffect(() => {
-    if (!IS_WEB) return;
     return onWsEvent((event, data) => {
       if (event === "im:channel_status") {
         fetchChannels();
@@ -1321,15 +1333,19 @@ export function BotConfigTab({ apiBase, onRequestRestart, venvDir, apiBaseUrl }:
     return () => { cancelled = true; clearTimeout(retryTimer); };
   }, [fetchBots, fetchProfiles]);
 
-  useEffect(() => {
-    const timer = setInterval(fetchBots, IS_WEB ? 60_000 : 30_000);
-    return () => clearInterval(timer);
-  }, [fetchBots]);
+  const hasTransientBot = bots.some((bot) =>
+    TRANSIENT_IM_STATUSES.has(bot.runtime_status || "unknown")
+  );
 
   useEffect(() => {
-    if (!IS_WEB) return;
+    const interval = hasTransientBot ? 2000 : IS_WEB ? 60_000 : 30_000;
+    const timer = setInterval(fetchBots, interval);
+    return () => clearInterval(timer);
+  }, [fetchBots, hasTransientBot]);
+
+  useEffect(() => {
     return onWsEvent((event) => {
-      if (event === "im:bot_config_changed") fetchBots();
+      if (event === "im:bot_config_changed" || event === "im:channel_status") fetchBots();
     });
   }, [fetchBots]);
 
@@ -1508,18 +1524,22 @@ export function BotConfigTab({ apiBase, onRequestRestart, venvDir, apiBaseUrl }:
           const agentProfile = profiles.find((p) => p.id === bot.agent_profile_id);
           const runtimeLabel = !bot.enabled
             ? t("im.botDisabled")
-            : bot.runtime_error
-              ? t("im.botStartFailed")
-              : bot.configured === false
-                ? t("im.botConfigInvalid")
-                : bot.runtime_status === "online"
-                  ? t("im.botOnline")
-                  : bot.runtime_status === "offline"
-                    ? t("im.botOffline")
-                    : t("im.botPendingStart");
+            : bot.runtime_status === "installing_dependencies"
+              ? t("im.botInstallingDependencies")
+              : bot.runtime_status === "starting"
+                ? t("im.botStarting")
+                : bot.runtime_error || bot.runtime_status === "error"
+                  ? t("im.botStartFailed")
+                  : bot.configured === false
+                    ? t("im.botConfigInvalid")
+                    : bot.runtime_status === "online"
+                      ? t("im.botOnline")
+                      : bot.runtime_status === "offline"
+                        ? t("im.botOffline")
+                        : t("im.botPendingStart");
           const runtimeVariant = !bot.enabled
             ? "secondary"
-            : bot.runtime_error || bot.configured === false || bot.runtime_status === "offline"
+            : bot.runtime_error || bot.configured === false || bot.runtime_status === "offline" || bot.runtime_status === "error"
               ? "destructive"
               : bot.runtime_status === "online" ? "default" : "outline";
           return (
@@ -1536,6 +1556,9 @@ export function BotConfigTab({ apiBase, onRequestRestart, venvDir, apiBaseUrl }:
                   {t(BOT_TYPE_LABEL_KEYS[bot.type] || "", { defaultValue: bot.type })}
                 </Badge>
                 <Badge variant={runtimeVariant} className="text-[10px] px-1.5 py-0">
+                  {TRANSIENT_IM_STATUSES.has(bot.runtime_status || "unknown") && (
+                    <Loader2 className="mr-1 size-3 animate-spin" />
+                  )}
                   {runtimeLabel}
                 </Badge>
               </div>

@@ -4,7 +4,12 @@ from types import ModuleType, SimpleNamespace
 import pytest
 from fastapi import HTTPException
 
-from openakita.api.routes.agents import BotCreateRequest, _validate_bot_credentials, create_bot
+from openakita.api.routes.agents import (
+    BotCreateRequest,
+    _runtime_bot_view,
+    _validate_bot_credentials,
+    create_bot,
+)
 
 
 def test_wework_ws_requires_all_credentials() -> None:
@@ -26,7 +31,9 @@ async def test_create_bot_rolls_back_when_runtime_start_fails(monkeypatch) -> No
         return False
 
     monkeypatch.setattr(config.settings, "im_bots", [], raising=False)
-    monkeypatch.setattr(config.runtime_state, "save", lambda: saves.append(list(config.settings.im_bots)))
+    monkeypatch.setattr(
+        config.runtime_state, "save", lambda: saves.append(list(config.settings.im_bots))
+    )
     main_stub = ModuleType("openakita.main")
     main_stub.apply_im_bot = fail_apply
     main_stub.get_im_bot_runtime_error = lambda _channel: "authentication rejected"
@@ -79,3 +86,32 @@ def test_runtime_status_reports_missing_credentials() -> None:
     assert detail["configured"] is False
     assert detail["missing"] == ["bot_id", "secret"]
     assert detail["runtime_status"] == "unknown"
+
+
+def test_runtime_bot_view_exposes_dependency_install_state(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "openakita.channels.runtime_status.resolve_bot_runtime_state",
+        lambda _channel, _gateway=None: {
+            "status": "installing_dependencies",
+            "error": None,
+        },
+    )
+
+    view = _runtime_bot_view(
+        {
+            "id": "feishu-main",
+            "type": "feishu",
+            "enabled": True,
+            "credentials": {"app_id": "cli_xxx", "app_secret": "secret"},
+        },
+        {
+            "configured": True,
+            "missing": [],
+            "runtime_seen": False,
+            "runtime_status": "unknown",
+        },
+    )
+
+    assert view["runtime_status"] == "installing_dependencies"
+    assert view["runtime_seen"] is True
+    assert view["runtime_error"] is None

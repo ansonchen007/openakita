@@ -787,19 +787,32 @@ export function StatusView(props: StatusViewProps) {
             const ih = imHealth[channelId];
             const isOnline = ih && (ih.status === "healthy" || ih.status === "online");
             const isConfigured = ih && ih.status === "configured";
+            const isInstalling = ih && ih.status === "installing_dependencies";
+            const isStarting = ih && ih.status === "starting";
+            const isError = ih && ih.status === "error";
             const channelError = ih?.error?.trim() || "";
             const effectiveEnabled = ih ? true : c.enabled;
             const serviceRunning = serviceStatus?.running;
             const dot = !effectiveEnabled
               ? "disabled"
               : ih
-                ? (isOnline ? "healthy" : isConfigured ? "unknown" : "unhealthy")
+                ? (isOnline ? "healthy" : isConfigured || isInstalling || isStarting ? "unknown" : "unhealthy")
                 : c.ok ? "unknown" : serviceRunning ? "unknown" : "degraded";
             const LogoComp = IM_LOGO_MAP[channelId];
             const label = !effectiveEnabled
               ? t("status.disabled")
               : ih
-                ? (isOnline ? t("status.online") : isConfigured ? t("status.configured") : t("status.offline"))
+                ? (isOnline
+                    ? t("status.online")
+                    : isInstalling
+                      ? t("im.botInstallingDependencies")
+                      : isStarting
+                        ? t("im.botStarting")
+                        : isConfigured
+                          ? t("status.configured")
+                          : isError
+                            ? t("im.botStartFailed")
+                            : t("status.offline"))
                 : c.ok
                   ? t("status.configured")
                   : serviceRunning ? "—" : t("status.keyMissing");

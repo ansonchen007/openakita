@@ -1507,6 +1507,8 @@
     "botOnline": "在线",
     "botOffline": "离线",
     "botPendingStart": "待启动",
+    "botInstallingDependencies": "依赖安装中",
+    "botStarting": "正在启动",
     "botStartFailed": "启动失败",
     "botConfigInvalid": "配置不完整",
     "botMissingCredentials": "缺少必填凭据：{{fields}}",

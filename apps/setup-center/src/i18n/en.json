@@ -1507,6 +1507,8 @@
     "botOnline": "Online",
     "botOffline": "Offline",
     "botPendingStart": "Pending start",
+    "botInstallingDependencies": "Installing dependencies",
+    "botStarting": "Starting",
     "botStartFailed": "Start failed",
     "botConfigInvalid": "Incomplete config",
     "botMissingCredentials": "Missing required credentials: {{fields}}",

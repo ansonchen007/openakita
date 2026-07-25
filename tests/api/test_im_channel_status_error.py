@@ -46,7 +46,7 @@ async def test_channel_list_exposes_startup_error_only_while_offline(monkeypatch
         channel = next(
             item for item in response.json()["channels"] if item["channel"] == "feishu:feishu-test"
         )
-        assert channel["status"] == "offline"
+        assert channel["status"] == "error"
         assert "lark_oapi" in channel["error"]
         assert "LogLevel" in channel["error"]
 
@@ -58,3 +58,51 @@ async def test_channel_list_exposes_startup_error_only_while_offline(monkeypatch
         )
         assert channel["status"] == "online"
         assert "error" not in channel
+
+
+@pytest.mark.asyncio
+async def test_channel_list_exposes_dependency_install_state(monkeypatch):
+    import openakita.config as config
+
+    monkeypatch.setattr(
+        "openakita.agents.profile.get_profile_store",
+        lambda: SimpleNamespace(list_all=lambda: []),
+    )
+    monkeypatch.setattr(
+        "openakita.channels.runtime_status.resolve_bot_runtime_state",
+        lambda channel, _gateway=None: {
+            "status": "installing_dependencies" if channel == "feishu:feishu-test" else "unknown",
+            "error": None,
+        },
+    )
+    monkeypatch.setattr(
+        config.settings,
+        "im_bots",
+        [
+            {
+                "id": "feishu-test",
+                "type": "feishu",
+                "name": "Test Feishu",
+                "enabled": True,
+                "credentials": {"app_id": "cli_xxx", "app_secret": "secret"},
+            }
+        ],
+        raising=False,
+    )
+
+    app = FastAPI()
+    app.include_router(router)
+    app.state.gateway = SimpleNamespace(_adapters={}, adapters=[])
+    app.state.session_manager = None
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as client:
+        response = await client.get("/api/im/channels")
+
+    channel = next(
+        item for item in response.json()["channels"] if item["channel"] == "feishu:feishu-test"
+    )
+    assert channel["status"] == "installing_dependencies"
+    assert "error" not in channel

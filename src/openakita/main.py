@@ -194,12 +194,35 @@ def get_message_gateway():
     return _message_gateway
 
 
-_im_bot_runtime_errors: dict[str, str] = {}
+def _set_im_bot_runtime_state(channel_name: str, status: str, error: str | None = None) -> None:
+    """Record and broadcast the authoritative runtime state for one bot."""
+    from openakita.channels.runtime_status import set_bot_runtime_state
+
+    set_bot_runtime_state(channel_name, status, error)
+
+    try:
+        from openakita.api.routes.websocket import broadcast_event
+
+        asyncio.get_running_loop().create_task(
+            broadcast_event(
+                "im:channel_status",
+                {"channel": channel_name, "status": status, "error": error},
+            )
+        )
+    except (RuntimeError, ImportError):
+        pass
+
+
+def get_im_bot_runtime_state(channel_name: str) -> dict[str, str | None]:
+    """Return one normalized state shared by all IM status APIs."""
+    from openakita.channels.runtime_status import resolve_bot_runtime_state
+
+    return resolve_bot_runtime_state(channel_name, _message_gateway)
 
 
 def get_im_bot_runtime_error(channel_name: str) -> str | None:
     """Return the latest adapter startup error for a configured bot."""
-    return _im_bot_runtime_errors.get(channel_name)
+    return get_im_bot_runtime_state(channel_name).get("error")
 
 
 def _bot_channel_name(bot_cfg: dict) -> str:
@@ -222,7 +245,15 @@ async def apply_im_bot(bot_cfg: dict) -> bool:
     agent_id = bot_cfg.get("agent_profile_id", "default")
     creds = bot_cfg.get("credentials", {})
     channel_name = _bot_channel_name(bot_cfg)
-    _im_bot_runtime_errors.pop(channel_name, None)
+    _set_im_bot_runtime_state(channel_name, "installing_dependencies")
+    try:
+        deps_result = await asyncio.to_thread(_ensure_channel_deps)
+        install_errors = deps_result.get("errors") if deps_result else None
+        if install_errors:
+            _message_gateway.set_channel_install_errors(install_errors)
+    except Exception as e:
+        logger.warning("[HotReload] IM dependency check failed for %s: %s", channel_name, e)
+    _set_im_bot_runtime_state(channel_name, "starting")
     try:
         adapter = _create_bot_adapter(
             bot_type,
@@ -233,10 +264,12 @@ async def apply_im_bot(bot_cfg: dict) -> bool:
         )
         if adapter:
             await _message_gateway.register_adapter(adapter)
+            _set_im_bot_runtime_state(channel_name, "online")
             logger.info(f"[HotReload] Applied bot adapter: {channel_name}")
             return True
+        _set_im_bot_runtime_state(channel_name, "error", "Unsupported IM adapter type")
     except Exception as e:
-        _im_bot_runtime_errors[channel_name] = str(e)
+        _set_im_bot_runtime_state(channel_name, "error", str(e))
         logger.error(f"[HotReload] Failed to apply bot {channel_name}: {e}")
     return False
 
@@ -249,7 +282,9 @@ async def remove_im_bot(bot_cfg: dict) -> bool:
     if _message_gateway is None:
         return False
     channel_name = _bot_channel_name(bot_cfg)
-    _im_bot_runtime_errors.pop(channel_name, None)
+    from openakita.channels.runtime_status import clear_bot_runtime_state
+
+    clear_bot_runtime_state(channel_name)
     try:
         result = await _message_gateway.unregister_adapter(channel_name)
         if result:
@@ -402,15 +437,28 @@ async def start_im_channels(agent_or_master):
                 _session_manager._plugin_hooks = agent_or_master._plugin_manager.hook_registry
         return
 
+    enabled_bots = [
+        bot
+        for bot in (settings.im_bots or [])
+        if isinstance(bot, dict) and bot.get("enabled", True)
+    ]
+    for bot in enabled_bots:
+        _set_im_bot_runtime_state(_bot_channel_name(bot), "installing_dependencies")
+
     channel_deps_result: dict = {}
     try:
-        channel_deps_result = _ensure_channel_deps()
+        # Dependency installation uses blocking subprocess calls. Keep it off
+        # the API event loop so status polling remains responsive.
+        channel_deps_result = await asyncio.to_thread(_ensure_channel_deps)
     except Exception as e:
         logger.error(
             f"IM channel dependency check failed ({type(e).__name__}: {e}), "
             "continuing with adapter registration — individual adapters will "
             "report their own import errors if deps are truly missing"
         )
+
+    for bot in enabled_bots:
+        _set_im_bot_runtime_state(_bot_channel_name(bot), "starting")
 
     # 初始化在线 STT 客户端（可选）
     from .llm.config import load_endpoints_config as _load_ep_config
@@ -672,7 +720,7 @@ async def start_im_channels(agent_or_master):
             _channel_name = f"{bot_type}:{bot_id}" if bot_id else bot_type
 
             try:
-                _im_bot_runtime_errors.pop(_channel_name, None)
+                _set_im_bot_runtime_state(_channel_name, "starting")
                 adapter = _create_bot_adapter(
                     bot_type,
                     creds,
@@ -684,8 +732,10 @@ async def start_im_channels(agent_or_master):
                     await _message_gateway.register_adapter(adapter)
                     adapters_started.append(_channel_name)
                     logger.info(f"[MultiBot] Registered bot: {_channel_name} -> agent={agent_id}")
+                else:
+                    _set_im_bot_runtime_state(_channel_name, "error", "Unsupported IM adapter type")
             except Exception as e:
-                _im_bot_runtime_errors[_channel_name] = str(e)
+                _set_im_bot_runtime_state(_channel_name, "error", str(e))
                 logger.error(f"Failed to create bot {bot_id}: {e}")
 
     # 设置 Agent 处理函数
@@ -756,6 +806,17 @@ async def start_im_channels(agent_or_master):
         await _message_gateway.start()
         started = _message_gateway.get_started_adapters()
         failed = _message_gateway.get_failed_adapters()
+        failed_reasons = _message_gateway.get_failed_adapter_reasons()
+        for bot in enabled_bots:
+            channel_name = _bot_channel_name(bot)
+            if channel_name in started:
+                _set_im_bot_runtime_state(channel_name, "online")
+            elif channel_name in failed:
+                _set_im_bot_runtime_state(
+                    channel_name,
+                    "error",
+                    failed_reasons.get(channel_name) or "Adapter failed to start",
+                )
         if failed:
             logger.warning(f"IM adapters failed to start: {', '.join(failed)}")
         logger.info(f"MessageGateway started with adapters: {started}")

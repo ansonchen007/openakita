@@ -306,19 +306,23 @@ def _validate_bot_credentials(bot_type: str, credentials: dict) -> None:
         )
 
 
-def _runtime_bot_view(bot: dict, detail: dict | None) -> dict:
-    from openakita.main import get_im_bot_runtime_error
+def _runtime_bot_view(bot: dict, detail: dict | None, gateway=None) -> dict:
+    from openakita.channels.runtime_status import resolve_bot_runtime_state
 
     result = _mask_bot_credentials(bot)
     channel = f"{bot.get('type', '')}:{bot.get('id', '')}"
+    runtime = resolve_bot_runtime_state(channel, gateway)
+    runtime_status = str(runtime.get("status") or "unknown")
     if detail:
+        if runtime_status == "unknown":
+            runtime_status = str(detail.get("runtime_status") or "unknown")
         result.update(
             configured=detail.get("configured", False),
             missing_credentials=detail.get("missing", []),
-            runtime_seen=detail.get("runtime_seen", False),
-            runtime_status=detail.get("runtime_status", "unknown"),
+            runtime_seen=detail.get("runtime_seen", False) or runtime_status != "unknown",
         )
-    result["runtime_error"] = get_im_bot_runtime_error(channel)
+    result["runtime_status"] = runtime_status
+    result["runtime_error"] = runtime.get("error")
     return result
 
 
@@ -332,7 +336,8 @@ async def list_bots():
     from openakita.config import settings
     from openakita.main import get_message_gateway
 
-    status = collect_effective_im_status(settings, get_message_gateway())
+    gateway = get_message_gateway()
+    status = collect_effective_im_status(settings, gateway)
     details = {
         detail.get("id"): detail
         for detail in status["details"]
@@ -340,7 +345,7 @@ async def list_bots():
     }
     return {
         "bots": [
-            _runtime_bot_view(bot, details.get(bot.get("id")))
+            _runtime_bot_view(bot, details.get(bot.get("id")), gateway)
             for bot in settings.im_bots
             if isinstance(bot, dict)
         ]
