@@ -17,7 +17,6 @@
       "icons/icon.icns"
     ],
     "resources": [
-      "resources/openakita-server/",
       "resources/bootstrap/"
     ],
     "createUpdaterArtifacts": true,

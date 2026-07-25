@@ -5,34 +5,14 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import importlib.metadata
 import os
 import subprocess
-import sys
 from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 
 INPUTS = {
-    "backend": (
-        "VERSION",
-        "pyproject.toml",
-        "build/build_backend.py",
-        "build/openakita.spec",
-        "scripts/build_cache_key.py",
-        "scripts/write_build_version.py",
-        "src/openakita",
-        "openakita-plugin-sdk",
-        "apps/setup-center/src",
-        "apps/setup-center/index.html",
-        "apps/setup-center/package.json",
-        "apps/setup-center/package-lock.json",
-        "apps/setup-center/vite.config.ts",
-        "apps/setup-center/tsconfig.json",
-        "skills",
-        "mcps",
-    ),
     "rust": (
         "apps/setup-center/src",
         "apps/setup-center/index.html",
@@ -84,15 +64,6 @@ def _add_file(digest: Any, path: Path) -> None:
             digest.update(chunk)
 
 
-def _backend_environment() -> list[str]:
-    distributions = sorted(
-        f"{dist.metadata['Name'].lower()}=={dist.version}"
-        for dist in importlib.metadata.distributions()
-        if dist.metadata.get("Name")
-    )
-    return [sys.version, *distributions]
-
-
 def _rust_environment() -> list[str]:
     rustc = subprocess.check_output(["rustc", "-Vv"], text=True, encoding="utf-8")
     return [rustc, os.environ.get("CARGO_BUILD_TARGET", "native")]
@@ -105,7 +76,7 @@ def fingerprint(kind: str) -> str:
         raise RuntimeError(f"no tracked inputs found for {kind}")
     for path in files:
         _add_file(digest, path)
-    environment = _backend_environment() if kind == "backend" else _rust_environment()
+    environment = _rust_environment()
     for value in environment:
         digest.update(b"\0env\0")
         digest.update(value.encode())

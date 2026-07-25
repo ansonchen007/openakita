@@ -178,8 +178,8 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      # 公共 prep：Python/Node/Rust 安装、web/docs 构建、PyInstaller 后端、
-      # PBS 缓存与 bootstrap 资源准备、seed exec bit 校验。详见
+      # 公共 prep：Python/Node/Rust 安装、web/docs 构建、PBS 缓存与
+      # bootstrap 资源准备、seed exec bit 校验。详见
       # .github/actions/desktop-build-prepare/action.yml。
       # 注意 inputs 全是字符串，所以 disable_bootstrap_cache 透传为
       # `'true'/'false'` 字符串，由 action 内部用字符串比较判断。
@@ -191,26 +191,6 @@ jobs:
           rust_target: ${{ matrix.rust_target || '' }}
           rust_cache_prefix: "dryrun-${{ matrix.suffix }}"
           disable_bootstrap_cache: ${{ inputs.disable_bootstrap_cache && 'true' || 'false' }}
-
-      - name: Copy backend to Tauri resources
-        shell: bash
-        run: |
-          RESOURCE_DIR="apps/setup-center/src-tauri/resources"
-          mkdir -p "$RESOURCE_DIR"
-          rm -rf "$RESOURCE_DIR/openakita-server"
-          cp -r dist/openakita-server "$RESOURCE_DIR/openakita-server"
-          echo "Resources copied:"
-          du -sh "$RESOURCE_DIR"/*
-
-      - name: Verify bundled Python contract (seed packaged)
-        shell: bash
-        run: |
-          python build/verify_bundled_python_contract.py \
-            --backend-dir apps/setup-center/src-tauri/resources/openakita-server \
-            --bootstrap-manifest apps/setup-center/src-tauri/resources/bootstrap/manifest.json \
-            --require-seed-packaged \
-            --expected-git-hash "$(git rev-parse HEAD)" \
-            --check-chat-api
 
       - name: Codesign embedded binaries for macOS notarization
         if: runner.os == 'macOS'
@@ -242,11 +222,6 @@ jobs:
 
           echo "Signing embedded binaries with identity: ${IDENTITY}"
           find "$RESOURCE_DIR" -type f -perm +111 | while read -r bin; do
-            # Sign Python.framework as a bundle explicitly (below), not per-file.
-            if [[ "$bin" == *"/Python.framework/"* ]]; then
-              echo "  Skipping Python.framework inner binary at resource stage: $bin"
-              continue
-            fi
             echo "  Signing: $bin"
             codesign --force --options runtime --timestamp --entitlements "$ENTITLEMENTS" --sign "$IDENTITY" "$bin"
           done
@@ -351,9 +326,7 @@ jobs:
             BUNDLE_DIR="${TARGET_BASE}/release/bundle"
           fi
 
-          # Only sign top-level .app bundles (under macos/), NOT nested Python.app etc.
-          # The previous `find` without -maxdepth picked up nested Python.app bundles
-          # and re-signed them AFTER the main app was sealed, breaking the seal.
+          # Only sign top-level .app bundles under macos/.
           MACOS_BUNDLE_DIR="${BUNDLE_DIR}/macos"
           APPS=()
           if [ -d "${MACOS_BUNDLE_DIR}" ]; then
@@ -369,94 +342,6 @@ jobs:
           IDENTITY="${APPLE_SIGNING_IDENTITY}"
           ENTITLEMENTS="apps/setup-center/src-tauri/Entitlements.plist"
           for app in "${APPS[@]}"; do
-            FRAMEWORK_DIR="${app}/Contents/Resources/resources/openakita-server/_internal/Python.framework"
-            if [ -d "${FRAMEWORK_DIR}" ]; then
-              # Detect the actual Python version bundled by PyInstaller (e.g. 3.11, 3.12, 3.13)
-              PY_FW_VER=$(ls -1 "${FRAMEWORK_DIR}/Versions/" 2>/dev/null | grep -E '^3\.[0-9]+$' | head -1)
-              if [ -z "${PY_FW_VER}" ]; then
-                PY_FW_VER="3.11"
-                echo "WARNING: Could not detect Python version in framework, falling back to ${PY_FW_VER}"
-              fi
-              echo "Detected bundled Python framework version: ${PY_FW_VER}"
-
-              # PyInstaller copies files instead of creating symlinks, but macOS
-              # framework conventions require top-level Python.framework/Python and
-              # Python.framework/Resources to be symlinks into Versions/Current/.
-              # Without this, codesign treats the framework root binary as a bundle
-              # entry point and fails with "bundle format is ambiguous".
-              FW_TOP_PYTHON="${FRAMEWORK_DIR}/Python"
-              if [ -f "${FW_TOP_PYTHON}" ] && [ ! -L "${FW_TOP_PYTHON}" ]; then
-                rm -f "${FW_TOP_PYTHON}"
-                ln -s "Versions/Current/Python" "${FW_TOP_PYTHON}"
-                echo "Fixed Python.framework/Python → symlink to Versions/Current/Python"
-              fi
-              FW_TOP_RESOURCES="${FRAMEWORK_DIR}/Resources"
-              if [ -d "${FW_TOP_RESOURCES}" ] && [ ! -L "${FW_TOP_RESOURCES}" ]; then
-                rm -rf "${FW_TOP_RESOURCES}"
-                ln -s "Versions/Current/Resources" "${FW_TOP_RESOURCES}"
-                echo "Fixed Python.framework/Resources → symlink to Versions/Current/Resources"
-              fi
-
-              SIGNED_REALPATHS_FILE="$(mktemp)"
-
-              # Apple code-signing requires strict inside-out order:
-              #   innermost executables → containing bundles → framework version binaries
-              # Each layer's signature seals its contents, so inner layers must
-              # be fully signed before outer layers that reference them.
-
-              # 1) Sign executables inside Python.app bundles (deepest level).
-              for pybin in \
-                "${FRAMEWORK_DIR}/Resources/Python.app/Contents/MacOS/Python" \
-                "${FRAMEWORK_DIR}/Versions/${PY_FW_VER}/Resources/Python.app/Contents/MacOS/Python" \
-                "${FRAMEWORK_DIR}/Versions/Current/Resources/Python.app/Contents/MacOS/Python"; do
-                if [ -f "${pybin}" ]; then
-                  REAL_PYBIN="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "${pybin}")"
-                  if grep -Fqx -- "${REAL_PYBIN}" "${SIGNED_REALPATHS_FILE}"; then
-                    continue
-                  fi
-                  echo "Signing Python.app executable: ${pybin}"
-                  codesign --force --options runtime --timestamp --entitlements "${ENTITLEMENTS}" --sign "${IDENTITY}" "${REAL_PYBIN}"
-                  printf '%s\n' "${REAL_PYBIN}" >> "${SIGNED_REALPATHS_FILE}"
-                fi
-              done
-
-              # 2) Sign Python.app bundles (seals the executables from step 1).
-              for pyapp in \
-                "${FRAMEWORK_DIR}/Resources/Python.app" \
-                "${FRAMEWORK_DIR}/Versions/${PY_FW_VER}/Resources/Python.app" \
-                "${FRAMEWORK_DIR}/Versions/Current/Resources/Python.app"; do
-                if [ -d "${pyapp}" ]; then
-                  REAL_PYAPP="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "${pyapp}")"
-                  if grep -Fqx -- "${REAL_PYAPP}" "${SIGNED_REALPATHS_FILE}"; then
-                    continue
-                  fi
-                  echo "Signing Python.app bundle: ${pyapp}"
-                  codesign --force --options runtime --timestamp --entitlements "${ENTITLEMENTS}" --sign "${IDENTITY}" "${REAL_PYAPP}"
-                  printf '%s\n' "${REAL_PYAPP}" >> "${SIGNED_REALPATHS_FILE}"
-                fi
-              done
-
-              # 3) Sign framework version main binaries LAST.
-              #    Their signatures seal Resources/ (including the signed Python.app).
-              #    Python.framework/Python is now a symlink (fixed above) and needs
-              #    no separate signing.
-              for fwbin in \
-                "${FRAMEWORK_DIR}/Versions/${PY_FW_VER}/Python" \
-                "${FRAMEWORK_DIR}/Versions/Current/Python"; do
-                if [ -f "${fwbin}" ]; then
-                  REAL_FWBIN="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "${fwbin}")"
-                  if grep -Fqx -- "${REAL_FWBIN}" "${SIGNED_REALPATHS_FILE}"; then
-                    continue
-                  fi
-                  echo "Signing framework version binary: ${fwbin}"
-                  codesign --force --options runtime --timestamp --entitlements "${ENTITLEMENTS}" --sign "${IDENTITY}" "${REAL_FWBIN}"
-                  printf '%s\n' "${REAL_FWBIN}" >> "${SIGNED_REALPATHS_FILE}"
-                fi
-              done
-
-              rm -f "${SIGNED_REALPATHS_FILE}"
-            fi
-
             echo "Signing app bundle root: ${app}"
             codesign --force --options runtime --timestamp --entitlements "${ENTITLEMENTS}" --sign "${IDENTITY}" "${app}"
             echo "Verifying app signature (deep): ${app}"

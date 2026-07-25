@@ -1,13 +1,11 @@
 # ==========================================================
 #  OpenAkita Parallel Build Script (PowerShell)
-#  将 PyInstaller、前端构建、Rust 编译并行执行，大幅缩短打包时间
+#  将前端、Rust 和 managed Python runtime 构建并行执行
 #
 #  Usage:
 #    powershell -File build/build_parallel.ps1          # core mode
 #    powershell -File build/build_parallel.ps1 -Mode full
 #
-#  串行: PyInstaller(112s) → Copy(8s) → Frontend(2s) → Rust(108s) → NSIS(60s) ≈ 290s
-#  并行: max(PyInstaller, Frontend+Rust)(~120s) → Copy(8s) → NSIS(60s)          ≈ 190s
 # ==========================================================
 
 param(
@@ -50,21 +48,18 @@ function Resolve-NativeCmd($name) {
 
 $npmCmd    = Resolve-NativeCmd "npm"
 $cargoCmd  = Resolve-NativeCmd "cargo"
-$pythonCmd = Resolve-NativeCmd "python"
+$uvCmd     = Resolve-NativeCmd "uv"
 
-Write-Host "  Resolved: python=$pythonCmd"
+Write-Host "  Resolved: uv=$uvCmd"
 Write-Host "  Resolved: npm=$npmCmd"
 Write-Host "  Resolved: cargo=$cargoCmd"
 
 if (-not $npmCmd)    { Write-Host "  [WARN] npm not found in PATH" -ForegroundColor Yellow }
 if (-not $cargoCmd)  { Write-Host "  [WARN] cargo not found in PATH" -ForegroundColor Yellow }
-if (-not $pythonCmd) { Write-Host "  [WARN] python not found in PATH" -ForegroundColor Yellow }
+if (-not $uvCmd)     { Write-Host "  [WARN] uv not found in PATH" -ForegroundColor Yellow }
 
 # ── Phase 1: Build shared web frontend ────────────────────
-# dist-web is consumed by both:
-#   1) python -m build --wheel (bootstrap/app-venv install)
-#   2) PyInstaller fallback backend (_internal/openakita/web)
-# Build it once up front so the two downstream packagers reuse identical assets.
+# dist-web is embedded in the wheel used to create bootstrap/app-venv.
 Write-Host ""
 Write-Host "[Phase 1/4] Building web frontend (dist-web)..." -ForegroundColor Yellow
 Push-Location $SetupCenter
@@ -85,24 +80,12 @@ $phase0Time = [math]::Round($sw.Elapsed.TotalSeconds)
 # ── Phase 2: Four parallel jobs ───────────────────────────
 Write-Host ""
 if ($SkipBootstrap) {
-    Write-Host "[Phase 2/4] Starting 3 parallel build tasks..." -ForegroundColor Yellow
+    Write-Host "[Phase 2/4] Starting 2 parallel build tasks..." -ForegroundColor Yellow
 } else {
-    Write-Host "[Phase 2/4] Starting 4 parallel build tasks..." -ForegroundColor Yellow
+    Write-Host "[Phase 2/4] Starting 3 parallel build tasks..." -ForegroundColor Yellow
 }
 
-# Job A: PyInstaller fallback backend
-$jobPy = Start-Job -Name "PyInstaller" -ScriptBlock {
-    param($root, $scriptDir, $mode, $py, $useFast)
-    Set-Location $root
-    $backendArgs = @("$scriptDir\build_backend.py", "--mode", $mode, "--skip-web-build")
-    if ($useFast) { $backendArgs += "--fast" }
-    $ErrorActionPreference = "Continue"
-    & $py @backendArgs 2>&1
-    if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed (exit $LASTEXITCODE)" }
-} -ArgumentList $ProjectRoot, $ScriptDir, $Mode, $pythonCmd, $Fast.IsPresent
-Write-Host "  → [A] PyInstaller backend packaging  (Job: $($jobPy.Id))"
-
-# Job B: Frontend build
+# Job A: Frontend build
 $jobFe = Start-Job -Name "Frontend" -ScriptBlock {
     param($dir, $npm)
     Set-Location $dir
@@ -111,9 +94,9 @@ $jobFe = Start-Job -Name "Frontend" -ScriptBlock {
     & $npm run build 2>&1
     if ($LASTEXITCODE -ne 0) { throw "Frontend build failed (exit $LASTEXITCODE)" }
 } -ArgumentList $SetupCenter, $npmCmd
-Write-Host "  → [B] Frontend build (Vite)          (Job: $($jobFe.Id))"
+Write-Host "  -> [A] Frontend build (Vite)          (Job: $($jobFe.Id))"
 
-# Job C: Rust pre-compile
+# Job B: Rust pre-compile
 $jobRs = Start-Job -Name "RustCompile" -ScriptBlock {
     param($dir, $cargo)
     Set-Location $dir
@@ -121,25 +104,25 @@ $jobRs = Start-Job -Name "RustCompile" -ScriptBlock {
     & $cargo build --release --features tauri/custom-protocol 2>&1
     if ($LASTEXITCODE -ne 0) { throw "Rust compile failed (exit $LASTEXITCODE)" }
 } -ArgumentList $SrcTauri, $cargoCmd
-Write-Host "  → [C] Rust release compile           (Job: $($jobRs.Id))"
+Write-Host "  -> [B] Rust release compile           (Job: $($jobRs.Id))"
 
-# Job D: Bootstrap resources for dual-venv runtime
+# Job C: Bootstrap resources for dual-venv runtime
 if (-not $SkipBootstrap) {
     $jobBootstrap = Start-Job -Name "Bootstrap" -ScriptBlock {
-        param($root, $scriptDir, $py)
+        param($root, $scriptDir, $uv)
         Set-Location $root
         $ErrorActionPreference = "Continue"
-        & $py "$scriptDir\prepare_bootstrap_resources.py" 2>&1
+        & $uv run --no-sync python "$scriptDir\prepare_bootstrap_resources.py" 2>&1
         if ($LASTEXITCODE -ne 0) { throw "Bootstrap resources failed (exit $LASTEXITCODE)" }
-    } -ArgumentList $ProjectRoot, $ScriptDir, $pythonCmd
-    Write-Host "  → [D] Bootstrap resources            (Job: $($jobBootstrap.Id))"
+    } -ArgumentList $ProjectRoot, $ScriptDir, $uvCmd
+    Write-Host "  -> [C] Bootstrap resources            (Job: $($jobBootstrap.Id))"
 }
 
 Write-Host ""
 Write-Host "  Waiting for all tasks to complete..."
 
 # Wait for all jobs
-$allJobs = @($jobPy, $jobFe, $jobRs)
+$allJobs = @($jobFe, $jobRs)
 if (-not $SkipBootstrap) { $allJobs += $jobBootstrap }
 $failed = $false
 
@@ -186,16 +169,10 @@ if ($failed) {
     exit 1
 }
 
-# ── Phase 2: Copy resources ──────────────────────────────
+# ── Phase 3: Copy optional module resources ──────────────
 Write-Host ""
-Write-Host "[Phase 3/4] Copying backend to Tauri resources..." -ForegroundColor Yellow
-
-$DistServerDir = Join-Path $ProjectRoot "dist\openakita-server"
-$TargetDir = Join-Path $ResourceDir "openakita-server"
-
-if (Test-Path $TargetDir) { Remove-Item -Recurse -Force $TargetDir }
+Write-Host "[Phase 3/4] Preparing optional module resources..." -ForegroundColor Yellow
 New-Item -ItemType Directory -Force -Path $ResourceDir | Out-Null
-Copy-Item -Recurse $DistServerDir $TargetDir
 
 if ($Mode -eq "full") {
     $modulesDir = Join-Path $ProjectRoot "build\modules"
@@ -205,7 +182,7 @@ if ($Mode -eq "full") {
         Copy-Item -Recurse $modulesDir $targetModules
     }
 }
-Write-Host "  ✓ Resources copied" -ForegroundColor Green
+Write-Host "  Optional resources ready" -ForegroundColor Green
 
 # ── Phase 3: Tauri NSIS bundling ──────────────────────────
 Write-Host ""
