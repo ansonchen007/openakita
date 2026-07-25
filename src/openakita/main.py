@@ -448,14 +448,6 @@ async def start_im_channels(agent_or_master):
         or any(b.get("enabled", True) for b in (settings.im_bots or []))
     )
 
-    if not any_enabled:
-        logger.info("No IM channels enabled, SessionManager is still active for Desktop Chat")
-        _setup_session_backfill(agent_or_master)
-        if hasattr(agent_or_master, "_plugin_manager") and agent_or_master._plugin_manager:
-            if _session_manager is not None:
-                _session_manager._plugin_hooks = agent_or_master._plugin_manager.hook_registry
-        return
-
     enabled_bots = [
         bot
         for bot in (settings.im_bots or [])
@@ -473,19 +465,21 @@ async def start_im_channels(agent_or_master):
                 progress=progress,
             )
 
-    _report_progress({"phase": "checking"})
-
     channel_deps_result: dict = {}
-    try:
-        # Dependency installation uses blocking subprocess calls. Keep it off
-        # the API event loop so status polling remains responsive.
-        channel_deps_result = await asyncio.to_thread(_ensure_channel_deps, _report_progress)
-    except Exception as e:
-        logger.error(
-            f"IM channel dependency check failed ({type(e).__name__}: {e}), "
-            "continuing with adapter registration — individual adapters will "
-            "report their own import errors if deps are truly missing"
-        )
+    if any_enabled:
+        _report_progress({"phase": "checking"})
+        try:
+            # Dependency installation uses blocking subprocess calls. Keep it off
+            # the API event loop so status polling remains responsive.
+            channel_deps_result = await asyncio.to_thread(_ensure_channel_deps, _report_progress)
+        except Exception as e:
+            logger.error(
+                f"IM channel dependency check failed ({type(e).__name__}: {e}), "
+                "continuing with adapter registration — individual adapters will "
+                "report their own import errors if deps are truly missing"
+            )
+    else:
+        logger.info("No IM channels enabled; starting an empty MessageGateway for hot registration")
 
     for bot in enabled_bots:
         _set_im_bot_runtime_state(_bot_channel_name(bot), "starting")
@@ -831,28 +825,25 @@ async def start_im_channels(agent_or_master):
     # 设置 turn_loader 用于 session 崩溃恢复回填
     _setup_session_backfill(agent_or_master)
 
-    # 启动网关
-    if adapters_started:
-        await _message_gateway.start()
-        started = _message_gateway.get_started_adapters()
-        failed = _message_gateway.get_failed_adapters()
-        failed_reasons = _message_gateway.get_failed_adapter_reasons()
-        for bot in enabled_bots:
-            channel_name = _bot_channel_name(bot)
-            if channel_name in started:
-                _set_im_bot_runtime_state(channel_name, "online")
-            elif channel_name in failed:
-                _set_im_bot_runtime_state(
-                    channel_name,
-                    "error",
-                    failed_reasons.get(channel_name) or "Adapter failed to start",
-                )
-        if failed:
-            logger.warning(f"IM adapters failed to start: {', '.join(failed)}")
-        logger.info(f"MessageGateway started with adapters: {started}")
-        return started
-
-    return []
+    # 即使当前没有 adapter 也启动网关，确保运行期间新增的 Bot 可以热注册。
+    await _message_gateway.start()
+    started = _message_gateway.get_started_adapters()
+    failed = _message_gateway.get_failed_adapters()
+    failed_reasons = _message_gateway.get_failed_adapter_reasons()
+    for bot in enabled_bots:
+        channel_name = _bot_channel_name(bot)
+        if channel_name in started:
+            _set_im_bot_runtime_state(channel_name, "online")
+        elif channel_name in failed:
+            _set_im_bot_runtime_state(
+                channel_name,
+                "error",
+                failed_reasons.get(channel_name) or "Adapter failed to start",
+            )
+    if failed:
+        logger.warning(f"IM adapters failed to start: {', '.join(failed)}")
+    logger.info(f"MessageGateway started with adapters: {started}")
+    return started
 
 
 async def stop_im_channels(*, graceful: bool = True, drain_timeout: float = 30.0):
