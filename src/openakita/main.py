@@ -24,6 +24,13 @@ from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.table import Table
 
+# ``python -m openakita.main`` executes this file as ``__main__``. Register that
+# exact module object under its canonical name so late imports from API routes
+# share runtime globals such as ``_message_gateway`` instead of loading a copy.
+_executed_main = sys.modules.get("__main__")
+if __name__ == "__main__" and getattr(_executed_main, "__dict__", None) is globals():
+    sys.modules["openakita.main"] = _executed_main
+
 from .agent.core import Agent
 from .config import settings
 from .logging import setup_logging

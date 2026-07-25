@@ -1578,25 +1578,33 @@ fn python_tuple_literal(values: &[&str]) -> String {
     }
 }
 
+const CANONICAL_BACKEND_ENTRYPOINT: &str =
+    "from openakita.main import app as openakita_app; openakita_app()";
+
+fn canonical_backend_args() -> Vec<String> {
+    vec![
+        "-u".into(),
+        "-c".into(),
+        CANONICAL_BACKEND_ENTRYPOINT.into(),
+        "serve".into(),
+    ]
+}
+
 fn runtime_venv_backend_args(venv_dir: &Path) -> Vec<String> {
     if cfg!(windows) && runtime_venv_home_python_path(venv_dir).is_some() {
         if let Some(site_packages) = runtime_venv_site_packages_dir(venv_dir) {
             let venv_python = runtime_venv_python_path(venv_dir);
             let code = format!(
-                "import runpy, site, sys; sys.prefix = sys.exec_prefix = {}; sys.executable = {}; site.addsitedir({}); runpy.run_module('openakita.main', run_name='__main__')",
+                "import site, sys; sys.prefix = sys.exec_prefix = {}; sys.executable = {}; site.addsitedir({}); {}",
                 python_string_literal(venv_dir),
                 python_string_literal(&venv_python),
-                python_string_literal(&site_packages)
+                python_string_literal(&site_packages),
+                CANONICAL_BACKEND_ENTRYPOINT,
             );
             return vec!["-u".into(), "-c".into(), code, "serve".into()];
         }
     }
-    vec![
-        "-u".into(),
-        "-m".into(),
-        "openakita.main".into(),
-        "serve".into(),
-    ]
+    canonical_backend_args()
 }
 
 fn runtime_venv_backend_python_path(venv_dir: &Path) -> PathBuf {
@@ -2964,10 +2972,7 @@ fn get_backend_executable(venv_dir: &str) -> (PathBuf, Vec<String>) {
         venv_dir,
     );
     let py = venv_pythonw_path(venv_dir);
-    (
-        py,
-        vec!["-m".into(), "openakita.main".into(), "serve".into()],
-    )
+    (py, canonical_backend_args())
 }
 
 /// 构建可选模块路径字符串（自动从 module_definitions 获取模块列表）
@@ -11481,6 +11486,16 @@ fn open_external_url(url: String) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn backend_entrypoint_imports_one_canonical_main_module() {
+        let args = canonical_backend_args();
+        assert_eq!(args[0], "-u");
+        assert_eq!(args[1], "-c");
+        assert!(args[2].contains("from openakita.main import app"));
+        assert!(!args[2].contains("runpy"));
+        assert_eq!(args[3], "serve");
+    }
 
     #[test]
     fn bootstrap_wheelhouse_uses_dependency_directory() {
