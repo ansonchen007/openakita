@@ -1295,7 +1295,7 @@ class PluginManager:
                     e,
                 )
 
-    async def unload_plugin(self, plugin_id: str) -> bool:
+    async def unload_plugin(self, plugin_id: str, *, collect_garbage: bool = True) -> bool:
         # Clear any prior failure record. Both "previously loaded then
         # unloaded" and "never successfully loaded" must drop the
         # ``_failed`` entry — otherwise stale errors keep showing in the
@@ -1353,16 +1353,11 @@ class PluginManager:
             except ValueError:
                 pass
 
-        # 4. Force GC — some C-extensions (sqlite3, ssl) only release OS
-        #    handles when their Python wrapper is collected. We do TWO passes
-        #    with a brief yield in between because aiosqlite + httpx tend to
-        #    have one layer of cyclic refs through their connection pools.
-        try:
-            gc.collect()
-            await asyncio.sleep(0)
-            gc.collect()
-        except Exception:
-            pass
+        # 4. Force GC for standalone unloads. Batch shutdown defers this to one
+        #    shared pass after every plugin has released its resources; running
+        #    full-heap GC concurrently per plugin is both redundant and slow.
+        if collect_garbage:
+            await self._collect_plugin_garbage()
 
         self._unload_plugin_skills(loaded)
         self._unmount_plugin_ui(plugin_id)
@@ -1381,6 +1376,16 @@ class PluginManager:
 
         logger.info("Plugin '%s' unloaded", plugin_id)
         return True
+
+    @staticmethod
+    async def _collect_plugin_garbage() -> None:
+        """Run the two-pass collection needed by cyclic SQLite/HTTP wrappers."""
+        try:
+            gc.collect()
+            await asyncio.sleep(0)
+            gc.collect()
+        except Exception:
+            pass
 
     @staticmethod
     async def _cancel_stray_plugin_tasks(plugin_id: str, loaded: _LoadedPlugin) -> None:
@@ -1757,7 +1762,8 @@ class PluginManager:
             async with sem:
                 try:
                     return await asyncio.wait_for(
-                        self.unload_plugin(pid), timeout=per_plugin_timeout_s
+                        self.unload_plugin(pid, collect_garbage=False),
+                        timeout=per_plugin_timeout_s,
                     )
                 except TimeoutError:
                     logger.warning(
@@ -1775,6 +1781,7 @@ class PluginManager:
                     return False
 
         results = await asyncio.gather(*[_one(pid) for pid in plugin_ids])
+        await self._collect_plugin_garbage()
         return sum(1 for r in results if r)
 
     async def shutdown(self, *, unload_plugins: bool = True) -> None:

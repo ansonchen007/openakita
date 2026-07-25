@@ -114,6 +114,24 @@ def _make_aiosqlite_plugin(base, plugin_id: str) -> None:
 
 
 class TestUnloadAllAiosqlite:
+    async def test_unload_all_runs_one_shared_garbage_collection(self, tmp_path, monkeypatch):
+        mgr = PluginManager(tmp_path / "plugins", state_path=tmp_path / "state.json")
+        mgr._loaded = {f"plugin-{i}": object() for i in range(3)}
+        collect_flags: list[bool] = []
+        gc_calls: list[bool] = []
+
+        async def fake_unload(plugin_id: str, *, collect_garbage: bool = True) -> bool:
+            collect_flags.append(collect_garbage)
+            mgr._loaded.pop(plugin_id)
+            return True
+
+        monkeypatch.setattr(mgr, "unload_plugin", fake_unload)
+        monkeypatch.setattr("openakita.plugins.manager.gc.collect", lambda: gc_calls.append(True))
+
+        assert await mgr.unload_all_plugins() == 3
+        assert collect_flags == [False, False, False]
+        assert gc_calls == [True, True]
+
     async def test_unload_all_closes_aiosqlite_worker_threads(self, tmp_path):
         """Every plugin's ``on_unload`` must run so its aiosqlite worker exits.
 
