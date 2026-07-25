@@ -17,14 +17,16 @@ try {
 } finally { Pop-Location }
 
 Write-Host "[2/3] Preparing managed Python runtime..." -ForegroundColor Yellow
-uv run --no-sync python "$ScriptDir\prepare_bootstrap_resources.py"
+uv run --no-sync python "$ScriptDir\prepare_bootstrap_resources.py" --commit-resources --target-platform win-x64 --require-python-seed
 if ($LASTEXITCODE -ne 0) { throw "Bootstrap resource preparation failed" }
 
 Write-Host "[3/3] Building Tauri app..." -ForegroundColor Yellow
 Push-Location $SetupCenterDir
 try {
-    npm run tauri build
+    npx tauri build --bundles nsis --config src-tauri/tauri.local-build.conf.json
     if ($LASTEXITCODE -ne 0) { throw "Tauri build failed" }
-} finally { Pop-Location }
+} finally {
+    Pop-Location
+}
 
 Write-Host "Desktop package build completed." -ForegroundColor Green

@@ -323,6 +323,7 @@ def _runtime_bot_view(bot: dict, detail: dict | None, gateway=None) -> dict:
         )
     result["runtime_status"] = runtime_status
     result["runtime_error"] = runtime.get("error")
+    result["runtime_progress"] = runtime.get("progress")
     return result
 
 

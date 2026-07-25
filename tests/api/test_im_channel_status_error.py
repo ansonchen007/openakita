@@ -73,6 +73,13 @@ async def test_channel_list_exposes_dependency_install_state(monkeypatch):
         lambda channel, _gateway=None: {
             "status": "installing_dependencies" if channel == "feishu:feishu-test" else "unknown",
             "error": None,
+            "progress": {
+                "phase": "downloading",
+                "percent": 37.5,
+                "current_package": "lark-oapi",
+            }
+            if channel == "feishu:feishu-test"
+            else None,
         },
     )
     monkeypatch.setattr(
@@ -105,4 +112,6 @@ async def test_channel_list_exposes_dependency_install_state(monkeypatch):
         item for item in response.json()["channels"] if item["channel"] == "feishu:feishu-test"
     )
     assert channel["status"] == "installing_dependencies"
+    assert channel["progress"]["percent"] == 37.5
+    assert channel["progress"]["current_package"] == "lark-oapi"
     assert "error" not in channel

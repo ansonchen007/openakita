@@ -17,7 +17,10 @@ npm run build:web
 
 echo "[2/4] Preparing managed Python runtime..."
 cd "$PROJECT_ROOT"
-uv run --no-sync python "$SCRIPT_DIR/prepare_bootstrap_resources.py"
+uv run --no-sync python "$SCRIPT_DIR/prepare_bootstrap_resources.py" \
+    --commit-resources \
+    --auto-detect-target-platform \
+    --require-python-seed
 
 echo "[3/4] Pre-bundling optional modules..."
 uv run --no-sync python "$SCRIPT_DIR/bundle_modules.py"

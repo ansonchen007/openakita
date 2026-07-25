@@ -3,7 +3,9 @@ from __future__ import annotations
 import sys
 
 from openakita.runtime_channel_deps import (
+    _parse_pip_progress_line,
     _purge_incompatible_websockets,
+    _run_pip_command,
     ensure_channel_dependencies,
 )
 
@@ -69,6 +71,82 @@ def test_purge_incompatible_websockets_missing_dir_is_noop(tmp_path):
     """目标目录不存在时不应抛错，返回空列表。"""
     removed = _purge_incompatible_websockets(tmp_path / "does-not-exist")
     assert removed == []
+
+
+def test_pip_raw_progress_exposes_current_download_eta(monkeypatch):
+    clock = iter([100.0, 102.0])
+    monkeypatch.setattr(
+        "openakita.runtime_channel_deps.time.monotonic", lambda: next(clock)
+    )
+    state: dict = {"current_package": "lark-oapi"}
+
+    started = _parse_pip_progress_line(
+        "Downloading https://example.test/lark_oapi.whl (10 MB)", state
+    )
+    progress = _parse_pip_progress_line("Progress 50 of 100", state)
+
+    assert started == {
+        "phase": "downloading",
+        "current_package": "lark-oapi",
+        "current_artifact": "lark_oapi.whl",
+    }
+    assert progress is not None
+    assert progress["percent"] == 50.0
+    assert progress["eta_seconds"] == 2
+    assert progress["percent_scope"] == "current_download"
+
+
+def test_pip_installing_phase_clears_stale_package_and_reports_batch_size():
+    state = {"current_package": "typing_extensions"}
+
+    progress = _parse_pip_progress_line(
+        "Installing collected packages: certifi, typing_extensions, lark-oapi",
+        state,
+    )
+
+    assert progress == {
+        "phase": "installing",
+        "current_package": None,
+        "package_count": 3,
+        "installing_packages": ["certifi", "typing_extensions", "lark-oapi"],
+    }
+    assert state["current_package"] is None
+
+
+def test_streaming_pip_runner_reports_intermediate_phases():
+    updates: list[dict] = []
+    command = [
+        sys.executable,
+        "-c",
+        (
+            "print('Collecting lark-oapi', flush=True); "
+            "print('Downloading https://example.test/lark.whl (100 bytes)', flush=True); "
+            "print('Progress 100 of 100', flush=True); "
+            "print('Installing collected packages: lark-oapi', flush=True); "
+            "print('Successfully installed lark-oapi', flush=True)"
+        ),
+    ]
+
+    result = _run_pip_command(
+        command,
+        env={},
+        timeout=10,
+        extra={},
+        progress_fn=updates.append,
+        packages=["lark-oapi"],
+        source_label="test source",
+    )
+
+    assert result.returncode == 0
+    assert {update["phase"] for update in updates} >= {
+        "resolving",
+        "downloading",
+        "installing",
+        "complete",
+    }
+    installing = next(update for update in updates if update["phase"] == "installing")
+    assert installing["current_package"] is None
+    assert installing["package_count"] == 1
 
 
 def test_ensure_channel_deps_returns_install_errors(monkeypatch, tmp_path):

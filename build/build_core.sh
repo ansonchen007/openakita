@@ -16,7 +16,10 @@ npm run build:web
 
 echo "[2/3] Preparing managed Python runtime..."
 cd "$PROJECT_ROOT"
-uv run --no-sync python "$SCRIPT_DIR/prepare_bootstrap_resources.py"
+uv run --no-sync python "$SCRIPT_DIR/prepare_bootstrap_resources.py" \
+    --commit-resources \
+    --auto-detect-target-platform \
+    --require-python-seed
 
 echo "[3/3] Building Tauri app..."
 cd "$SETUP_CENTER_DIR"

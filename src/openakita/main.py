@@ -155,7 +155,7 @@ async def _init_orchestrator():
         logger.warning(f"[Main] Failed to deploy presets on orchestrator init: {e}")
 
 
-def _ensure_channel_deps() -> dict:
+def _ensure_channel_deps(progress_fn=None) -> dict:
     """检查已启用 IM 通道依赖，并安装到隔离 channel-deps 目录。
 
     返回 ``ensure_channel_dependencies`` 的结果字典，调用方可以读 ``errors``
@@ -164,7 +164,7 @@ def _ensure_channel_deps() -> dict:
     """
     from openakita.runtime_channel_deps import ensure_channel_dependencies
 
-    return ensure_channel_dependencies(print_fn=console.print) or {}
+    return ensure_channel_dependencies(print_fn=console.print, progress_fn=progress_fn) or {}
 
 
 def _create_bot_adapter(
@@ -194,11 +194,16 @@ def get_message_gateway():
     return _message_gateway
 
 
-def _set_im_bot_runtime_state(channel_name: str, status: str, error: str | None = None) -> None:
+def _set_im_bot_runtime_state(
+    channel_name: str,
+    status: str,
+    error: str | None = None,
+    progress: dict | None = None,
+) -> None:
     """Record and broadcast the authoritative runtime state for one bot."""
     from openakita.channels.runtime_status import set_bot_runtime_state
 
-    set_bot_runtime_state(channel_name, status, error)
+    set_bot_runtime_state(channel_name, status, error, progress)
 
     try:
         from openakita.api.routes.websocket import broadcast_event
@@ -206,14 +211,19 @@ def _set_im_bot_runtime_state(channel_name: str, status: str, error: str | None 
         asyncio.get_running_loop().create_task(
             broadcast_event(
                 "im:channel_status",
-                {"channel": channel_name, "status": status, "error": error},
+                {
+                    "channel": channel_name,
+                    "status": status,
+                    "error": error,
+                    "progress": progress,
+                },
             )
         )
     except (RuntimeError, ImportError):
         pass
 
 
-def get_im_bot_runtime_state(channel_name: str) -> dict[str, str | None]:
+def get_im_bot_runtime_state(channel_name: str) -> dict:
     """Return one normalized state shared by all IM status APIs."""
     from openakita.channels.runtime_status import resolve_bot_runtime_state
 
@@ -245,9 +255,18 @@ async def apply_im_bot(bot_cfg: dict) -> bool:
     agent_id = bot_cfg.get("agent_profile_id", "default")
     creds = bot_cfg.get("credentials", {})
     channel_name = _bot_channel_name(bot_cfg)
-    _set_im_bot_runtime_state(channel_name, "installing_dependencies")
+    install_started_at = time.time()
+
+    def _report_progress(update: dict) -> None:
+        _set_im_bot_runtime_state(
+            channel_name,
+            "installing_dependencies",
+            progress={"started_at": install_started_at, **update},
+        )
+
+    _report_progress({"phase": "checking"})
     try:
-        deps_result = await asyncio.to_thread(_ensure_channel_deps)
+        deps_result = await asyncio.to_thread(_ensure_channel_deps, _report_progress)
         install_errors = deps_result.get("errors") if deps_result else None
         if install_errors:
             _message_gateway.set_channel_install_errors(install_errors)
@@ -442,14 +461,25 @@ async def start_im_channels(agent_or_master):
         for bot in (settings.im_bots or [])
         if isinstance(bot, dict) and bot.get("enabled", True)
     ]
-    for bot in enabled_bots:
-        _set_im_bot_runtime_state(_bot_channel_name(bot), "installing_dependencies")
+    enabled_bot_channels = [_bot_channel_name(bot) for bot in enabled_bots]
+    install_started_at = time.time()
+
+    def _report_progress(update: dict) -> None:
+        progress = {"started_at": install_started_at, **update}
+        for channel_name in enabled_bot_channels:
+            _set_im_bot_runtime_state(
+                channel_name,
+                "installing_dependencies",
+                progress=progress,
+            )
+
+    _report_progress({"phase": "checking"})
 
     channel_deps_result: dict = {}
     try:
         # Dependency installation uses blocking subprocess calls. Keep it off
         # the API event loop so status polling remains responsive.
-        channel_deps_result = await asyncio.to_thread(_ensure_channel_deps)
+        channel_deps_result = await asyncio.to_thread(_ensure_channel_deps, _report_progress)
     except Exception as e:
         logger.error(
             f"IM channel dependency check failed ({type(e).__name__}: {e}), "

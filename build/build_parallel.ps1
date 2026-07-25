@@ -112,7 +112,7 @@ if (-not $SkipBootstrap) {
         param($root, $scriptDir, $uv)
         Set-Location $root
         $ErrorActionPreference = "Continue"
-        & $uv run --no-sync python "$scriptDir\prepare_bootstrap_resources.py" 2>&1
+        & $uv run --no-sync python "$scriptDir\prepare_bootstrap_resources.py" --commit-resources --target-platform win-x64 --require-python-seed 2>&1
         if ($LASTEXITCODE -ne 0) { throw "Bootstrap resources failed (exit $LASTEXITCODE)" }
     } -ArgumentList $ProjectRoot, $ScriptDir, $uvCmd
     Write-Host "  -> [C] Bootstrap resources            (Job: $($jobBootstrap.Id))"
@@ -192,7 +192,7 @@ Push-Location $SetupCenter
 try {
     $env:CI = $null
     # Skip frontend build (already done), Rust binary is cached
-    npx tauri build --bundles nsis --config '{\"build\":{\"beforeBuildCommand\":\"\"}}'
+    npx tauri build --bundles nsis --config src-tauri/tauri.local-parallel-build.conf.json
     if ($LASTEXITCODE -ne 0) { throw "Tauri build failed" }
 } finally {
     Pop-Location

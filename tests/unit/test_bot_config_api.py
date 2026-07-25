@@ -94,6 +94,7 @@ def test_runtime_bot_view_exposes_dependency_install_state(monkeypatch) -> None:
         lambda _channel, _gateway=None: {
             "status": "installing_dependencies",
             "error": None,
+            "progress": {"phase": "downloading", "percent": 64.0},
         },
     )
 
@@ -115,3 +116,4 @@ def test_runtime_bot_view_exposes_dependency_install_state(monkeypatch) -> None:
     assert view["runtime_status"] == "installing_dependencies"
     assert view["runtime_seen"] is True
     assert view["runtime_error"] is None
+    assert view["runtime_progress"] == {"phase": "downloading", "percent": 64.0}

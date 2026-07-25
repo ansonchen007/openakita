@@ -147,6 +147,8 @@ async def list_channels(request: Request):
         runtime_error = runtime.get("error")
         if runtime_error:
             entry["error"] = format_user_friendly_error(str(runtime_error))
+        if runtime.get("progress"):
+            entry["progress"] = runtime["progress"]
         channels.append(entry)
 
     seen_channels = {str(c.get("channel") or "") for c in channels}
@@ -180,6 +182,8 @@ async def list_channels(request: Request):
         }
         if runtime.get("error"):
             entry["error"] = format_user_friendly_error(str(runtime["error"]))
+        if runtime.get("progress"):
+            entry["progress"] = runtime["progress"]
         channels.append(entry)
         seen_channels.add(channel)
 

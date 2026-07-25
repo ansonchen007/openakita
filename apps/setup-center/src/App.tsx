@@ -828,7 +828,7 @@ function MainApp() {
     consecutiveFailures: number; cooldownRemaining: number; isExtendedCooldown: boolean; lastCheckedAt: string | null;
   }>>({});
   const [imHealth, setImHealth] = useState<Record<string, {
-    status: string; error: string | null; lastCheckedAt: string | null;
+    status: string; error: string | null; lastCheckedAt: string | null; progress?: { percent?: number | null } | null;
   }>>({});
   const {
     envDraft, setEnvDraft,
@@ -2675,10 +2675,10 @@ function MainApp() {
           const imRes = await safeFetch(`${effectiveApiBaseUrl}/api/im/channels`, { signal: AbortSignal.timeout(5000) });
           const imData = await imRes.json();
           const channels = imData.channels || [];
-          const h: Record<string, { status: string; error: string | null; lastCheckedAt: string | null }> = {};
+          const h: Record<string, { status: string; error: string | null; lastCheckedAt: string | null; progress?: { percent?: number | null } | null }> = {};
           for (const c of channels) {
             const key = c.channel || c.name;
-            const val = { status: c.status || "unknown", error: c.error || null, lastCheckedAt: c.last_checked_at || null };
+            const val = { status: c.status || "unknown", error: c.error || null, lastCheckedAt: c.last_checked_at || null, progress: c.progress || null };
             h[key] = val;
             const ctype = c.channel_type || key;
             if (ctype !== key) {
@@ -2770,10 +2770,10 @@ function MainApp() {
           const imRes = await safeFetch(`${effectiveApiBaseUrl}/api/im/channels`, { signal: AbortSignal.timeout(5000) });
           const imData = await imRes.json();
           const channels = imData.channels || [];
-          const h: Record<string, { status: string; error: string | null; lastCheckedAt: string | null }> = {};
+          const h: Record<string, { status: string; error: string | null; lastCheckedAt: string | null; progress?: { percent?: number | null } | null }> = {};
           for (const c of channels) {
             const key = c.channel || c.name;
-            const val = { status: c.status || "unknown", error: c.error || null, lastCheckedAt: c.last_checked_at || null };
+            const val = { status: c.status || "unknown", error: c.error || null, lastCheckedAt: c.last_checked_at || null, progress: c.progress || null };
             h[key] = val;
             const ctype = c.channel_type || key;
             if (ctype !== key) {

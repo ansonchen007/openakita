@@ -6,19 +6,30 @@ from typing import Any
 
 _states: dict[str, str] = {}
 _errors: dict[str, str] = {}
+_progress: dict[str, dict[str, Any]] = {}
 
 
-def set_bot_runtime_state(channel: str, status: str, error: str | None = None) -> None:
+def set_bot_runtime_state(
+    channel: str,
+    status: str,
+    error: str | None = None,
+    progress: dict[str, Any] | None = None,
+) -> None:
     _states[channel] = status
     if error:
         _errors[channel] = error
     elif status != "error":
         _errors.pop(channel, None)
+    if status == "installing_dependencies" and progress is not None:
+        _progress[channel] = dict(progress)
+    elif status != "installing_dependencies":
+        _progress.pop(channel, None)
 
 
 def clear_bot_runtime_state(channel: str) -> None:
     _states.pop(channel, None)
     _errors.pop(channel, None)
+    _progress.pop(channel, None)
 
 
 def resolve_bot_runtime_state(channel: str, gateway: Any | None = None) -> dict[str, str | None]:
@@ -42,7 +53,10 @@ def resolve_bot_runtime_state(channel: str, gateway: Any | None = None) -> dict[
     if error:
         return {"status": "error", "error": error}
     if status in {"installing_dependencies", "starting"}:
-        return {"status": status, "error": None}
+        result: dict[str, Any] = {"status": status, "error": None}
+        if status == "installing_dependencies" and channel in _progress:
+            result["progress"] = dict(_progress[channel])
+        return result
     if adapter is not None:
         return {"status": "offline", "error": None}
     return {"status": status or "unknown", "error": None}

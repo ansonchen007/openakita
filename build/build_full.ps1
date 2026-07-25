@@ -17,7 +17,7 @@ try {
 } finally { Pop-Location }
 
 Write-Host "[2/4] Preparing managed Python runtime..." -ForegroundColor Yellow
-uv run --no-sync python "$ScriptDir\prepare_bootstrap_resources.py"
+uv run --no-sync python "$ScriptDir\prepare_bootstrap_resources.py" --commit-resources --target-platform win-x64 --require-python-seed
 if ($LASTEXITCODE -ne 0) { throw "Bootstrap resource preparation failed" }
 
 Write-Host "[3/4] Pre-bundling optional modules..." -ForegroundColor Yellow
@@ -31,11 +31,9 @@ if (Test-Path $ModulesDir) { Copy-Item -Recurse $ModulesDir $TargetModulesDir }
 Write-Host "[4/4] Building Tauri app..." -ForegroundColor Yellow
 Push-Location $SetupCenterDir
 try {
-    $env:TAURI_CONFIG = '{"bundle":{"resources":["resources/bootstrap/","resources/modules/"]}}'
-    npx tauri build
+    npx tauri build --bundles nsis --config src-tauri/tauri.local-full-build.conf.json
     if ($LASTEXITCODE -ne 0) { throw "Tauri build failed" }
 } finally {
-    $env:TAURI_CONFIG = $null
     Pop-Location
 }
 

@@ -11,7 +11,22 @@ PREPARE = ROOT / ".github" / "actions" / "desktop-build-prepare" / "action.yml"
 CI = ROOT / ".github" / "workflows" / "ci.yml"
 PUBLISH = ROOT / ".github" / "workflows" / "publish-release.yml"
 TAURI_CONFIG = ROOT / "apps" / "setup-center" / "src-tauri" / "tauri.conf.json"
+LOCAL_TAURI_CONFIG = (
+    ROOT / "apps" / "setup-center" / "src-tauri" / "tauri.local-build.conf.json"
+)
+LOCAL_FULL_TAURI_CONFIG = (
+    ROOT / "apps" / "setup-center" / "src-tauri" / "tauri.local-full-build.conf.json"
+)
+LOCAL_PARALLEL_TAURI_CONFIG = (
+    ROOT / "apps" / "setup-center" / "src-tauri" / "tauri.local-parallel-build.conf.json"
+)
 FULL_BUILD_SCRIPTS = (ROOT / "build" / "build_full.ps1", ROOT / "build" / "build_full.sh")
+WINDOWS_BUILD_SCRIPTS = (
+    ROOT / "build" / "build_core.ps1",
+    ROOT / "build" / "build_full.ps1",
+    ROOT / "build" / "build_parallel.ps1",
+)
+POSIX_BUILD_SCRIPTS = (ROOT / "build" / "build_core.sh", ROOT / "build" / "build_full.sh")
 
 
 def test_release_workflows_never_clobber_existing_assets() -> None:
@@ -109,6 +124,33 @@ def test_full_builds_compile_each_frontend_target_once() -> None:
         assert source.count("npm run build:web") == 1
         assert "prepare_bootstrap_resources.py" in source
         assert "build_backend.py" not in source
+
+
+def test_local_builds_package_a_required_python_seed() -> None:
+    for path in WINDOWS_BUILD_SCRIPTS:
+        source = path.read_text(encoding="utf-8")
+        assert "--commit-resources" in source
+        assert "--target-platform win-x64" in source
+        assert "--require-python-seed" in source
+        assert "--bundles nsis" in source
+
+    core_config = json.loads(LOCAL_TAURI_CONFIG.read_text(encoding="utf-8"))
+    full_config = json.loads(LOCAL_FULL_TAURI_CONFIG.read_text(encoding="utf-8"))
+    parallel_config = json.loads(LOCAL_PARALLEL_TAURI_CONFIG.read_text(encoding="utf-8"))
+    assert core_config["bundle"]["createUpdaterArtifacts"] is False
+    assert full_config["bundle"]["createUpdaterArtifacts"] is False
+    assert parallel_config["bundle"]["createUpdaterArtifacts"] is False
+    assert parallel_config["build"]["beforeBuildCommand"] == ""
+    assert full_config["bundle"]["resources"] == [
+        "resources/bootstrap/",
+        "resources/modules/",
+    ]
+
+    for path in POSIX_BUILD_SCRIPTS:
+        source = path.read_text(encoding="utf-8")
+        assert "--commit-resources" in source
+        assert "--auto-detect-target-platform" in source
+        assert "--require-python-seed" in source
 
 
 def test_ci_full_build_parallelizes_independent_packagers() -> None:
