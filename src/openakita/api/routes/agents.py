@@ -22,6 +22,7 @@ router = APIRouter()
 
 _deleting_bot_ids: set[str] = set()
 _deleting_lock = asyncio.Lock()
+_bot_apply_tasks: set[asyncio.Task[None]] = set()
 
 AGENT_ICON_MAX_SIZE = 4 * 1024 * 1024
 AGENT_ICON_MAX_FIELD_LENGTH = 1000
@@ -327,6 +328,47 @@ def _runtime_bot_view(bot: dict, detail: dict | None, gateway=None) -> dict:
     return result
 
 
+def _schedule_bot_apply(bot: dict) -> None:
+    """Start one persisted bot in the background and expose progress via runtime state."""
+    from openakita.main import (
+        _bot_channel_name,
+        _set_im_bot_runtime_state,
+        apply_im_bot,
+        get_im_bot_runtime_error,
+    )
+
+    bot_snapshot = dict(bot)
+    channel_name = _bot_channel_name(bot_snapshot)
+    _set_im_bot_runtime_state(channel_name, "starting")
+
+    async def _apply() -> None:
+        applied = await apply_im_bot(bot_snapshot)
+        if not applied and not get_im_bot_runtime_error(channel_name):
+            _set_im_bot_runtime_state(
+                channel_name,
+                "error",
+                "The IM runtime is not available to start this bot",
+            )
+
+    task = asyncio.create_task(_apply(), name=f"apply-im-bot:{channel_name}")
+    _bot_apply_tasks.add(task)
+
+    def _finish(done: asyncio.Task[None]) -> None:
+        _bot_apply_tasks.discard(done)
+        if done.cancelled():
+            return
+        error = done.exception()
+        if error is not None:
+            _set_im_bot_runtime_state(channel_name, "error", str(error))
+            logger.error(
+                "[Agents API] Background bot startup failed: %s",
+                channel_name,
+                exc_info=(type(error), error, error.__traceback__),
+            )
+
+    task.add_done_callback(_finish)
+
+
 # ─── Bot CRUD routes ─────────────────────────────────────────────────────
 
 
@@ -355,7 +397,7 @@ async def list_bots():
 
 @router.post("/api/agents/bots")
 async def create_bot(body: BotCreateRequest):
-    """Add a new bot. Validates id uniqueness and type."""
+    """Persist a new bot and accept its runtime startup as background work."""
     from openakita.config import runtime_state, settings
 
     if body.id.strip() == "":
@@ -387,18 +429,11 @@ async def create_bot(body: BotCreateRequest):
     runtime_state.save()
 
     if bot.get("enabled", True):
-        from openakita.main import apply_im_bot, get_im_bot_runtime_error
-
-        applied = await apply_im_bot(bot)
-        runtime_error = get_im_bot_runtime_error(f"{body.type}:{body.id}")
-        if not applied and runtime_error:
-            settings.im_bots = previous_bots
-            runtime_state.save()
-            raise HTTPException(status_code=502, detail=f"Failed to start bot: {runtime_error}")
+        _schedule_bot_apply(bot)
 
     logger.info(f"[Agents API] Created bot: {body.id}")
 
-    return {"status": "ok", "bot": _mask_bot_credentials(bot)}
+    return {"status": "accepted", "bot": _mask_bot_credentials(bot)}
 
 
 @router.put("/api/agents/bots/{bot_id}")

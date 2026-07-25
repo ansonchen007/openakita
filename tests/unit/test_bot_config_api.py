@@ -1,3 +1,4 @@
+import asyncio
 import sys
 from types import ModuleType, SimpleNamespace
 
@@ -6,6 +7,7 @@ from fastapi import HTTPException
 
 from openakita.api.routes.agents import (
     BotCreateRequest,
+    _bot_apply_tasks,
     _runtime_bot_view,
     _validate_bot_credentials,
     create_bot,
@@ -21,13 +23,18 @@ def test_wework_ws_requires_all_credentials() -> None:
 
 
 @pytest.mark.asyncio
-async def test_create_bot_rolls_back_when_runtime_start_fails(monkeypatch) -> None:
+async def test_create_bot_returns_before_runtime_start_and_keeps_failed_config(monkeypatch) -> None:
     import openakita.config as config
 
     original_bots = config.settings.im_bots
     saves: list[list[dict]] = []
+    runtime_states: list[tuple[str, str, str | None]] = []
+    startup_started = asyncio.Event()
+    finish_startup = asyncio.Event()
 
     async def fail_apply(_bot: dict) -> bool:
+        startup_started.set()
+        await finish_startup.wait()
         return False
 
     monkeypatch.setattr(config.settings, "im_bots", [], raising=False)
@@ -36,25 +43,44 @@ async def test_create_bot_rolls_back_when_runtime_start_fails(monkeypatch) -> No
     )
     main_stub = ModuleType("openakita.main")
     main_stub.apply_im_bot = fail_apply
-    main_stub.get_im_bot_runtime_error = lambda _channel: "authentication rejected"
+    main_stub.get_im_bot_runtime_error = lambda _channel: None
+    main_stub._bot_channel_name = lambda bot: f"{bot['type']}:{bot['id']}"
+    main_stub._set_im_bot_runtime_state = (
+        lambda channel, status, error=None: runtime_states.append((channel, status, error))
+    )
     monkeypatch.setitem(sys.modules, "openakita.main", main_stub)
 
     try:
-        with pytest.raises(HTTPException) as exc_info:
-            await create_bot(
-                BotCreateRequest(
-                    id="warehouse",
-                    type="wework_ws",
-                    credentials={"bot_id": "bot-1", "secret": "secret-1"},
-                )
+        response = await create_bot(
+            BotCreateRequest(
+                id="warehouse",
+                type="wework_ws",
+                credentials={"bot_id": "bot-1", "secret": "secret-1"},
             )
+        )
 
-        assert exc_info.value.status_code == 502
-        assert config.settings.im_bots == []
-        assert len(saves) == 2
+        assert response["status"] == "accepted"
+        assert config.settings.im_bots[0]["id"] == "warehouse"
+        assert len(saves) == 1
         assert saves[0][0]["id"] == "warehouse"
-        assert saves[1] == []
+        assert runtime_states == [("wework_ws:warehouse", "starting", None)]
+
+        await asyncio.wait_for(startup_started.wait(), timeout=1)
+        assert _bot_apply_tasks
+
+        finish_startup.set()
+        await asyncio.gather(*tuple(_bot_apply_tasks))
+
+        assert config.settings.im_bots[0]["id"] == "warehouse"
+        assert runtime_states[-1] == (
+            "wework_ws:warehouse",
+            "error",
+            "The IM runtime is not available to start this bot",
+        )
     finally:
+        finish_startup.set()
+        if _bot_apply_tasks:
+            await asyncio.gather(*tuple(_bot_apply_tasks), return_exceptions=True)
         config.settings.im_bots = original_bots
 
 
