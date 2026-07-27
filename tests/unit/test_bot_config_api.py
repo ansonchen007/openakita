@@ -18,12 +18,52 @@ from openakita.api.routes.agents import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _default_profile_store(monkeypatch):
+    """Keep bot lifecycle tests independent from profiles persisted on the host."""
+    from openakita.agents import profile as profile_module
+
+    default_profile = SimpleNamespace(id="default")
+    store = SimpleNamespace(
+        get=lambda profile_id: default_profile if profile_id == "default" else None
+    )
+    monkeypatch.setattr(profile_module, "get_profile_store", lambda: store)
+
+
 def test_wework_ws_requires_all_credentials() -> None:
     with pytest.raises(HTTPException) as exc_info:
         _validate_bot_credentials("wework_ws", {"bot_id": "bot-1"})
 
     assert exc_info.value.status_code == 400
     assert "secret" in exc_info.value.detail
+
+
+@pytest.mark.asyncio
+async def test_create_bot_rejects_unknown_agent_profile(monkeypatch) -> None:
+    import openakita.config as config
+    from openakita.agents import profile as profile_module
+
+    monkeypatch.setattr(config.settings, "im_bots", [], raising=False)
+    monkeypatch.setattr(
+        profile_module,
+        "get_profile_store",
+        lambda: SimpleNamespace(get=lambda _profile_id: None),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await create_bot(
+            BotCreateRequest(
+                id="warehouse",
+                type="wework_ws",
+                agent_profile_id="missing",
+                enabled=False,
+                credentials={},
+            ),
+            SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace())),
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "missing" in exc_info.value.detail
 
 
 @pytest.mark.asyncio
