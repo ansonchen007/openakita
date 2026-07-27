@@ -1,10 +1,96 @@
 from __future__ import annotations
 
 import json
+import threading
+from types import SimpleNamespace
 
 import pytest
 
+from openakita.llm.client import LLMClient
 from openakita.llm.endpoint_manager import EndpointManager
+
+
+def test_separate_managers_do_not_lose_concurrent_endpoint_saves(tmp_path, monkeypatch):
+    config_path = tmp_path / "data" / "llm_endpoints.json"
+    first_manager = EndpointManager(tmp_path, config_path=config_path)
+    second_manager = EndpointManager(tmp_path, config_path=config_path)
+    first_before_write = threading.Event()
+    second_finished = threading.Event()
+    original_write = first_manager._write_json
+
+    def delayed_first_write(data):
+        first_before_write.set()
+        second_finished.wait(timeout=0.2)
+        original_write(data)
+
+    monkeypatch.setattr(first_manager, "_write_json", delayed_first_write)
+
+    def save_first():
+        first_manager.save_endpoint(
+            {"name": "first", "provider": "openai", "model": "a", "priority": 10}
+        )
+
+    def save_second():
+        second_manager.save_endpoint(
+            {"name": "second", "provider": "openai", "model": "b", "priority": 20}
+        )
+        second_finished.set()
+
+    first_thread = threading.Thread(target=save_first)
+    second_thread = threading.Thread(target=save_second)
+    first_thread.start()
+    assert first_before_write.wait(timeout=1)
+    second_thread.start()
+    first_thread.join(timeout=2)
+    second_thread.join(timeout=2)
+
+    assert not first_thread.is_alive()
+    assert not second_thread.is_alive()
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    assert [endpoint["name"] for endpoint in config["endpoints"]] == ["first", "second"]
+
+
+def test_llm_client_priority_save_does_not_overwrite_concurrent_endpoint_save(
+    tmp_path, monkeypatch
+):
+    from openakita.utils import atomic_io
+
+    config_path = tmp_path / "data" / "llm_endpoints.json"
+    manager = EndpointManager(tmp_path, config_path=config_path)
+    manager.save_endpoint({"name": "existing", "provider": "openai", "model": "a", "priority": 10})
+
+    client = LLMClient.__new__(LLMClient)
+    client._config_path = config_path
+    client._endpoints = [SimpleNamespace(name="existing", priority=30)]
+    client_has_read = threading.Event()
+    manager_finished = threading.Event()
+    original_read = atomic_io.read_json_safe
+
+    def delayed_client_read(path):
+        data = original_read(path)
+        client_has_read.set()
+        manager_finished.wait(timeout=0.2)
+        return data
+
+    monkeypatch.setattr(atomic_io, "read_json_safe", delayed_client_read)
+
+    def save_new_endpoint():
+        manager.save_endpoint({"name": "new", "provider": "openai", "model": "b", "priority": 20})
+        manager_finished.set()
+
+    client_thread = threading.Thread(target=client._save_config)
+    manager_thread = threading.Thread(target=save_new_endpoint)
+    client_thread.start()
+    assert client_has_read.wait(timeout=1)
+    manager_thread.start()
+    client_thread.join(timeout=2)
+    manager_thread.join(timeout=2)
+
+    assert not client_thread.is_alive()
+    assert not manager_thread.is_alive()
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    assert [endpoint["name"] for endpoint in config["endpoints"]] == ["new", "existing"]
+    assert next(ep for ep in config["endpoints"] if ep["name"] == "existing")["priority"] == 30
 
 
 def test_save_endpoint_can_rename_without_deleting_key(tmp_path):

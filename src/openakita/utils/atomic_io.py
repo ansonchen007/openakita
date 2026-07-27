@@ -11,6 +11,7 @@ import os
 import shutil
 import threading
 import time
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +19,7 @@ logger = logging.getLogger(__name__)
 
 _LOCKS_GUARD = threading.Lock()
 _WRITE_LOCKS: dict[Path, threading.Lock] = {}
+_TRANSACTION_LOCKS: dict[Path, threading.RLock] = {}
 
 
 def _lock_for_path(path: Path) -> threading.Lock:
@@ -28,6 +30,56 @@ def _lock_for_path(path: Path) -> threading.Lock:
             lock = threading.Lock()
             _WRITE_LOCKS[resolved] = lock
         return lock
+
+
+def _transaction_lock_for_path(path: Path) -> threading.RLock:
+    resolved = path.resolve()
+    with _LOCKS_GUARD:
+        lock = _TRANSACTION_LOCKS.get(resolved)
+        if lock is None:
+            lock = threading.RLock()
+            _TRANSACTION_LOCKS[resolved] = lock
+        return lock
+
+
+@contextmanager
+def path_transaction_lock(path: Path):
+    """Serialize a complete file transaction across threads and processes."""
+    path = Path(path).resolve()
+    thread_lock = _transaction_lock_for_path(path)
+    lock_path = path.with_suffix(path.suffix + ".lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+
+    with thread_lock, open(lock_path, "a+b") as lock_file:
+        lock_file.seek(0, os.SEEK_END)
+        if lock_file.tell() == 0:
+            lock_file.write(b"\0")
+            lock_file.flush()
+        lock_file.seek(0)
+        if os.name == "nt":
+            import msvcrt
+
+            deadline = time.monotonic() + 30
+            while True:
+                try:
+                    msvcrt.locking(lock_file.fileno(), msvcrt.LK_NBLCK, 1)
+                    break
+                except OSError as exc:
+                    if time.monotonic() >= deadline:
+                        raise TimeoutError(f"Timed out waiting for file lock: {lock_path}") from exc
+                    time.sleep(0.05)
+        else:
+            import fcntl
+
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            lock_file.seek(0)
+            if os.name == "nt":
+                msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
 
 def _fsync_parent_dir(path: Path) -> None:

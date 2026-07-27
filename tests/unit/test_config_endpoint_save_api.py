@@ -11,6 +11,41 @@ from openakita.llm.capabilities import infer_capabilities, is_image_generation_m
 from openakita.llm.runtime_config import apply_llm_runtime_config
 
 
+def _policy_request(coordinator=None):
+    state = SimpleNamespace()
+    if coordinator is not None:
+        state.runtime_config_coordinator = coordinator
+    return SimpleNamespace(app=SimpleNamespace(state=state))
+
+
+@pytest.mark.parametrize(
+    ("writer", "body"),
+    [
+        (config_routes.write_security_zones, config_routes.SecurityZonesUpdate()),
+        (config_routes.write_security_path_policy, config_routes.SecurityPathPolicyUpdate()),
+        (config_routes.write_security_commands, config_routes.SecurityCommandsUpdate()),
+        (config_routes.write_security_sandbox, config_routes.SecuritySandboxUpdate()),
+        (config_routes.write_security_confirmation, config_routes._ConfirmationUpdate()),
+        (config_routes.write_self_protection, config_routes._SelfProtectionUpdate()),
+    ],
+)
+@pytest.mark.asyncio
+async def test_granular_security_writers_do_not_refresh_after_write_failure(
+    monkeypatch, writer, body
+) -> None:
+    monkeypatch.setattr(config_routes, "_read_policies_yaml", lambda: {"security": {}})
+    monkeypatch.setattr(config_routes, "_write_policies_yaml", lambda _data: False)
+    coordinator = SimpleNamespace(
+        refresh_policy=lambda _scope: pytest.fail(
+            "runtime must not refresh after persistence failure"
+        )
+    )
+
+    result = await writer(body, _policy_request(coordinator))
+
+    assert result["status"] == "error"
+
+
 class _FakeEndpointManager:
     def __init__(self) -> None:
         self.saved_api_key = "unset"
@@ -130,7 +165,8 @@ async def test_path_policy_writes_v2_fields_without_legacy_zones(monkeypatch):
         config_routes.SecurityPathPolicyUpdate(
             workspace_paths=["C:/Users/me/Desktop"],
             safety_immune_paths=["C:/Users/me/.ssh"],
-        )
+        ),
+        _policy_request(),
     )
 
     assert response["status"] == "ok"
@@ -141,12 +177,62 @@ async def test_path_policy_writes_v2_fields_without_legacy_zones(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_security_write_reports_saved_runtime_refresh_failure(monkeypatch):
+    state = {"security": {}}
+    monkeypatch.setattr(config_routes, "_read_policies_yaml", lambda: state)
+    monkeypatch.setattr(config_routes, "_write_policies_yaml", lambda _data: True)
+
+    def _fail_reset(*, scope: str):
+        raise RuntimeError(f"reset failed: {scope}")
+
+    monkeypatch.setattr(
+        "openakita.core.policy_v2.global_engine.reset_policy_v2_layer",
+        _fail_reset,
+    )
+
+    response = await config_routes.write_security_path_policy(
+        config_routes.SecurityPathPolicyUpdate(
+            workspace_paths=["C:/workspace"],
+            safety_immune_paths=[],
+        ),
+        _policy_request(),
+    )
+
+    assert response["operation_status"] == "ok"
+    assert response["status"] == "failed"
+    assert response["runtime"]["failed"]["policy"].startswith("reset failed")
+
+
+@pytest.mark.asyncio
+async def test_security_write_uses_request_scoped_runtime_coordinator(monkeypatch):
+    from openakita.runtime_config_coordinator import RuntimeApplyResult
+
+    calls: list[str] = []
+    coordinator = SimpleNamespace(
+        refresh_policy=lambda scope: (
+            calls.append(scope) or RuntimeApplyResult(refreshed=["policy"])
+        )
+    )
+    monkeypatch.setattr(config_routes, "_read_policies_yaml", lambda: {"security": {}})
+    monkeypatch.setattr(config_routes, "_write_policies_yaml", lambda _data: True)
+
+    response = await config_routes.write_security_commands(
+        config_routes.SecurityCommandsUpdate(),
+        _policy_request(coordinator),
+    )
+
+    assert response["operation_status"] == "ok"
+    assert calls == ["commands"]
+
+
+@pytest.mark.asyncio
 async def test_security_profile_off_requires_exact_ack(monkeypatch):
     state = {"security": {"profile": {"current": "protect"}}}
     monkeypatch.setattr(config_routes, "_read_policies_yaml", lambda: json.loads(json.dumps(state)))
 
     response = await config_routes.write_security_profile(
-        config_routes.SecurityProfileUpdate(profile="off", ack_phrase="我知道风险")
+        config_routes.SecurityProfileUpdate(profile="off", ack_phrase="我知道风险"),
+        _policy_request(),
     )
 
     assert response["status"] == "error"
@@ -165,7 +251,8 @@ async def test_security_profile_off_disables_security_enabled(monkeypatch):
     response = await config_routes.write_security_profile(
         config_routes.SecurityProfileUpdate(
             profile="off", ack_phrase=config_routes._SECURITY_PROFILE_OFF_ACK
-        )
+        ),
+        _policy_request(),
     )
 
     assert response["status"] == "ok"
@@ -184,7 +271,8 @@ async def test_security_profile_trust_reenables_security_enabled(monkeypatch):
     )
 
     response = await config_routes.write_security_profile(
-        config_routes.SecurityProfileUpdate(profile="trust")
+        config_routes.SecurityProfileUpdate(profile="trust"),
+        _policy_request(),
     )
 
     assert response["status"] == "ok"
@@ -249,7 +337,8 @@ async def test_commands_api_writes_shell_risk_not_legacy(monkeypatch):
             custom_high=["sudo rm"],
             excluded_patterns=[],
             blocked_commands=["bcdedit"],
-        )
+        ),
+        _policy_request(),
     )
 
     assert response["status"] == "ok"
@@ -305,7 +394,8 @@ async def test_self_protection_api_writes_v2_blocks(monkeypatch):
             death_switch_total_multiplier=2,
             audit_to_file=True,
             audit_path="data/audit/custom.jsonl",
-        )
+        ),
+        _policy_request(),
     )
 
     assert response["status"] == "ok"
@@ -347,7 +437,8 @@ async def test_granular_write_during_off_leaves_audit_event(monkeypatch):
             custom_high=[],
             excluded_patterns=[],
             blocked_commands=[],
-        )
+        ),
+        _policy_request(),
     )
 
     assert response["status"] == "ok"
@@ -386,7 +477,8 @@ async def test_permission_mode_escape_from_off_is_audited(monkeypatch):
     )
 
     result = await config_routes.write_permission_mode(
-        config_routes._PermissionModeBody(mode="smart")
+        config_routes._PermissionModeBody(mode="smart"),
+        _policy_request(),
     )
 
     assert result["status"] == "ok"

@@ -5,69 +5,17 @@ LLM 端点配置加载
 """
 
 import json
-import locale
 import logging
 import os
 from pathlib import Path
 
 from dotenv import load_dotenv
 
-from ..utils.atomic_io import read_json_safe, safe_write
+from ..utils.atomic_io import path_transaction_lock, read_json_safe, safe_write
+from ..utils.env_config import read_env_file, strip_utf8_bom
 from .types import ConfigurationError, EndpointConfig
 
 logger = logging.getLogger(__name__)
-
-
-def _strip_bom(raw: bytes) -> bytes:
-    """Strip UTF-8 BOM (EF BB BF) if present."""
-    if raw.startswith(b"\xef\xbb\xbf"):
-        return raw[3:]
-    return raw
-
-
-def _read_text_robust(path: Path) -> str:
-    """Read a text file with BOM stripping and encoding fallback."""
-    if not path.exists():
-        return ""
-    raw = _strip_bom(path.read_bytes())
-    try:
-        return raw.decode("utf-8")
-    except UnicodeDecodeError:
-        logger.warning(
-            "Failed to decode %s as UTF-8, falling back to system encoding",
-            path,
-        )
-        try:
-            return raw.decode(locale.getpreferredencoding(False), errors="replace")
-        except Exception:
-            return raw.decode("utf-8", errors="replace")
-
-
-def _parse_env_content(content: str) -> dict[str, str]:
-    """Parse .env content into key-value pairs."""
-    env: dict[str, str] = {}
-    for line in content.splitlines():
-        line = line.strip()
-        if not line or line.startswith("#"):
-            continue
-        if "=" not in line:
-            continue
-        key, _, value = line.partition("=")
-        key = key.strip()
-        value = value.strip()
-        if len(value) >= 2 and value[0] == value[-1] and value[0] in ('"', "'"):
-            inner = value[1:-1]
-            if "\\" in inner:
-                inner = inner.replace("\\\\", "\x00").replace('\\"', '"').replace("\x00", "\\")
-            value = inner
-        else:
-            for sep in (" #", "\t#"):
-                idx = value.find(sep)
-                if idx != -1:
-                    value = value[:idx].rstrip()
-                    break
-        env[key] = value
-    return env
 
 
 def _get_workspace_dir_from_config_path(config_path: Path) -> Path:
@@ -91,10 +39,7 @@ def get_workspace_env_path(config_path: Path | None = None) -> Path:
 
 def read_workspace_env_values(config_path: Path | None = None) -> dict[str, str]:
     """Read the workspace .env as a plain dict without mutating os.environ."""
-    env_path = get_workspace_env_path(config_path)
-    if not env_path.exists():
-        return {}
-    return _parse_env_content(_read_text_robust(env_path))
+    return read_env_file(get_workspace_env_path(config_path))
 
 
 def _safe_load_dotenv(env_path: Path) -> None:
@@ -107,7 +52,7 @@ def _safe_load_dotenv(env_path: Path) -> None:
     """
     try:
         raw = env_path.read_bytes()
-        stripped = _strip_bom(raw)
+        stripped = strip_utf8_bom(raw)
         if stripped != raw:
             logger.debug("Stripped UTF-8 BOM from %s", env_path)
             tmp = env_path.with_suffix(".env._bom_tmp")
@@ -398,7 +343,8 @@ def save_endpoints_config(
     }
 
     content = json.dumps(data, ensure_ascii=False, indent=2) + "\n"
-    safe_write(config_path, content)
+    with path_transaction_lock(config_path):
+        safe_write(config_path, content)
 
     logger.info(f"Saved {len(endpoints)} endpoints to {config_path}")
 

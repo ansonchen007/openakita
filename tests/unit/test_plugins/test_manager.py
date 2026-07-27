@@ -460,3 +460,25 @@ class TestPartialRegistrationCleanup:
         assert mgr.get_loaded("bad-syntax") is None
         assert str(d) not in sys.path
         assert "openakita_plugin_bad_syntax" not in sys.modules
+
+
+async def test_reload_invalidates_classifier_once(tmp_path, monkeypatch):
+    plugins_dir = tmp_path / "plugins"
+    plugins_dir.mkdir()
+    _make_plugin_dir(plugins_dir, "reload-once")
+    mgr = PluginManager(plugins_dir, state_path=tmp_path / "state.json")
+    invalidations: list[str] = []
+    monkeypatch.setattr(
+        mgr,
+        "_invalidate_policy_classifier_cache",
+        lambda plugin_id: invalidations.append(plugin_id),
+    )
+
+    await mgr.reload_plugin("reload-once")
+    assert invalidations == ["reload-once"]
+
+    invalidations.clear()
+    await mgr.reload_plugin("reload-once")
+    assert invalidations == ["reload-once"]
+
+    await mgr.unload_plugin("reload-once")

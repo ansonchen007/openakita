@@ -19,6 +19,7 @@ from .manifest import (
 )
 
 if TYPE_CHECKING:
+    from .config_store import PluginConfigStore
     from .hooks import HookRegistry
     from .protocols import MemoryBackendProtocol, RetrievalSource
 
@@ -77,6 +78,8 @@ class PluginAPI:
         granted_permissions: list[str],
         *,
         data_dir: Path,
+        legacy_config_path: Path | None = None,
+        config_store: PluginConfigStore | None = None,
         host_refs: dict[str, Any] | None = None,
         hook_registry: HookRegistry | None = None,
     ) -> None:
@@ -84,6 +87,12 @@ class PluginAPI:
         self._manifest = manifest
         self._granted_permissions = set(granted_permissions)
         self._data_dir = data_dir
+        from openakita.plugins.config_store import PluginConfigStore
+
+        self._config_store = config_store or PluginConfigStore.for_data_dir(
+            data_dir,
+            legacy_path=legacy_config_path,
+        )
         # ChainMap：先查 ``_host_overrides``（per-plugin 包装层，如 scoped
         # skill_loader），再查共享的 host_refs。这样：
         # 1) 宿主在 plugin 加载之后才把 ``gateway`` / ``brain`` 等 wire 进来，
@@ -192,12 +201,8 @@ class PluginAPI:
 
     def _read_config_file(self) -> dict:
         """Read config.json without permission check (internal use)."""
-        from openakita.utils.atomic_io import read_json_safe
-
-        config_path = self._data_dir / "config.json"
         try:
-            data = read_json_safe(config_path)
-            return data if isinstance(data, dict) else {}
+            return self._config_store.read()
         except Exception as e:
             self.log(f"Corrupt config.json, returning empty config: {e}", "warning")
             return {}
@@ -205,12 +210,7 @@ class PluginAPI:
     def set_config(self, updates: dict) -> None:
         if not self._check_permission("config.write"):
             return
-        from openakita.utils.atomic_io import atomic_json_write
-
-        config = self._read_config_file()
-        config.update(updates)
-        config_path = self._data_dir / "config.json"
-        atomic_json_write(config_path, config)
+        self._config_store.update(updates)
 
     def get_data_dir(self) -> Path | None:
         if not self._check_permission("data.own"):

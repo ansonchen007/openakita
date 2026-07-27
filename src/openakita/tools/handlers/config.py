@@ -195,38 +195,6 @@ def _serialize_env_value(value: Any) -> str:
     return str(value)
 
 
-def _update_env_content(existing: str, entries: dict[str, str]) -> str:
-    """合并 entries 到现有 .env 内容（保留注释和顺序）"""
-    lines = existing.splitlines()
-    updated_keys: set[str] = set()
-    new_lines: list[str] = []
-
-    for line in lines:
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
-            new_lines.append(line)
-            continue
-        if "=" not in stripped:
-            new_lines.append(line)
-            continue
-        key = stripped.split("=", 1)[0].strip()
-        if key in entries:
-            value = entries[key]
-            if value == "":
-                updated_keys.add(key)
-                continue
-            new_lines.append(f"{key}={value}")
-            updated_keys.add(key)
-        else:
-            new_lines.append(line)
-
-    for key, value in entries.items():
-        if key not in updated_keys and value != "":
-            new_lines.append(f"{key}={value}")
-
-    return "\n".join(new_lines) + "\n"
-
-
 def _check_cli_anything_path() -> str | None:
     """Return path of first cli-anything-* executable found, or None."""
     path_dirs = os.environ.get("PATH", "").split(os.pathsep)
@@ -464,9 +432,11 @@ class ConfigHandler:
         changes: list[str] = []
         env_entries: dict[str, str] = {}
         persist_dirty = False
+        persist_updates: dict[str, Any] = {}
         persist_changed_fields: set[str] = set()
         restart_needed: list[str] = []
         errors: list[str] = []
+        runtime_warnings: list[str] = []
 
         _persistable_set = set(_PERSISTABLE_KEYS)
 
@@ -499,7 +469,7 @@ class ConfigHandler:
 
             if field_name in _persistable_set:
                 if old_value != new_value:
-                    setattr(settings, field_name, new_value)
+                    persist_updates[field_name] = new_value
                     persist_changed_fields.add(field_name)
                 persist_dirty = True
                 env_entries[env_key.upper()] = ""
@@ -516,57 +486,42 @@ class ConfigHandler:
             if not changes:
                 return f"❌ 所有修改都被拒绝:\n{error_lines}"
 
-        # 写入 .env（原子写入 + 备份）
-        if env_entries:
-            from openakita.utils.atomic_io import safe_write
+        env_delete_keys = {key for key, value in env_entries.items() if value == ""}
+        env_write_entries = {key: value for key, value in env_entries.items() if value != ""}
+        from openakita.utils.env_config import commit_env_config
 
-            existing = ""
-            if env_path.exists():
-                existing = env_path.read_text(encoding="utf-8", errors="replace")
-            if existing or any(value != "" for value in env_entries.values()):
-                new_content = _update_env_content(existing, env_entries)
-                safe_write(env_path, new_content)
-
-            for key, value in env_entries.items():
-                if value:
-                    os.environ[key] = value
-                elif key in os.environ:
-                    del os.environ[key]
-
-            changed_fields = settings.reload()
-            logger.info(
-                f"[ConfigHandler] set: updated {len(env_entries)} .env entries, reloaded fields: {changed_fields}"
+        try:
+            commit = commit_env_config(
+                env_path,
+                entries=env_write_entries,
+                delete_keys=env_delete_keys,
+                settings=settings,
+                runtime_state=runtime_state,
+                runtime_updates=persist_updates,
+                persist_runtime=persist_dirty,
             )
+        except Exception as exc:
+            logger.warning("[ConfigHandler] configuration transaction failed: %s", exc)
+            if persist_dirty:
+                return f"❌ 配置保存失败，设置已回滚: {exc}"
+            return f"❌ .env 配置应用失败，已回滚: {exc}"
 
-            if not persist_dirty:
-                try:
-                    runtime_state.load()
-                except Exception as e:
-                    logger.warning(f"[ConfigHandler] runtime_state.load failed: {e}")
-
+        logger.info(
+            "[ConfigHandler] set: updated %d .env entries, reloaded fields: %s",
+            len(env_entries),
+            commit.settings_changed,
+        )
         if persist_dirty:
-            try:
-                runtime_state.save()
-                logger.info("[ConfigHandler] set: runtime_state saved (persistable keys updated)")
-            except Exception as e:
-                logger.warning(f"[ConfigHandler] runtime_state save failed: {e}")
+            logger.info("[ConfigHandler] set: runtime_state saved (persistable keys updated)")
 
         if "persona_name" in persist_changed_fields:
             try:
-                persona_manager = getattr(self.agent, "persona_manager", None)
-                if persona_manager is not None:
-                    persona_manager.switch_preset(settings.persona_name)
-                if hasattr(self.agent, "_invalidate_system_prompt_cache"):
-                    self.agent._invalidate_system_prompt_cache("persona config changed")
-                ctx = getattr(self.agent, "_context", None)
-                if (
-                    ctx is not None
-                    and getattr(ctx, "system", None)
-                    and hasattr(self.agent, "_build_system_prompt")
-                ):
-                    ctx.system = self.agent._build_system_prompt()
+                from openakita.agent.persona import apply_persona_runtime
+
+                apply_persona_runtime(self.agent, settings.persona_name)
             except Exception as e:
                 logger.warning(f"[ConfigHandler] persona runtime sync failed: {e}")
+                runtime_warnings.append(f"人格运行时刷新失败，将在下次重载时生效: {e}")
 
         # 构建响应
         result_lines = ["✅ 配置已更新:\n"] + changes
@@ -574,6 +529,10 @@ class ConfigHandler:
         if errors:
             result_lines.append("\n⚠️ 部分字段被拒绝:")
             result_lines.extend(f"  {e}" for e in errors)
+
+        if runtime_warnings:
+            result_lines.append("\n⚠️ 配置已保存，但运行时未完全刷新:")
+            result_lines.extend(f"  {warning}" for warning in runtime_warnings)
 
         if restart_needed:
             result_lines.append(f"\n⚠️ 以下字段需要重启服务才能生效: {', '.join(restart_needed)}")
@@ -1118,7 +1077,7 @@ class ConfigHandler:
     # set_ui: 设置 UI 偏好
     # ------------------------------------------------------------------
     def _set_ui(self, params: dict) -> str:
-        from ...config import runtime_state, settings
+        from ...config import runtime_state
 
         theme = (params.get("theme") or "").strip()
         language = (params.get("language") or "").strip()
@@ -1129,21 +1088,25 @@ class ConfigHandler:
         changes: list[str] = []
         ui_pref: dict[str, str] = {}
 
+        updates: dict[str, str] = {}
         if theme:
             if theme not in ("light", "dark", "system"):
                 return f"❌ theme 只支持 light/dark/system，收到: {theme}"
-            settings.ui_theme = theme
+            updates["ui_theme"] = theme
             ui_pref["theme"] = theme
             changes.append(f"- 主题: {theme}")
 
         if language:
             if language not in ("zh", "en"):
                 return f"❌ language 只支持 zh/en，收到: {language}"
-            settings.ui_language = language
+            updates["ui_language"] = language
             ui_pref["language"] = language
             changes.append(f"- 语言: {language}")
 
-        runtime_state.save()
+        try:
+            runtime_state.save_updates(**updates)
+        except Exception as exc:
+            return f"❌ UI 偏好保存失败，设置已回滚: {exc}"
 
         result = {
             "ok": True,

@@ -2793,23 +2793,24 @@ class LLMClient:
         if not self._config_path:
             return
 
-        from ..utils.atomic_io import atomic_json_write, read_json_safe
+        from ..utils.atomic_io import atomic_json_write, path_transaction_lock, read_json_safe
 
-        config_data = read_json_safe(self._config_path)
-        if config_data is None:
-            logger.warning("Cannot save config: no existing config to update")
-            return
+        with path_transaction_lock(self._config_path):
+            config_data = read_json_safe(self._config_path)
+            if config_data is None:
+                logger.warning("Cannot save config: no existing config to update")
+                return
 
-        name_to_priority = {ep.name: ep.priority for ep in self._endpoints}
-        ep_list = config_data.get("endpoints", [])
-        for ep_data in ep_list:
-            name = ep_data.get("name")
-            if name in name_to_priority:
-                ep_data["priority"] = name_to_priority[name]
+            name_to_priority = {ep.name: ep.priority for ep in self._endpoints}
+            ep_list = config_data.get("endpoints", [])
+            for ep_data in ep_list:
+                name = ep_data.get("name")
+                if name in name_to_priority:
+                    ep_data["priority"] = name_to_priority[name]
 
-        ep_list.sort(key=lambda e: (int(e.get("priority", 999)), e.get("name", "")))
-        config_data["endpoints"] = ep_list
-        atomic_json_write(self._config_path, config_data)
+            ep_list.sort(key=lambda e: (int(e.get("priority", 999)), e.get("name", "")))
+            config_data["endpoints"] = ep_list
+            atomic_json_write(self._config_path, config_data)
 
     async def close(self):
         """关闭所有 Provider"""

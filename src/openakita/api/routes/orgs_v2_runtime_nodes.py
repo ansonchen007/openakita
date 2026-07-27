@@ -31,6 +31,7 @@ from typing import Any
 
 from fastapi import HTTPException, Request
 
+from openakita.api.runtime_response import runtime_operation_response
 from openakita.api.schemas.orgs_v2 import NodeRegister
 
 from .orgs_v2_runtime import _get_manager, _get_runtime, router
@@ -69,8 +70,7 @@ def _call_runtime_method(rt: Any, method_name: str, *args: Any, **kwargs: Any) -
                 "code": "subsystem_not_wired",
                 "subsystem": f"runtime_method:{method_name}",
                 "message": (
-                    f"OrgRuntime.{method_name} is not yet connected. "
-                    "See PR-9.7gamma wiring."
+                    f"OrgRuntime.{method_name} is not yet connected. See PR-9.7gamma wiring."
                 ),
                 "next_milestone": "P9.7gamma",
             },
@@ -264,7 +264,14 @@ async def update_node_identity(request: Request, org_id: str, node_id: str) -> d
                 p.unlink(missing_ok=True)
             else:
                 p.write_text(content, encoding="utf-8")
-    return {"ok": True}
+    from openakita.runtime_config_coordinator import get_runtime_config_coordinator
+
+    runtime = get_runtime_config_coordinator(request).invalidate_org_node(
+        org_id,
+        node_id,
+        "identity_changed",
+    )
+    return runtime_operation_response(runtime, ok=True)
 
 
 # ---------------------------------------------------------------------------
@@ -290,7 +297,14 @@ async def update_node_mcp(request: Request, org_id: str, node_id: str) -> dict[s
     p = _node_dir(mgr, org_id, node_id) / "mcp_config.json"
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(json.dumps(body, ensure_ascii=False, indent=2), encoding="utf-8")
-    return {"ok": True}
+    from openakita.runtime_config_coordinator import get_runtime_config_coordinator
+
+    runtime = get_runtime_config_coordinator(request).invalidate_org_node(
+        org_id,
+        node_id,
+        "mcp_changed",
+    )
+    return runtime_operation_response(runtime, ok=True)
 
 
 # ---------------------------------------------------------------------------

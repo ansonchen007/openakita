@@ -67,6 +67,55 @@ def test_deps_appear_installed_requires_matching_dist_info(tmp_path: Path) -> No
     assert deps_appear_installed(plugin_dir, requires) is True
 
 
+@pytest.mark.parametrize("hot_loaded", [True, False])
+def test_finalize_plugin_install_publishes_shared_completion_result(
+    monkeypatch,
+    hot_loaded: bool,
+) -> None:
+    calls: list[tuple[str, str]] = []
+
+    class _Runtime:
+        def to_dict(self) -> dict[str, str]:
+            return {"status": "ok"}
+
+    runtime = _Runtime()
+
+    class _Coordinator:
+        def plugin_changed(
+            self,
+            plugin_id: str,
+            reason: str,
+        ):
+            calls.append((plugin_id, reason))
+            return runtime
+
+    monkeypatch.setattr(
+        "openakita.runtime_config_coordinator.get_runtime_config_coordinator",
+        lambda _request: _Coordinator(),
+    )
+    progress = plugin_routes.InstallProgress()
+
+    actual_runtime, install_data = plugin_routes._finalize_plugin_install(
+        object(),
+        progress,
+        "demo",
+        hot_loaded,
+    )
+
+    assert actual_runtime is runtime
+    assert calls == [("demo", "installed")]
+    assert install_data == {
+        "plugin_id": "demo",
+        "hot_loaded": hot_loaded,
+        "update_policy": "disk-only",
+        "reload_required": not hot_loaded,
+    }
+    assert progress.snapshot()["result"] == {
+        **install_data,
+        "runtime": {"status": "ok"},
+    }
+
+
 def test_plugin_state_tracks_disk_only_pending_update(tmp_path: Path) -> None:
     path = tmp_path / "plugin_state.json"
     state = PluginState()
@@ -112,7 +161,7 @@ async def test_loaded_plugin_update_stages_without_touching_live(
             self.state.mark_loaded("demo")
             self.reloaded: list[str] = []
 
-        async def reload_plugin(self, plugin_id: str) -> None:
+        async def reload_plugin(self, plugin_id: str, **_kwargs) -> None:
             self.reloaded.append(plugin_id)
 
     pm = _PM()
@@ -164,7 +213,7 @@ async def test_pending_apply_success_switches_live_and_persists_source(
         async def unload_plugin(self, plugin_id: str) -> None:
             self.unloaded.append(plugin_id)
 
-        async def reload_plugin(self, plugin_id: str) -> None:
+        async def reload_plugin(self, plugin_id: str, **_kwargs) -> None:
             self.reloaded.append(plugin_id)
 
     pm = _PM()
@@ -206,7 +255,7 @@ async def test_pending_apply_reload_failure_restores_live_and_keeps_pending(
         async def unload_plugin(self, plugin_id: str) -> None:
             return None
 
-        async def reload_plugin(self, plugin_id: str) -> None:
+        async def reload_plugin(self, plugin_id: str, **_kwargs) -> None:
             raise RuntimeError("boom")
 
     pm = _PM()
@@ -249,7 +298,7 @@ async def test_pending_apply_reload_failure_clears_missing_pending_metadata(
         async def unload_plugin(self, plugin_id: str) -> None:
             return None
 
-        async def reload_plugin(self, plugin_id: str) -> None:
+        async def reload_plugin(self, plugin_id: str, **_kwargs) -> None:
             raise RuntimeError("boom")
 
     pm = _PM()
@@ -296,7 +345,7 @@ async def test_second_staged_update_replaces_old_pending_after_success(
                 source="old-source",
             )
 
-        async def reload_plugin(self, plugin_id: str) -> None:
+        async def reload_plugin(self, plugin_id: str, **_kwargs) -> None:
             raise AssertionError("loaded plugin updates must stage only")
 
     pm = _PM()
@@ -377,7 +426,7 @@ async def test_sync_new_plugins_does_not_auto_apply_disabled_pending(
         def list_failed(self) -> dict[str, str]:
             return {}
 
-        async def reload_plugin(self, plugin_id: str) -> None:
+        async def reload_plugin(self, plugin_id: str, **_kwargs) -> None:
             self.reloaded.append(plugin_id)
 
     pm = _PM()

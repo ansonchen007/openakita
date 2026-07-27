@@ -11,11 +11,15 @@ from __future__ import annotations
 import json
 import logging
 import os
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
+
+from openakita.api.runtime_response import runtime_operation_response
+from openakita.utils.env_config import parse_env_content
 
 logger = logging.getLogger(__name__)
 
@@ -54,108 +58,6 @@ def _endpoints_config_path() -> Path:
         return get_default_config_path()
     except Exception:
         return _project_root() / "data" / "llm_endpoints.json"
-
-
-def _parse_env(content: str) -> dict[str, str]:
-    """Parse .env file content into a dict (same logic as Tauri bridge)."""
-    # Strip UTF-8 BOM if present (e.g. files saved by Windows Notepad)
-    if content.startswith("\ufeff"):
-        content = content[1:]
-    env: dict[str, str] = {}
-    for line in content.splitlines():
-        line = line.strip()
-        if not line or line.startswith("#"):
-            continue
-        if "=" not in line:
-            continue
-        key, _, value = line.partition("=")
-        key = key.strip()
-        value = value.strip()
-        # Strip surrounding quotes; unescape only \" and \\ (produced by _quote_env_value)
-        if len(value) >= 2 and value[0] == value[-1] and value[0] in ('"', "'"):
-            inner = value[1:-1]
-            if "\\" in inner:
-                # Only unescape sequences produced by our own writer
-                inner = inner.replace("\\\\", "\x00").replace('\\"', '"').replace("\x00", "\\")
-            value = inner
-        else:
-            # Unquoted: strip inline comment (# preceded by whitespace)
-            for sep in (" #", "\t#"):
-                idx = value.find(sep)
-                if idx != -1:
-                    value = value[:idx].rstrip()
-                    break
-        env[key] = value
-    return env
-
-
-def _needs_quoting(value: str) -> bool:
-    """Check whether a .env value must be quoted to survive round-trip parsing."""
-    if not value:
-        return False
-    if value[0] in (" ", "\t") or value[-1] in (" ", "\t"):
-        return True  # leading/trailing whitespace
-    if value[0] in ('"', "'"):
-        return True  # starts with a quote char
-    return any(ch in value for ch in (" ", "#", '"', "'", "\\"))
-
-
-def _quote_env_value(value: str) -> str:
-    """Quote a .env value only when it contains characters that would be
-    mangled by typical .env parsers.  Plain values (the vast majority of
-    API keys, URLs, flags) are written unquoted for maximum compatibility
-    with older OpenAkita versions and third-party .env tooling."""
-    if not _needs_quoting(value):
-        return value
-    escaped = value.replace("\\", "\\\\").replace('"', '\\"')
-    return f'"{escaped}"'
-
-
-def _update_env_content(
-    existing: str,
-    entries: dict[str, str],
-    delete_keys: set[str] | None = None,
-) -> str:
-    """Merge entries into existing .env content (preserves comments, order).
-
-    - Non-empty values are written (quoted for round-trip safety).
-    - Empty string values are **ignored** (original line preserved).
-    - Keys in *delete_keys* are explicitly removed.
-    """
-    delete_keys = delete_keys or set()
-    lines = existing.splitlines()
-    updated_keys: set[str] = set()
-    new_lines: list[str] = []
-
-    for line in lines:
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
-            new_lines.append(line)
-            continue
-        if "=" not in stripped:
-            new_lines.append(line)
-            continue
-        key = stripped.split("=", 1)[0].strip()
-        if key in delete_keys:
-            updated_keys.add(key)
-            continue  # explicit delete — skip line
-        if key in entries:
-            value = entries[key]
-            if value == "":
-                # Empty value → preserve the existing line (do NOT delete)
-                new_lines.append(line)
-            else:
-                new_lines.append(f"{key}={_quote_env_value(value)}")
-            updated_keys.add(key)
-        else:
-            new_lines.append(line)
-
-    # Append new keys that weren't in the existing content
-    for key, value in entries.items():
-        if key not in updated_keys and value != "":
-            new_lines.append(f"{key}={_quote_env_value(value)}")
-
-    return "\n".join(new_lines) + "\n"
 
 
 # ─── Pydantic models ──────────────────────────────────────────────────
@@ -504,30 +406,23 @@ def _coerce_runtime_value(field_name: str, raw_value: str) -> Any:
     return TypeAdapter(field.annotation).validate_python(value)
 
 
-def _sync_runtime_agent_settings(request: Request, changed_fields: set[str]) -> None:
+def _sync_runtime_agent_settings(request: Request, changed_fields: set[str]) -> str | None:
     """Apply runtime settings that live inside already-created Agent objects."""
     if "persona_name" not in changed_fields:
-        return
+        return None
 
     try:
+        from openakita.agent.persona import apply_persona_runtime
         from openakita.config import settings
 
-        agent = getattr(request.app.state, "agent", None)
-        actual_agent = getattr(agent, "_local_agent", agent)
-        persona_manager = getattr(actual_agent, "persona_manager", None)
-        if persona_manager is not None:
-            persona_manager.switch_preset(settings.persona_name)
-        if hasattr(actual_agent, "_invalidate_system_prompt_cache"):
-            actual_agent._invalidate_system_prompt_cache("persona config changed")
-        ctx = getattr(actual_agent, "_context", None)
-        if (
-            ctx is not None
-            and getattr(ctx, "system", None)
-            and hasattr(actual_agent, "_build_system_prompt")
-        ):
-            ctx.system = actual_agent._build_system_prompt()
+        apply_persona_runtime(
+            getattr(request.app.state, "agent", None),
+            settings.persona_name,
+        )
+        return None
     except Exception as exc:
         logger.warning("[Config API] persona runtime sync failed: %s", exc)
+        return str(exc)
 
 
 @router.get("/api/config/env")
@@ -543,7 +438,7 @@ async def read_env():
     content = ""
     if env_path.exists():
         content = env_path.read_bytes().decode("utf-8", errors="replace")
-    env = _parse_env(content)
+    env = parse_env_content(content)
     for env_key, field_name in _runtime_env_key_map().items():
         env[env_key] = _runtime_env_value(field_name)
     has_value = {k: bool(v and v.strip()) for k, v in env.items()}
@@ -574,13 +469,7 @@ async def write_env(body: EnvUpdateRequest, request: Request):
     - Keys listed in ``delete_keys`` are explicitly removed.
     - Uses atomic write with .bak backup to prevent corruption on crash.
     """
-    from openakita.utils.atomic_io import safe_write
-
     env_path = _project_root() / ".env"
-    existing = ""
-    if env_path.exists():
-        existing = env_path.read_bytes().decode("utf-8", errors="replace")
-
     runtime_key_map = _runtime_env_key_map()
     safe_entries: dict[str, str] = {}
     runtime_entries: dict[str, str] = {}
@@ -601,12 +490,11 @@ async def write_env(body: EnvUpdateRequest, request: Request):
         else:
             env_delete_keys.add(key)
 
-    runtime_changed_fields: set[str] = set()
-    if runtime_entries or runtime_delete_fields:
-        from openakita.config import runtime_state, settings
+    from openakita.config import runtime_state, settings
 
+    runtime_updates: dict[str, Any] = {}
+    if runtime_entries or runtime_delete_fields:
         errors: list[str] = []
-        runtime_updates: dict[str, Any] = {}
         for env_key, raw_value in runtime_entries.items():
             field_name = runtime_key_map[env_key]
             try:
@@ -630,75 +518,87 @@ async def write_env(body: EnvUpdateRequest, request: Request):
                 },
             )
 
-        for field_name, new_value in runtime_updates.items():
-            if getattr(settings, field_name) != new_value:
-                setattr(settings, field_name, new_value)
-                runtime_changed_fields.add(field_name)
+    runtime_changed_fields = {
+        field_name
+        for field_name, new_value in runtime_updates.items()
+        if getattr(settings, field_name) != new_value
+    }
 
-        runtime_state.save()
+    from openakita.utils.env_config import commit_env_config
 
-    if safe_entries or (env_delete_keys and env_path.exists()):
-        new_content = _update_env_content(existing, safe_entries, delete_keys=env_delete_keys)
-        safe_write(env_path, new_content)
-    for key, value in safe_entries.items():
-        if value:
-            os.environ[key] = value
-    for key in env_delete_keys:
-        os.environ.pop(key, None)
+    commit = commit_env_config(
+        env_path,
+        entries=safe_entries,
+        delete_keys=env_delete_keys,
+        settings=settings,
+        runtime_state=runtime_state,
+        runtime_updates=runtime_updates,
+    )
     count = (
         len([v for v in safe_entries.values() if v]) + len(runtime_entries) + len(env_delete_keys)
     )
     logger.info(f"[Config API] Updated .env with {count} entries")
 
-    # Push changes into the in-process Settings singleton so consumers that
-    # read ``getattr(settings, ...)`` on each task (e.g. LoopBudgetGuard,
-    # ContextManager.calculate_context_pressure, ReasoningEngine ratio
-    # injection) see the new values without a process restart.
-    settings_changed: list[str] = []
-    try:
-        from openakita.config import settings as _settings
+    if commit.settings_changed:
+        logger.info("[Config API] Settings hot-reloaded fields: %s", commit.settings_changed)
 
-        settings_changed = _settings.reload()
-        if settings_changed:
-            logger.info("[Config API] Settings hot-reloaded fields: %s", settings_changed)
-    except Exception as exc:
-        logger.warning("[Config API] Settings.reload() failed: %s", exc)
-
+    runtime_agent_settings_error: str | None = None
     if runtime_changed_fields:
-        _sync_runtime_agent_settings(request, runtime_changed_fields)
+        runtime_agent_settings_error = _sync_runtime_agent_settings(
+            request,
+            runtime_changed_fields,
+        )
 
     changed_keys = (
         {k for k, v in safe_entries.items() if v}
         | set(runtime_entries.keys())
         | set(body.delete_keys)
     )
-    from openakita.config_lifecycle import classify_config_changes, reload_config_components
+    from openakita.config_lifecycle import classify_config_changes
+    from openakita.runtime_config_coordinator import (
+        RuntimeApplyResult,
+        get_runtime_config_coordinator,
+    )
 
     change_plan = classify_config_changes(changed_keys)
-    component_reloads = reload_config_components(change_plan)
-    component_reload_failed = "failed" in component_reloads.values()
+    coordinator = get_runtime_config_coordinator(request)
+    runtime_apply = RuntimeApplyResult(
+        apply_mode=change_plan.apply_mode,
+        restart_required=change_plan.restart_required,
+    )
+    if runtime_agent_settings_error:
+        runtime_apply.failed["runtime_agent_settings"] = runtime_agent_settings_error
+    if change_plan.component_reload_keys:
+        runtime_apply.merge(coordinator.reload_desktop())
+    component_reloads = (
+        {"desktop": "failed" if "desktop" in runtime_apply.failed else "reloaded"}
+        if change_plan.component_reload_keys
+        else {}
+    )
+    component_reload_failed = bool(runtime_apply.failed)
     runtime_env_keys = {key.upper() for key in runtime_entries}
-    next_task_changes = {
-        key for key in change_plan.next_task_keys if key not in runtime_env_keys
-    }
+    next_task_changes = {key for key in change_plan.next_task_keys if key not in runtime_env_keys}
     next_task_changes.update(runtime_changed_fields)
     if next_task_changes:
-        _notify_runtime_config_changed(
-            request,
-            "runtime_config:" + ",".join(sorted(next_task_changes)),
+        runtime_apply.merge(
+            coordinator.invalidate_agent_pools(
+                "runtime_config:" + ",".join(sorted(next_task_changes))
+            )
         )
 
-    return {
-        "status": "ok",
-        "updated_keys": list(safe_entries.keys()) + list(runtime_entries.keys()),
-        "restart_required": change_plan.restart_required or component_reload_failed,
-        "hot_reloadable": change_plan.hot_reloadable and not component_reload_failed,
-        "apply_mode": (
-            "process_restart" if component_reload_failed else change_plan.apply_mode.value
-        ),
-        "apply_modes": {key: mode.value for key, mode in change_plan.modes.items()},
-        "component_reloads": component_reloads,
-    }
+    return runtime_operation_response(
+        runtime_apply,
+        {
+            "updated_keys": list(safe_entries.keys()) + list(runtime_entries.keys()),
+            "restart_required": change_plan.restart_required or component_reload_failed,
+            "hot_reloadable": change_plan.hot_reloadable and not component_reload_failed,
+            "apply_mode": (
+                "process_restart" if component_reload_failed else change_plan.apply_mode.value
+            ),
+            "apply_modes": {key: mode.value for key, mode in change_plan.modes.items()},
+            "component_reloads": component_reloads,
+        },
+    )
 
 
 @router.get("/api/config/endpoints")
@@ -788,7 +688,7 @@ async def save_endpoint(body: SaveEndpointRequest, request: Request):
     env_cache: dict[str, str] = {}
     env_path = _project_root() / ".env"
     if env_path.exists():
-        env_cache = _parse_env(env_path.read_bytes().decode("utf-8", errors="replace"))
+        env_cache = parse_env_content(env_path.read_bytes().decode("utf-8", errors="replace"))
 
     def _lookup_key(name: str) -> str | None:
         return os.environ.get(name) or env_cache.get(name)
@@ -866,7 +766,7 @@ async def save_endpoints(body: SaveEndpointsRequest, request: Request):
     env_cache: dict[str, str] = {}
     env_path = _project_root() / ".env"
     if env_path.exists():
-        env_cache = _parse_env(env_path.read_bytes().decode("utf-8", errors="replace"))
+        env_cache = parse_env_content(env_path.read_bytes().decode("utf-8", errors="replace"))
 
     def _lookup_key(name: str) -> str | None:
         return os.environ.get(name) or env_cache.get(name)
@@ -1263,29 +1163,14 @@ async def update_endpoint_settings(body: UpdateSettingsRequest, request: Request
 
 def _trigger_reload(request: Request) -> dict[str, Any]:
     """Apply persisted LLM config to live runtime components."""
-    from openakita.llm.runtime_config import apply_llm_runtime_config
+    from openakita.runtime_config_coordinator import get_runtime_config_coordinator
 
-    return apply_llm_runtime_config(
-        agent=getattr(request.app.state, "agent", None),
-        gateway=getattr(request.app.state, "gateway", None),
-        pool=getattr(request.app.state, "agent_pool", None),
-        config_path=_endpoints_config_path(),
-        reason="llm_config",
+    result = get_runtime_config_coordinator(request).refresh_llm(
+        config_path=_endpoints_config_path()
     )
-
-
-def _notify_runtime_config_changed(request: Request, reason: str) -> None:
-    """Invalidate pooled desktop agents after runtime-affecting config changes."""
-    pool = getattr(request.app.state, "agent_pool", None)
-    if pool is None:
-        return
-    try:
-        if hasattr(pool, "notify_runtime_config_changed"):
-            pool.notify_runtime_config_changed(reason)
-        elif hasattr(pool, "notify_skills_changed"):
-            pool.notify_skills_changed()
-    except Exception as e:
-        logger.warning("[Config API] pool runtime invalidation failed: %s", e)
+    raw = dict(result.details.get("llm", {}))
+    raw["runtime"] = result.to_dict()
+    return raw
 
 
 @router.post("/api/config/reload")
@@ -1306,13 +1191,15 @@ async def restart_service(request: Request):
     前端应在调用后轮询 /api/health 直到服务恢复。
     """
     from openakita import config as cfg
+    from openakita.runtime_config_coordinator import get_runtime_config_coordinator
 
     cfg._restart_requested = True
+    runtime = get_runtime_config_coordinator(request).request_process_restart("user_requested")
     shutdown_event = getattr(request.app.state, "shutdown_event", None)
     if shutdown_event is not None:
         logger.info("[Config API] Restart requested, triggering graceful shutdown for restart")
         shutdown_event.set()
-        return {"status": "restarting"}
+        return {"status": "restarting", "runtime": runtime.to_dict()}
     else:
         logger.warning("[Config API] Restart requested but no shutdown_event available")
         cfg._restart_requested = False
@@ -1356,7 +1243,7 @@ async def write_skills_config(body: SkillsWriteRequest, request: Request):
 
     若 request 中尚无 agent（启动前调用），则仅写盘，刷新将在 Agent 初始化时自然发生。
     """
-    from openakita.agent.security_actions import maybe_refresh_skills, set_skill_external_allowlist
+    from openakita.agent.security_actions import set_skill_external_allowlist
 
     content = body.content if isinstance(body.content, dict) else {}
     al = content.get("external_allowlist") if isinstance(content, dict) else None
@@ -1375,17 +1262,12 @@ async def write_skills_config(body: SkillsWriteRequest, request: Request):
             "consider using set_skill_external_allowlist or allowlist_io APIs"
         )
 
-    # 触发统一刷新（rescan=False：仅重算 allowlist+catalog+pool，无需再扫盘）
-    try:
-        await maybe_refresh_skills(
-            {"status": "ok", "kind": "skill_external_allowlist"},
-            lambda: getattr(request.app.state, "agent", None),
-        )
-    except Exception as e:
-        logger.warning("[Config API] post-write skill propagate failed: %s", e)
+    from openakita.runtime_config_coordinator import get_runtime_config_coordinator
+
+    runtime = await get_runtime_config_coordinator(request).refresh_skills(rescan=False)
 
     logger.info("[Config API] Updated skills.json")
-    return {"status": "ok", "kind": "skill_external_allowlist"}
+    return runtime_operation_response(runtime, {"kind": "skill_external_allowlist"})
 
 
 @router.post("/api/config/skills/external-allowlist")
@@ -1534,11 +1416,12 @@ async def read_tool_loading(request: Request):
 @router.post("/api/config/tool-loading")
 async def write_tool_loading(body: ToolLoadingRequest, request: Request):
     """更新工具常驻加载配置。立即生效并持久化。"""
-    from openakita.config import runtime_state, settings
+    from openakita.config import runtime_state
 
-    settings.always_load_tools = body.always_load_tools
-    settings.always_load_categories = body.always_load_categories
-    runtime_state.save()
+    runtime_state.save_updates(
+        always_load_tools=body.always_load_tools,
+        always_load_categories=body.always_load_categories,
+    )
     logger.info(
         "[Config API] tool-loading updated: tools=%s, categories=%s",
         body.always_load_tools,
@@ -1700,6 +1583,28 @@ def _write_policies_yaml(data: dict) -> bool:
     return True
 
 
+def _commit_policy_update(
+    request: Request,
+    data: dict[str, Any],
+    *,
+    scope: str,
+    write_error: str,
+    response_data: dict[str, Any] | None = None,
+    after_write: Callable[[], None] | None = None,
+) -> dict[str, Any]:
+    """Persist one policy mutation, then refresh its app-scoped runtime."""
+    if not _write_policies_yaml(data):
+        return {"status": "error", "message": write_error}
+
+    if after_write is not None:
+        after_write()
+
+    from openakita.runtime_config_coordinator import get_runtime_config_coordinator
+
+    runtime = get_runtime_config_coordinator(request).refresh_policy(scope)
+    return runtime_operation_response(runtime, response_data)
+
+
 @router.get("/api/config/security")
 async def read_security_config():
     """Read the full security policy configuration."""
@@ -1746,7 +1651,11 @@ def _deep_merge_security(target: dict[str, Any], source: dict[str, Any]) -> dict
 
 
 @router.post("/api/config/security")
-async def write_security_config(body: SecurityConfigUpdate, replace: bool = False):
+async def write_security_config(
+    body: SecurityConfigUpdate,
+    request: Request,
+    replace: bool = False,
+):
     """Update the security policy configuration.
 
     Default behaviour (C21 P0-2): **deep-merge** the request body into the
@@ -1772,16 +1681,16 @@ async def write_security_config(body: SecurityConfigUpdate, replace: bool = Fals
         _deep_merge_security(existing_security, body.security)
         data["security"] = existing_security
         merge_mode = "merge"
-    if not _write_policies_yaml(data):
-        return {"status": "error", "message": "配置写入失败"}
-    try:
-        from openakita.core.policy_v2.global_engine import reset_policy_v2_layer
-
-        reset_policy_v2_layer(scope="security")
-    except Exception:
-        pass
-    logger.info("[Config API] Updated security policy (mode=%s)", merge_mode)
-    return {"status": "ok", "mode": merge_mode}
+    return _commit_policy_update(
+        request,
+        data,
+        scope="security",
+        write_error="配置写入失败",
+        response_data={"mode": merge_mode},
+        after_write=lambda: logger.info(
+            "[Config API] Updated security policy (mode=%s)", merge_mode
+        ),
+    )
 
 
 # C9a §4: Dry-run preview — let user inspect how their saved policy_v2 config
@@ -1935,7 +1844,7 @@ async def read_security_zones():
 
 
 @router.post("/api/config/security/zones")
-async def write_security_zones(body: SecurityZonesUpdate):
+async def write_security_zones(body: SecurityZonesUpdate, request: Request):
     """Deprecated compatibility write into V2 path policy."""
     data = _read_policies_yaml()
     if data is None:
@@ -1945,15 +1854,13 @@ async def write_security_zones(body: SecurityZonesUpdate):
     sec["safety_immune"] = {"paths": [*body.protected, *body.forbidden]}
     sec.pop("zones", None)
     _mark_security_profile_custom(sec)
-    _write_policies_yaml(data)
-    try:
-        from openakita.core.policy_v2.global_engine import reset_policy_v2_layer
-
-        reset_policy_v2_layer(scope="path_policy")
-    except Exception:
-        pass
-    logger.info("[Config API] Updated security zones")
-    return {"status": "ok"}
+    return _commit_policy_update(
+        request,
+        data,
+        scope="path_policy",
+        write_error="配置写入失败，路径策略未更新",
+        after_write=lambda: logger.info("[Config API] Updated security zones"),
+    )
 
 
 @router.get("/api/config/security/path-policy")
@@ -1977,7 +1884,7 @@ async def read_security_path_policy():
 
 
 @router.post("/api/config/security/path-policy")
-async def write_security_path_policy(body: SecurityPathPolicyUpdate):
+async def write_security_path_policy(body: SecurityPathPolicyUpdate, request: Request):
     data = _read_policies_yaml()
     if data is None:
         return {"status": "error", "message": "无法读取当前配置文件，写入已取消以防止数据丢失"}
@@ -1993,15 +1900,13 @@ async def write_security_path_policy(body: SecurityPathPolicyUpdate):
 
         profile["base"] = profile.get("current") or FACTORY_DEFAULT_PROFILE
         profile["current"] = "custom"
-    _write_policies_yaml(data)
-    try:
-        from openakita.core.policy_v2.global_engine import reset_policy_v2_layer
-
-        reset_policy_v2_layer(scope="path_policy")
-    except Exception:
-        pass
-    logger.info("[Config API] Updated security path policy")
-    return {"status": "ok"}
+    return _commit_policy_update(
+        request,
+        data,
+        scope="path_policy",
+        write_error="配置写入失败，路径策略未更新",
+        after_write=lambda: logger.info("[Config API] Updated security path policy"),
+    )
 
 
 @router.get("/api/config/security/commands")
@@ -2037,7 +1942,7 @@ async def read_security_commands():
 
 
 @router.post("/api/config/security/commands")
-async def write_security_commands(body: SecurityCommandsUpdate):
+async def write_security_commands(body: SecurityCommandsUpdate, request: Request):
     """Update shell_risk configuration (canonical V2 location)."""
     data = _read_policies_yaml()
     if data is None:
@@ -2051,15 +1956,13 @@ async def write_security_commands(body: SecurityCommandsUpdate):
     # 彻底丢弃 legacy 槽位，避免双源
     sec.pop("command_patterns", None)
     _mark_security_profile_custom(sec)
-    _write_policies_yaml(data)
-    try:
-        from openakita.core.policy_v2.global_engine import reset_policy_v2_layer
-
-        reset_policy_v2_layer(scope="commands")
-    except Exception:
-        pass
-    logger.info("[Config API] Updated security commands (shell_risk)")
-    return {"status": "ok"}
+    return _commit_policy_update(
+        request,
+        data,
+        scope="commands",
+        write_error="配置写入失败，命令策略未更新",
+        after_write=lambda: logger.info("[Config API] Updated security commands (shell_risk)"),
+    )
 
 
 @router.get("/api/config/security/sandbox")
@@ -2079,7 +1982,7 @@ async def read_security_sandbox():
 
 
 @router.post("/api/config/security/sandbox")
-async def write_security_sandbox(body: SecuritySandboxUpdate):
+async def write_security_sandbox(body: SecuritySandboxUpdate, request: Request):
     """Update sandbox configuration."""
     data = _read_policies_yaml()
     if data is None:
@@ -2098,15 +2001,13 @@ async def write_security_sandbox(body: SecuritySandboxUpdate):
     if body.exempt_commands is not None:
         sb["exempt_commands"] = body.exempt_commands
     _mark_security_profile_custom(data["security"])
-    _write_policies_yaml(data)
-    try:
-        from openakita.core.policy_v2.global_engine import reset_policy_v2_layer
-
-        reset_policy_v2_layer(scope="sandbox")
-    except Exception:
-        pass
-    logger.info("[Config API] Updated security sandbox")
-    return {"status": "ok"}
+    return _commit_policy_update(
+        request,
+        data,
+        scope="sandbox",
+        write_error="配置写入失败，沙箱策略未更新",
+        after_write=lambda: logger.info("[Config API] Updated security sandbox"),
+    )
 
 
 @router.get("/api/config/permission-mode")
@@ -2132,7 +2033,7 @@ class _PermissionModeBody(BaseModel):
 
 
 @router.post("/api/config/permission-mode")
-async def write_permission_mode(body: _PermissionModeBody):
+async def write_permission_mode(body: _PermissionModeBody, request: Request):
     """设置安全模式并持久化到 YAML。
 
     C8b-4：v1 ``pe._frontend_mode = mode`` 二次写已删除。POST 流程完全靠
@@ -2144,18 +2045,21 @@ async def write_permission_mode(body: _PermissionModeBody):
     if mode not in ("cautious", "smart", "yolo"):
         return {"status": "error", "message": f"无效的安全模式: {mode}"}
     try:
-        from openakita.core.policy_v2.global_engine import reset_policy_v2_layer
-
         data = _read_policies_yaml()
         if data is None:
             return {"status": "error", "message": "无法读取当前配置文件，安全模式未切换"}
         sec = data.setdefault("security", {})
         _apply_permission_mode_defaults(sec, mode)
-        if not _write_policies_yaml(data):
-            return {"status": "error", "message": "配置写入失败，安全模式未切换"}
-        reset_policy_v2_layer(scope="permission_mode")
-        logger.info(f"[Config API] Permission mode set to: {mode}")
-        return {"status": "ok", "mode": mode, "label": _permission_label(mode)}
+        return _commit_policy_update(
+            request,
+            data,
+            scope="permission_mode",
+            write_error="配置写入失败，安全模式未切换",
+            response_data={"mode": mode, "label": _permission_label(mode)},
+            after_write=lambda: logger.info("[Config API] Permission mode set to: %s", mode),
+        )
+    except HTTPException:
+        raise
     except Exception as e:
         logger.warning(f"[Config API] permission-mode write error: {e}")
         return {"status": "error", "message": str(e)}
@@ -2177,7 +2081,7 @@ async def read_security_profile():
 
 
 @router.post("/api/config/security-profile")
-async def write_security_profile(body: SecurityProfileUpdate):
+async def write_security_profile(body: SecurityProfileUpdate, request: Request):
     profile = _normalize_security_profile(body.profile)
     if profile == "off" and (body.ack_phrase or "") != _SECURITY_PROFILE_OFF_ACK:
         return {
@@ -2186,8 +2090,6 @@ async def write_security_profile(body: SecurityProfileUpdate):
         }
     try:
         from datetime import UTC, datetime
-
-        from openakita.core.policy_v2.global_engine import reset_policy_v2_layer
 
         data = _read_policies_yaml()
         if data is None:
@@ -2198,11 +2100,16 @@ async def write_security_profile(body: SecurityProfileUpdate):
         if profile == "off":
             sec.setdefault("profile", {})["off_acknowledged_at"] = datetime.now(UTC).isoformat()
             sec.setdefault("profile", {})["off_acknowledged_by"] = "local_user"
-        if not _write_policies_yaml(data):
-            return {"status": "error", "message": "配置写入失败，安全方案未切换"}
-        _write_profile_event(profile, previous=previous)
-        reset_policy_v2_layer(scope="security_profile")
-        return {"status": "ok", "profile": profile}
+        return _commit_policy_update(
+            request,
+            data,
+            scope="security_profile",
+            write_error="配置写入失败，安全方案未切换",
+            response_data={"profile": profile},
+            after_write=lambda: _write_profile_event(profile, previous=previous),
+        )
+    except HTTPException:
+        raise
     except Exception as e:
         logger.warning("[Config API] security profile write error: %s", e)
         return {"status": "error", "message": str(e)}
@@ -2466,7 +2373,7 @@ class _ConfirmationUpdate(BaseModel):
 
 
 @router.post("/api/config/security/confirmation")
-async def write_security_confirmation(body: _ConfirmationUpdate):
+async def write_security_confirmation(body: _ConfirmationUpdate, request: Request):
     """Update confirmation config (PATCH semantics)."""
     data = _read_policies_yaml()
     if data is None:
@@ -2517,14 +2424,12 @@ async def write_security_confirmation(body: _ConfirmationUpdate):
             }
         conf["aggregation_window_seconds"] = v
     _mark_security_profile_custom(sec)
-    _write_policies_yaml(data)
-    try:
-        from openakita.core.policy_v2.global_engine import reset_policy_v2_layer
-
-        reset_policy_v2_layer(scope="confirmation")
-    except Exception:
-        pass
-    return {"status": "ok"}
+    return _commit_policy_update(
+        request,
+        data,
+        scope="confirmation",
+        write_error="配置写入失败，确认策略未更新",
+    )
 
 
 # ── Self-protection config CRUD ──────────────────────────────────────
@@ -2592,7 +2497,7 @@ class _SelfProtectionUpdate(BaseModel):
 
 
 @router.post("/api/config/security/self-protection")
-async def write_self_protection(body: _SelfProtectionUpdate):
+async def write_self_protection(body: _SelfProtectionUpdate, request: Request):
     """Update self-protection config (PATCH semantics) — writes V2 fields only."""
     data = _read_policies_yaml()
     if data is None:
@@ -2616,14 +2521,12 @@ async def write_self_protection(body: _SelfProtectionUpdate):
     # 彻底丢弃 legacy 子树
     sec.pop("self_protection", None)
     _mark_security_profile_custom(sec)
-    _write_policies_yaml(data)
-    try:
-        from openakita.core.policy_v2.global_engine import reset_policy_v2_layer
-
-        reset_policy_v2_layer(scope="self_protection")
-    except Exception:
-        pass
-    return {"status": "ok"}
+    return _commit_policy_update(
+        request,
+        data,
+        scope="self_protection",
+        write_error="配置写入失败，自我保护策略未更新",
+    )
 
 
 # ── Security user allowlist CRUD ─────────────────────────────────────

@@ -169,10 +169,6 @@ export function IdentityView({ serviceRunning, apiBaseUrl }: Props) {
 
       if (data.saved) {
         setOriginalContent(content);
-        // Auto-reload identity
-        try {
-          await safeFetch(`${API}/api/identity/reload`, { method: "POST" });
-        } catch { /* best effort */ }
         showToast(t("identity.saved"));
         loadFiles();
       }

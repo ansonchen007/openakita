@@ -414,11 +414,11 @@ class TestSnapshotFailedSentinel:
         """tool_executor must fail-closed by clearing tool_input when
         snapshot failed AND the hook tried to mutate."""
 
+        from openakita.agent.tools import ToolExecutor
         from openakita.core.policy_v2.param_mutation_audit import (
             SNAPSHOT_FAILED,
             ParamMutationAuditor,
         )
-        from openakita.agent.tools import ToolExecutor
         from openakita.tools.handlers import SystemHandlerRegistry
 
         original_snapshot = ParamMutationAuditor.snapshot
@@ -539,12 +539,12 @@ class TestClassifierCacheInvalidation:
         from openakita.plugins.manager import PluginManager
 
         src = inspect.getsource(PluginManager.unload_plugin)
-        assert "invalidate_classifier_cache" in src, (
+        assert "_invalidate_policy_classifier_cache" in src, (
             "PluginManager.unload_plugin lost its classifier invalidation "
             "wire; C10 cache-staleness fix regressed"
         )
         src_reload = inspect.getsource(PluginManager.reload_plugin)
-        assert "invalidate_classifier_cache" in src_reload, (
+        assert "_invalidate_policy_classifier_cache" in src_reload, (
             "PluginManager.reload_plugin lost its classifier invalidation wire"
         )
 

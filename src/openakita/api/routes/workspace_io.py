@@ -7,8 +7,10 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
+
+from openakita.api.runtime_response import runtime_operation_response
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +65,7 @@ async def get_backup_settings():
 
 
 @router.post("/api/workspace/backup-settings")
-async def save_backup_settings(body: BackupSettingsRequest):
+async def save_backup_settings(body: BackupSettingsRequest, request: Request):
     """Save backup settings and sync the scheduler task."""
     from openakita.workspace.backup import (
         write_backup_settings,
@@ -74,13 +76,13 @@ async def save_backup_settings(body: BackupSettingsRequest):
     write_backup_settings(root, new_settings)
     logger.info(f"[Workspace IO] Backup settings updated: enabled={body.enabled}")
 
-    # Sync scheduler task
-    try:
-        _sync_backup_scheduler_task(new_settings)
-    except Exception as exc:
-        logger.warning(f"[Workspace IO] Failed to sync scheduler: {exc}")
+    from openakita.runtime_config_coordinator import get_runtime_config_coordinator
 
-    return {"status": "ok", "settings": new_settings}
+    runtime = await get_runtime_config_coordinator(request).sync_scheduler(
+        lambda: _sync_backup_scheduler_task(new_settings)
+    )
+
+    return runtime_operation_response(runtime, {"settings": new_settings})
 
 
 @router.post("/api/workspace/export")
@@ -167,10 +169,8 @@ async def get_backup_list():
 # ─── Scheduler sync helper ────────────────────────────────────────────
 
 
-def _sync_backup_scheduler_task(settings: dict) -> None:
+async def _sync_backup_scheduler_task(settings: dict) -> None:
     """Create, update, or disable the system:workspace_backup scheduler task."""
-    import asyncio
-
     from openakita.scheduler import get_active_scheduler
 
     scheduler = get_active_scheduler()
@@ -194,27 +194,20 @@ def _sync_backup_scheduler_task(settings: dict) -> None:
         if getattr(existing, "delivery_policy", None) != TaskDeliveryPolicy.FALLBACK_ALLOWED:
             updates["delivery_policy"] = TaskDeliveryPolicy.FALLBACK_ALLOWED
 
-        async def _apply():
-            if updates:
-                await scheduler.update_task(task_id, updates)
-            if existing.enabled != enabled:
-                if enabled:
-                    await scheduler.enable_task(task_id)
-                else:
-                    await scheduler.disable_task(task_id)
-            if updates or existing.enabled != enabled:
-                logger.info(f"[Workspace IO] Updated backup task: enabled={enabled}")
-
-        try:
-            loop = asyncio.get_running_loop()
-            loop.create_task(_apply())
-        except RuntimeError:
-            asyncio.run(_apply())
+        if updates:
+            await scheduler.update_task(task_id, updates)
+        if existing.enabled != enabled:
+            if enabled:
+                await scheduler.enable_task(task_id)
+            else:
+                await scheduler.disable_task(task_id)
+        if updates or existing.enabled != enabled:
+            logger.info(f"[Workspace IO] Updated backup task: enabled={enabled}")
     elif enabled:
-        _register_backup_task(scheduler, settings)
+        await _register_backup_task(scheduler, settings)
 
 
-def _register_backup_task(scheduler: object, settings: dict) -> None:
+async def _register_backup_task(scheduler: object, settings: dict) -> None:
     """Register the workspace backup system task."""
     from openakita.scheduler.task import (
         ScheduledTask,
@@ -239,13 +232,7 @@ def _register_backup_task(scheduler: object, settings: dict) -> None:
         enabled=True,
         deletable=False,
     )
-    import asyncio
-
-    try:
-        loop = asyncio.get_running_loop()
-        loop.create_task(scheduler.add_task(task))
-    except RuntimeError:
-        asyncio.run(scheduler.add_task(task))
+    await scheduler.add_task(task)
     logger.info("[Workspace IO] Registered backup scheduler task")
 
 

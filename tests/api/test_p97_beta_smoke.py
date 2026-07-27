@@ -51,6 +51,7 @@ def mint_app() -> FastAPI:
     app.state.org_blackboard = MagicMock(name="OrgBlackboard")
     app.state.project_store = MagicMock(name="ProjectStore")
     app.state.node_scheduler = MagicMock(name="NodeScheduler")
+    app.state.org_agent_cache = MagicMock(name="OrgAgentCache")
     # ``get_org_snapshot`` is OPTIONAL on the runtime -- the get_org
     # endpoint falls back to the manager when it is absent. Force the
     # absence here so the smoke pins the manager-path.
@@ -416,6 +417,7 @@ def test_b23_update_node_identity_writes_file(
         json={"ROLE.md": "I am a node"},
     )
     assert resp.status_code == 200
+    mint_app.state.org_agent_cache.evict.assert_called_once_with("org_x", "n1")
     written = tmp_path / "org_x" / "nodes" / "n1" / "identity" / "ROLE.md"
     assert written.read_text(encoding="utf-8") == "I am a node"
 
@@ -438,6 +440,7 @@ def test_b25_update_node_mcp_writes_file(
         json={"mode": "override", "servers": []},
     )
     assert resp.status_code == 200
+    mint_app.state.org_agent_cache.evict.assert_called_once_with("org_x", "n1")
     written = tmp_path / "org_x" / "nodes" / "n1" / "mcp_config.json"
     assert json.loads(written.read_text(encoding="utf-8"))["mode"] == "override"
 

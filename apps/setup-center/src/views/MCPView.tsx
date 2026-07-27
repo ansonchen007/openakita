@@ -19,6 +19,7 @@ import { Switch } from "@/components/ui/switch";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Loader2, RefreshCw, Plus, Trash2, Plug, Unplug, Info, Server, Wrench, Eye, EyeOff, Save, AlertTriangle, Search, CheckCircle2, CircleDashed, XCircle, Link2 } from "lucide-react";
 import { toast } from "sonner";
+import { connectionStatus, operationStatus, runtimeNotice } from "../utils/runtimeOperation";
 
 type MCPTool = {
   name: string;
@@ -281,9 +282,12 @@ function MCPConfigForm({
         body: JSON.stringify({ server_name: serverName }),
       });
       const data = await res.json();
-      if (data.status === "connected" || data.status === "already_connected") {
-        toast.success(t("mcp.testConnectSuccess") || `${serverName} 连接成功`);
-        if (data.status === "connected") {
+      const applyNotice = runtimeNotice(data);
+      const currentConnectionStatus = connectionStatus(data);
+      if (currentConnectionStatus === "connected" || currentConnectionStatus === "already_connected") {
+        if (applyNotice) toast.warning(`${t("mcp.testConnectSuccess")}: ${applyNotice}`);
+        else toast.success(t("mcp.testConnectSuccess") || `${serverName} 连接成功`);
+        if (currentConnectionStatus === "connected") {
           try {
             await safeFetch(`${apiBaseUrl}/api/mcp/disconnect`, {
               method: "POST",
@@ -296,7 +300,7 @@ function MCPConfigForm({
       } else if (data.status === "config_incomplete") {
         toast.error(data.message || t("mcp.configRequired"));
       } else {
-        toast.error(`${t("mcp.testConnectFailed") || "测试连接失败"}: ${data.error || ""}`);
+        toast.error(`${t("mcp.testConnectFailed") || "测试连接失败"}: ${data.error || applyNotice || ""}`);
       }
     } catch (e) {
       if (isTimeoutError(e)) {
@@ -588,13 +592,16 @@ export function MCPView({
         body: JSON.stringify({ server_name: name }),
       });
       const data = await res.json();
-      if (data.status === "connected" || data.status === "already_connected") {
+      const applyNotice = runtimeNotice(data);
+      const currentConnectionStatus = connectionStatus(data);
+      if (currentConnectionStatus === "connected" || currentConnectionStatus === "already_connected") {
         setFailedServers(prev => {
           const next = { ...prev };
           delete next[name];
           return next;
         });
-        showMsg(t("mcp.connectSuccess", { name }), true);
+        if (applyNotice) toast.warning(`${t("mcp.connectSuccess", { name })}: ${applyNotice}`);
+        else showMsg(t("mcp.connectSuccess", { name }), true);
         await fetchServers();
       } else if (data.status === "config_incomplete") {
         const server = servers.find(s => s.name === name);
@@ -611,7 +618,7 @@ export function MCPView({
         }
       } else {
         setFailedServers(prev => ({ ...prev, [name]: true }));
-        showMsg(`${t("mcp.connectFailed")}: ${data.error || t("mcp.unknownError")}`, false);
+        showMsg(`${t("mcp.connectFailed")}: ${data.error || applyNotice || t("mcp.unknownError")}`, false);
       }
     } catch (e) {
       setFailedServers(prev => ({ ...prev, [name]: true }));
@@ -629,22 +636,30 @@ export function MCPView({
     setBusyTarget(name);
     setBusyAction("disconnect");
     try {
-      await safeFetch(`${apiBaseUrl}/api/mcp/disconnect`, {
+      const res = await safeFetch(`${apiBaseUrl}/api/mcp/disconnect`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ server_name: name }),
       });
+      const data = await res.json();
+      const applyNotice = runtimeNotice(data);
+      const currentConnectionStatus = connectionStatus(data);
+      if (currentConnectionStatus !== "disconnected" && currentConnectionStatus !== "not_connected") {
+        throw new Error(data.error || applyNotice || t("mcp.unknownError"));
+      }
       setFailedServers(prev => {
         const next = { ...prev };
         delete next[name];
         return next;
       });
-      showMsg(t("mcp.disconnectSuccess", { name }), true);
+      if (applyNotice) toast.warning(`${t("mcp.disconnectSuccess", { name })}: ${applyNotice}`);
+      else showMsg(t("mcp.disconnectSuccess", { name }), true);
       await fetchServers();
     } catch (e) {
       showMsg(isTimeoutError(e)
         ? (t("mcp.disconnectTimeout") || "断开连接超时，请稍后重试")
         : `${t("mcp.disconnectError")}: ${e}`, false);
+      await fetchServers();
     }
     setBusyTarget(null);
     setBusyAction(null);
@@ -656,11 +671,13 @@ export function MCPView({
     try {
       const res = await safeFetch(`${apiBaseUrl}/api/mcp/servers/${encodeURIComponent(name)}`, { method: "DELETE" });
       const data = await res.json();
-      if (data.status === "ok") {
-        showMsg(t("mcp.deleteSuccess", { name }), true);
+      const applyNotice = runtimeNotice(data);
+      if (operationStatus(data) === "ok") {
+        if (applyNotice) toast.warning(`${t("mcp.deleteSuccess", { name })}: ${applyNotice}`);
+        else showMsg(t("mcp.deleteSuccess", { name }), true);
         await fetchServers();
       } else {
-        showMsg(`${t("mcp.deleteFailed")}: ${data.message || t("mcp.unknownError")}`, false);
+        showMsg(`${t("mcp.deleteFailed")}: ${data.message || applyNotice || t("mcp.unknownError")}`, false);
       }
     } catch (e) {
       showMsg(isTimeoutError(e)
@@ -707,7 +724,8 @@ export function MCPView({
         }),
       });
       const data = await res.json();
-      if (data.status === "ok") {
+      const applyNotice = runtimeNotice(data);
+      if (operationStatus(data) === "ok") {
         const cr = data.connect_result;
         let connMsg = "";
         if (cr) {
@@ -717,12 +735,13 @@ export function MCPView({
             connMsg = `\n[!] ${t("mcp.autoConnectFailed")}: ${cr.error || t("mcp.unknownError")}`;
           }
         }
-        showMsg(`${t("mcp.addSuccess", { name })}${connMsg}`, !cr || cr.connected !== false);
+        if (applyNotice) toast.warning(`${t("mcp.addSuccess", { name })}: ${applyNotice}`);
+        else showMsg(`${t("mcp.addSuccess", { name })}${connMsg}`, !cr || cr.connected !== false);
         setForm({ ...emptyForm });
         setShowAdd(false);
         await fetchServers();
       } else {
-        showMsg(`${t("mcp.addFailed")}: ${data.message || data.error || t("mcp.unknownError")}`, false);
+        showMsg(`${t("mcp.addFailed")}: ${data.message || data.error || applyNotice || t("mcp.unknownError")}`, false);
       }
     } catch (e) {
       if (isTimeoutError(e)) {

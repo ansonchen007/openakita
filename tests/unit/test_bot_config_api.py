@@ -7,10 +7,14 @@ from fastapi import HTTPException
 
 from openakita.api.routes.agents import (
     BotCreateRequest,
+    BotToggleRequest,
+    BotUpdateRequest,
     _bot_apply_tasks,
     _runtime_bot_view,
     _validate_bot_credentials,
     create_bot,
+    toggle_bot,
+    update_bot,
 )
 
 
@@ -38,15 +42,19 @@ async def test_create_bot_returns_before_runtime_start_and_keeps_failed_config(m
         return False
 
     monkeypatch.setattr(config.settings, "im_bots", [], raising=False)
-    monkeypatch.setattr(
-        config.runtime_state, "save", lambda: saves.append(list(config.settings.im_bots))
-    )
+
+    def save_updates(**updates):
+        for key, value in updates.items():
+            setattr(config.settings, key, value)
+        saves.append(list(config.settings.im_bots))
+
+    monkeypatch.setattr(config.runtime_state, "save_updates", save_updates)
     main_stub = ModuleType("openakita.main")
     main_stub.apply_im_bot = fail_apply
     main_stub.get_im_bot_runtime_error = lambda _channel: None
     main_stub._bot_channel_name = lambda bot: f"{bot['type']}:{bot['id']}"
-    main_stub._set_im_bot_runtime_state = (
-        lambda channel, status, error=None: runtime_states.append((channel, status, error))
+    main_stub._set_im_bot_runtime_state = lambda channel, status, error=None: runtime_states.append(
+        (channel, status, error)
     )
     monkeypatch.setitem(sys.modules, "openakita.main", main_stub)
 
@@ -56,7 +64,8 @@ async def test_create_bot_returns_before_runtime_start_and_keeps_failed_config(m
                 id="warehouse",
                 type="wework_ws",
                 credentials={"bot_id": "bot-1", "secret": "secret-1"},
-            )
+            ),
+            SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace())),
         )
 
         assert response["status"] == "accepted"
@@ -81,6 +90,131 @@ async def test_create_bot_returns_before_runtime_start_and_keeps_failed_config(m
         finish_startup.set()
         if _bot_apply_tasks:
             await asyncio.gather(*tuple(_bot_apply_tasks), return_exceptions=True)
+        config.settings.im_bots = original_bots
+
+
+@pytest.mark.asyncio
+async def test_create_bot_restores_in_memory_config_when_persistence_fails(monkeypatch) -> None:
+    import openakita.config as config
+
+    original_bots = config.settings.im_bots
+    existing = [{"id": "existing", "type": "feishu", "enabled": False}]
+    monkeypatch.setattr(config.settings, "im_bots", existing, raising=False)
+    monkeypatch.setattr(
+        config.runtime_state,
+        "save_updates",
+        lambda **_updates: (_ for _ in ()).throw(OSError("disk full")),
+    )
+
+    try:
+        with pytest.raises(HTTPException) as exc_info:
+            await create_bot(
+                BotCreateRequest(
+                    id="warehouse",
+                    type="wework_ws",
+                    credentials={"bot_id": "bot-1", "secret": "secret-1"},
+                ),
+                SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace())),
+            )
+
+        assert exc_info.value.status_code == 500
+        assert exc_info.value.detail["error"] == "im_config_save_failed"
+        assert config.settings.im_bots is existing
+    finally:
+        config.settings.im_bots = original_bots
+
+
+@pytest.mark.asyncio
+async def test_update_bot_rolls_back_when_runtime_rejects_without_error_text(monkeypatch) -> None:
+    import openakita.config as config
+
+    original_bots = config.settings.im_bots
+    old_bot = {
+        "id": "support",
+        "type": "feishu",
+        "name": "Old",
+        "agent_profile_id": "default",
+        "enabled": True,
+        "credentials": {"app_id": "cli_x", "app_secret": "secret"},
+    }
+    applied_names: list[str] = []
+
+    async def reject_apply(candidate: dict) -> bool:
+        applied_names.append(str(candidate.get("name", "")))
+        return False
+
+    monkeypatch.setattr(config.settings, "im_bots", [old_bot], raising=False)
+
+    def save_updates(**updates):
+        for key, value in updates.items():
+            setattr(config.settings, key, value)
+
+    monkeypatch.setattr(config.runtime_state, "save_updates", save_updates)
+    main_stub = ModuleType("openakita.main")
+    main_stub.apply_im_bot = reject_apply
+    main_stub.get_im_bot_runtime_error = lambda _channel: None
+    monkeypatch.setitem(sys.modules, "openakita.main", main_stub)
+
+    try:
+        with pytest.raises(HTTPException) as exc_info:
+            await update_bot(
+                "support",
+                BotUpdateRequest(name="New"),
+                SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace())),
+            )
+
+        assert exc_info.value.status_code == 502
+        assert "did not accept" in exc_info.value.detail
+        assert applied_names == ["New", "Old"]
+        assert config.settings.im_bots[0]["name"] == "Old"
+    finally:
+        config.settings.im_bots = original_bots
+
+
+@pytest.mark.asyncio
+async def test_toggle_bot_rolls_back_when_runtime_rejects_enable(monkeypatch) -> None:
+    import openakita.config as config
+
+    original_bots = config.settings.im_bots
+    old_bot = {
+        "id": "support",
+        "type": "feishu",
+        "name": "Support",
+        "agent_profile_id": "default",
+        "enabled": False,
+        "credentials": {"app_id": "cli_x", "app_secret": "secret"},
+    }
+    saves: list[list[dict]] = []
+
+    async def reject_apply(_bot: dict) -> bool:
+        return False
+
+    monkeypatch.setattr(config.settings, "im_bots", [old_bot], raising=False)
+
+    def save_updates(**updates):
+        for key, value in updates.items():
+            setattr(config.settings, key, value)
+        saves.append(list(config.settings.im_bots))
+
+    monkeypatch.setattr(config.runtime_state, "save_updates", save_updates)
+    main_stub = ModuleType("openakita.main")
+    main_stub.apply_im_bot = reject_apply
+    main_stub.get_im_bot_runtime_error = lambda _channel: None
+    monkeypatch.setitem(sys.modules, "openakita.main", main_stub)
+
+    try:
+        with pytest.raises(HTTPException) as exc_info:
+            await toggle_bot(
+                "support",
+                BotToggleRequest(enabled=True),
+                SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace())),
+            )
+
+        assert exc_info.value.status_code == 502
+        assert "did not accept" in exc_info.value.detail
+        assert [saved[0]["enabled"] for saved in saves] == [True, False]
+        assert config.settings.im_bots[0]["enabled"] is False
+    finally:
         config.settings.im_bots = original_bots
 
 

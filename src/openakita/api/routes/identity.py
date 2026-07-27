@@ -18,6 +18,7 @@ from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 
+from openakita.api.runtime_response import runtime_operation_response
 from openakita.config import settings
 from openakita.prompt.budget import estimate_tokens
 
@@ -286,11 +287,22 @@ async def write_identity_file(req: FileWriteRequest, request: Request):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(req.content, encoding="utf-8")
 
-    return {
-        "saved": True,
-        "name": name,
-        "tokens": estimate_tokens(req.content),
-    }
+    from openakita.runtime_config_coordinator import get_runtime_config_coordinator
+
+    runtime = get_runtime_config_coordinator(request).refresh_identity(
+        _identity_dir(),
+        reason=f"identity:{name}",
+        refresh_policy=name == "POLICIES.yaml",
+    )
+
+    return runtime_operation_response(
+        runtime,
+        {
+            "saved": True,
+            "name": name,
+            "tokens": estimate_tokens(req.content),
+        },
+    )
 
 
 @router.post("/validate")
@@ -303,28 +315,16 @@ async def validate_file(req: ValidateRequest):
 @router.post("/reload")
 async def reload_identity(request: Request):
     """Hot-reload identity files into the running agent."""
-    agent = _get_agent(request)
+    from openakita.runtime_config_coordinator import get_runtime_config_coordinator
 
-    identity = getattr(agent, "identity", None)
-    if identity is None:
-        local = getattr(agent, "_local_agent", None)
-        if local:
-            identity = getattr(local, "identity", None)
-    if identity is None:
-        raise HTTPException(500, "Identity not available on agent")
-
-    identity.reload()
-
-    # Force recompile runtime artifacts
-    from openakita.prompt.compiler import compile_all
-
-    identity_dir = _identity_dir()
-    compile_all(identity_dir)
-
-    # Rebuild system prompt if possible
-    _try_rebuild_prompt(agent)
-
-    return {"status": "reloaded"}
+    result = get_runtime_config_coordinator(request).refresh_identity(
+        _identity_dir(),
+        reason="identity:manual_reload",
+        refresh_policy=True,
+    )
+    if result.failed:
+        raise HTTPException(500, detail=result.to_dict())
+    return result.to_dict()
 
 
 @router.post("/compile")
@@ -361,10 +361,9 @@ async def compile_identity(request: Request, mode: str = "rules"):
         compile_all(identity_dir)
         mode_used = "rules"
 
-    # Rebuild system prompt
-    agent = getattr(request.app.state, "agent", None)
-    if agent:
-        _try_rebuild_prompt(agent)
+    from openakita.runtime_config_coordinator import get_runtime_config_coordinator
+
+    runtime = get_runtime_config_coordinator(request).rebuild_agent_prompt()
 
     from openakita.prompt.compiler import get_compiled_content
 
@@ -383,8 +382,10 @@ async def compile_identity(request: Request, mode: str = "rules"):
         }
 
     return {
+        "status": runtime.status,
         "mode_used": mode_used,
         "compiled_files": compiled_info,
+        "runtime": runtime.to_dict(),
     }
 
 
@@ -519,29 +520,3 @@ async def import_persona_file(file: UploadFile = File(...)):
         "persona_id": persona_id,
         "tokens": estimate_tokens(content),
     }
-
-
-# ─── Internal helpers ───────────────────────────────────────────────────
-
-
-def _try_rebuild_prompt(agent) -> None:
-    """Best-effort rebuild of the agent's system prompt after identity changes."""
-    try:
-        local = getattr(agent, "_local_agent", agent)
-        if hasattr(local, "_build_system_prompt_compiled_sync"):
-            new_prompt = local._build_system_prompt_compiled_sync()
-            ctx = getattr(local, "_context", None)
-            if ctx:
-                ctx.system = new_prompt
-                logger.info("[Identity API] System prompt rebuilt after identity change")
-                return
-        # Fallback: try identity.get_compiled_prompt for simpler setups
-        identity = getattr(local, "identity", None)
-        if identity and hasattr(identity, "get_compiled_prompt"):
-            base_prompt = identity.get_compiled_prompt()
-            ctx = getattr(local, "_context", None)
-            if ctx:
-                ctx.system = base_prompt
-                logger.info("[Identity API] System prompt rebuilt (identity-only fallback)")
-    except Exception as e:
-        logger.warning(f"[Identity API] Failed to rebuild system prompt: {e}")

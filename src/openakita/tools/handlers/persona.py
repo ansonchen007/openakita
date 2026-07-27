@@ -96,12 +96,19 @@ class PersonaHandler:
             return "❌ 人格系统未初始化"
 
         # 1) 先尝试内置预设
-        success = self.agent.persona_manager.switch_preset(preset_name)
-        if success:
-            from ...config import runtime_state, settings
+        if preset_name in self.agent.persona_manager.available_presets:
+            from ...agent.persona import apply_persona_runtime
+            from ...config import runtime_state
 
-            settings.persona_name = preset_name
-            runtime_state.save()
+            try:
+                runtime_state.save_updates(persona_name=preset_name)
+            except Exception as exc:
+                return f"❌ 人格配置保存失败，当前人格未切换: {exc}"
+            try:
+                apply_persona_runtime(self.agent, preset_name)
+            except Exception as exc:
+                logger.warning("[switch_persona] persona runtime refresh failed: %s", exc)
+                return f"⚠️ 人格配置已保存，将在下次重载时生效: {exc}"
             return (
                 f"✅ 已切换人格为: {preset_name}\n\n"
                 f"当前可用预设: {', '.join(self.agent.persona_manager.available_presets)}"
@@ -213,12 +220,15 @@ class PersonaHandler:
         if not hasattr(self.agent, "proactive_engine") or not self.agent.proactive_engine:
             return "❌ 活人感引擎未初始化"
 
-        self.agent.proactive_engine.toggle(enabled)
-        # 更新配置并持久化
         from ...config import runtime_state, settings
 
-        settings.proactive_enabled = enabled
-        runtime_state.save()
+        previous = settings.proactive_enabled
+        self.agent.proactive_engine.toggle(enabled)
+        try:
+            runtime_state.save_updates(proactive_enabled=enabled)
+        except Exception as exc:
+            self.agent.proactive_engine.toggle(previous)
+            return f"❌ 主动消息设置保存失败，已恢复原状态: {exc}"
 
         if enabled:
             return "✅ 已开启活人感模式！我会不定期给你发问候和提醒~\n\n你可以随时说「关闭活人感」来关闭。"

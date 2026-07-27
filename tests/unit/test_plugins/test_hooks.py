@@ -112,6 +112,37 @@ class TestExceptionIsolation:
         results = await registry.dispatch("on_init")
         assert results == ["fast"]
 
+    async def test_strict_dispatch_reports_callback_failure(self, registry):
+        async def bad(**kw):
+            raise RuntimeError("config rejected")
+
+        registry.register("on_config_change", bad, plugin_id="p1")
+
+        with pytest.raises(RuntimeError, match="p1: config rejected"):
+            await registry.dispatch("on_config_change", fail_on_error=True, config={})
+
+    async def test_targeted_dispatch_ignores_other_plugin_failures(self, registry):
+        calls: list[str] = []
+
+        async def target(**kw):
+            calls.append(kw["plugin_id"])
+
+        async def unrelated(**_kw):
+            raise RuntimeError("unrelated failure")
+
+        registry.register("on_config_change", target, plugin_id="target")
+        registry.register("on_config_change", unrelated, plugin_id="other")
+
+        await registry.dispatch(
+            "on_config_change",
+            fail_on_error=True,
+            target_plugin_id="target",
+            plugin_id="target",
+            config={},
+        )
+
+        assert calls == ["target"]
+
 
 # ---------- unregister_plugin ----------
 

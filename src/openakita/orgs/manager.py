@@ -49,6 +49,7 @@ import os
 import shutil
 import threading
 from datetime import UTC, datetime
+from functools import wraps
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
@@ -97,6 +98,19 @@ __all__ = [
 ]
 
 logger = logging.getLogger(__name__)
+
+
+def _serialize_profile_reference_changes(func):
+    """Keep organization profile references atomic with profile deletion."""
+
+    @wraps(func)
+    def _wrapped(*args, **kwargs):
+        from openakita.runtime_config_coordinator import profile_reference_change_lock
+
+        with profile_reference_change_lock():
+            return func(*args, **kwargs)
+
+    return _wrapped
 
 # v1 ``manager._init_dirs`` README body (Chinese; user-facing). Lifted
 # verbatim so the persisted ``policies/README.md`` is byte-equal
@@ -462,6 +476,18 @@ class OrgManager:
             )
         return result
 
+    def list_organizations_strict(self) -> list[Organization]:
+        """Load every persisted organization, raising if any record is unreadable."""
+        organizations: list[Organization] = []
+        for org_id in self._persistence.list_org_ids():
+            raw = self._load_org_dict_with_migrations(org_id)
+            if raw is None:
+                raise FileNotFoundError(
+                    f"Organization disappeared during reference scan: {org_id}"
+                )
+            organizations.append(Organization.from_dict(raw))
+        return organizations
+
     def get(self, org_id: str) -> Organization | None:
         """Cached read; missing orgs return ``None`` (matches v1)."""
         try:
@@ -534,6 +560,7 @@ class OrgManager:
         if conflicts:
             raise OrgNameConflictError(clean, str(conflicts[0].get("id") or ""))
 
+    @_serialize_profile_reference_changes
     def create(self, data: dict[str, Any]) -> Organization:
         """Mint a new org and persist it.
 
@@ -554,6 +581,7 @@ class OrgManager:
         self._lifecycle.emit_org_created(org.id, org.name)
         return org
 
+    @_serialize_profile_reference_changes
     def delete(self, org_id: str) -> bool:
         """Permanently remove ``org_id``'s data; idempotent (returns False if absent)."""
         deleted = self._persistence.delete_org_dir(org_id)
@@ -695,6 +723,7 @@ class OrgManager:
     # Update / archive / save_direct / duplicate (P9.5b2)
     # ------------------------------------------------------------------
 
+    @_serialize_profile_reference_changes
     def update(self, org_id: str, data: dict[str, Any]) -> Organization:
         """Merge ``data`` into the existing org and persist.
 
@@ -785,6 +814,7 @@ class OrgManager:
         self._lifecycle.emit_org_updated(org.id)
         return org
 
+    @_serialize_profile_reference_changes
     def save_direct(self, org: Organization) -> bool:
         """Persist ``org`` without the load-merge dance.
 
@@ -807,6 +837,7 @@ class OrgManager:
         """Sugar for ``update(org_id, {"status": "active"})``."""
         return self.update(org_id, {"status": "active"})
 
+    @_serialize_profile_reference_changes
     def duplicate(self, org_id: str, new_name: str | None = None) -> Organization:
         """Deep-copy ``org_id`` into a fresh org, re-minting node + edge ids.
 
@@ -1017,6 +1048,7 @@ class OrgManager:
             return None
         return resolved
 
+    @_serialize_profile_reference_changes
     def create_from_template(
         self, template_id: str, overrides: dict[str, Any] | None = None
     ) -> Organization:

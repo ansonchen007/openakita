@@ -137,6 +137,127 @@ async def test_write_env_invalid_runtime_value_does_not_partially_update(
 
 
 @pytest.mark.asyncio
+async def test_write_env_rolls_back_runtime_settings_when_state_write_fails(
+    isolated_runtime_state,
+    monkeypatch,
+):
+    from openakita.api.routes.config import EnvUpdateRequest, write_env
+    from openakita.config import settings
+    from openakita.utils import atomic_io
+
+    monkeypatch.setattr(settings, "persona_name", "default")
+    monkeypatch.setattr(
+        atomic_io,
+        "atomic_json_write",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("disk full")),
+    )
+    request = SimpleNamespace(
+        app=SimpleNamespace(state=SimpleNamespace(agent=None, agent_pool=None))
+    )
+
+    with pytest.raises(OSError, match="disk full"):
+        await write_env(
+            EnvUpdateRequest(entries={"PERSONA_NAME": "jarvis"}, delete_keys=[]),
+            request,
+        )
+
+    assert settings.persona_name == "default"
+
+
+@pytest.mark.asyncio
+async def test_write_env_rolls_back_runtime_state_when_env_write_fails(
+    isolated_runtime_state,
+    monkeypatch,
+):
+    from openakita.api.routes.config import EnvUpdateRequest, write_env
+    from openakita.config import runtime_state, settings
+    from openakita.utils import atomic_io
+
+    env_path = isolated_runtime_state / ".env"
+    env_path.write_text("OPENAI_API_KEY=old\n", encoding="utf-8")
+    runtime_state.save_updates(persona_name="default")
+    real_safe_write = atomic_io.safe_write
+    env_write_attempts = 0
+
+    def fail_env_write(path, content, **kwargs):
+        nonlocal env_write_attempts
+        if path == env_path and env_write_attempts == 0:
+            env_write_attempts += 1
+            raise OSError("env disk full")
+        return real_safe_write(path, content, **kwargs)
+
+    monkeypatch.setattr(atomic_io, "safe_write", fail_env_write)
+    request = SimpleNamespace(
+        app=SimpleNamespace(state=SimpleNamespace(agent=None, agent_pool=None))
+    )
+
+    with pytest.raises(OSError, match="env disk full"):
+        await write_env(
+            EnvUpdateRequest(
+                entries={"PERSONA_NAME": "jarvis", "OPENAI_API_KEY": "new"},
+                delete_keys=[],
+            ),
+            request,
+        )
+
+    assert settings.persona_name == "default"
+    assert json.loads(runtime_state.state_file.read_text(encoding="utf-8"))["persona_name"] == (
+        "default"
+    )
+    assert env_path.read_text(encoding="utf-8").strip() == "OPENAI_API_KEY=old"
+
+
+@pytest.mark.asyncio
+async def test_tool_loading_rolls_back_both_fields_when_state_write_fails(monkeypatch):
+    from openakita.api.routes.config import ToolLoadingRequest, write_tool_loading
+    from openakita.config import settings
+    from openakita.utils import atomic_io
+
+    monkeypatch.setattr(settings, "always_load_tools", ["old_tool"])
+    monkeypatch.setattr(settings, "always_load_categories", ["old_category"])
+    monkeypatch.setattr(
+        atomic_io,
+        "atomic_json_write",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("disk full")),
+    )
+
+    with pytest.raises(OSError, match="disk full"):
+        await write_tool_loading(
+            ToolLoadingRequest(
+                always_load_tools=["new_tool"],
+                always_load_categories=["new_category"],
+            ),
+            SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace())),
+        )
+
+    assert settings.always_load_tools == ["old_tool"]
+    assert settings.always_load_categories == ["old_category"]
+
+
+@pytest.mark.asyncio
+async def test_write_env_top_level_status_matches_runtime_failure(
+    isolated_runtime_state,
+):
+    from openakita.api.routes.config import EnvUpdateRequest, write_env
+
+    class _FailingPool:
+        def notify_runtime_config_changed(self, _reason):
+            raise RuntimeError("pool unavailable")
+
+    request = SimpleNamespace(
+        app=SimpleNamespace(state=SimpleNamespace(agent=None, agent_pool=_FailingPool()))
+    )
+    response = await write_env(
+        EnvUpdateRequest(entries={"OPENAI_API_KEY": "changed"}, delete_keys=[]),
+        request,
+    )
+
+    assert response["status"] == "failed"
+    assert response["operation_status"] == "ok"
+    assert response["runtime"]["status"] == "failed"
+
+
+@pytest.mark.asyncio
 async def test_write_env_marks_network_binding_as_process_restart(
     isolated_runtime_state,
     monkeypatch,

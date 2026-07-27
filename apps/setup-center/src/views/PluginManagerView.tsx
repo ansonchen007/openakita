@@ -22,6 +22,25 @@ import {
   AlertDialogTitle,
 } from "../components/ui/alert-dialog";
 import { cn } from "../lib/utils";
+import {
+  decodeRuntimeOperationResponse,
+  type RuntimeOperationResult,
+} from "../utils/runtimeOperation";
+
+interface PluginOperationData {
+  partial?: boolean;
+  resynced?: boolean;
+  resync_mode?: string;
+}
+
+interface PluginOperationBody extends RuntimeOperationResult, PluginOperationData {
+  data?: PluginOperationData;
+  error?: {
+    guidance?: string;
+    message?: string;
+    detail?: string;
+  };
+}
 
 // Mirrors PluginErrorTracker.health_snapshot() in src/openakita/plugins/sandbox.py.
 // Optional on PluginInfo because /api/plugins responses pre-dating commit
@@ -281,9 +300,9 @@ export default function PluginManagerView({ visible, httpApiBase }: Props) {
   const [devMode, setDevMode] = useState<"off" | "symlink">("off");
   const [devModeSaving, setDevModeSaving] = useState(false);
 
-  const [toast, setToast] = useState<{ msg: string; type: "ok" | "err" } | null>(null);
+  const [toast, setToast] = useState<{ msg: string; type: "ok" | "warn" | "err" } | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout>>();
-  const showToast = (msg: string, type: "ok" | "err" = "ok") => {
+  const showToast = (msg: string, type: "ok" | "warn" | "err" = "ok") => {
     clearTimeout(toastTimer.current);
     setToast({ msg, type });
     toastTimer.current = setTimeout(() => setToast(null), 3500);
@@ -449,6 +468,27 @@ export default function PluginManagerView({ visible, httpApiBase }: Props) {
           ? `${apiBaseRef.current()}/api/plugins/${id}`
           : `${apiBaseRef.current()}/api/plugins/${id}/_admin/${action}`;
       const resp = await safeFetch(url, { method, signal: longOpSignal() });
+      const {
+        body: responseBody,
+        failure,
+        notice: applyNotice,
+      } = await decodeRuntimeOperationResponse<PluginOperationBody>(
+        resp,
+        t("plugins.configSaveFail"),
+        { allowEmpty: true },
+      );
+
+      if (action === "delete" && (resp.status === 207 || responseBody?.data?.partial)) {
+        removePluginLocal(id);
+        const guidance = responseBody?.error?.guidance ?? "";
+        const message = responseBody?.error?.message ?? t("plugins.toastUninstalledPartial");
+        const detail = responseBody?.error?.detail ?? "";
+        showToast([message, guidance, detail].filter(Boolean).join("\n"), "err");
+        notifyAppsChanged();
+        return;
+      }
+
+      if (failure) throw new Error(failure);
 
       if (action === "reload") {
         // Backend now does: unload -> resync from install_source (if known)
@@ -457,10 +497,7 @@ export default function PluginManagerView({ visible, httpApiBase }: Props) {
         // and reasonably assume their source-code edits flowed through,
         // even when (e.g.) install_source was unknown and the resync was
         // skipped, which was the original "reload button does nothing" UX.
-        let resyncBody: any = null;
-        try {
-          resyncBody = await resp.json();
-        } catch { /* ignore */ }
+        const resyncBody = responseBody;
         const data = resyncBody?.data ?? resyncBody;
         const resynced = Boolean(data?.resynced);
         const resyncMode: string = data?.resync_mode ?? "";
@@ -493,7 +530,7 @@ export default function PluginManagerView({ visible, httpApiBase }: Props) {
         } else {
           toastMsg = ACTION_LABELS[action]?.ok ?? "OK";
         }
-        showToast(toastMsg);
+        showToast(applyNotice ? `${toastMsg}: ${applyNotice}` : toastMsg, applyNotice ? "warn" : "ok");
         notifyAppsChanged();
         return;
       }
@@ -503,28 +540,15 @@ export default function PluginManagerView({ visible, httpApiBase }: Props) {
         // could not be fully removed but db files were cleaned). Surface
         // this as a non-blocking warning so the user understands a restart
         // may be needed for a fully clean state.
-        let body: any = null;
-        try { body = await resp.json(); } catch { /* ignore */ }
-        if (resp.status === 207 || body?.ok === false) {
-          removePluginLocal(id);
-          const guidance = body?.error?.guidance ?? "";
-          const message = body?.error?.message ?? t("plugins.toastUninstalledPartial");
-          // Surface the concrete locked-file list so the user can see WHY
-          // the directory could not be removed (usually a SQLite WAL or
-          // a log file the plugin forgot to close in on_unload).
-          const detail = body?.error?.detail ?? "";
-          const lines = [message];
-          if (guidance) lines.push(guidance);
-          if (detail) lines.push(detail);
-          showToast(lines.join("\n"), "err");
-          notifyAppsChanged();
-          return;
-        }
         removePluginLocal(id);
       } else {
         updatePluginLocal(id, { enabled: action === "enable" });
       }
-      showToast(ACTION_LABELS[action]?.ok ?? "OK");
+      const successMessage = ACTION_LABELS[action]?.ok ?? "OK";
+      showToast(
+        applyNotice ? `${successMessage}: ${applyNotice}` : successMessage,
+        applyNotice ? "warn" : "ok",
+      );
       notifyAppsChanged();
     } catch (e: any) {
       // A client-side timeout does NOT mean the backend operation failed —
@@ -560,14 +584,22 @@ export default function PluginManagerView({ visible, httpApiBase }: Props) {
     setInstalling(true);
     setError("");
     try {
-      await safeFetch(`${apiBaseRef.current()}/api/plugins/install`, {
+      const response = await safeFetch(`${apiBaseRef.current()}/api/plugins/install`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ source }),
         signal: longOpSignal(),
       });
+      const { failure, notice: applyNotice } = await decodeRuntimeOperationResponse(
+        response,
+        t("plugins.configSaveFail"),
+      );
+      if (failure) throw new Error(failure);
       setInstallUrl("");
-      showToast(t("plugins.toastInstalled"));
+      showToast(
+        applyNotice ? `${t("plugins.toastInstalled")}: ${applyNotice}` : t("plugins.toastInstalled"),
+        applyNotice ? "warn" : "ok",
+      );
       await fetchPlugins(false);
       notifyAppsChanged();
     } catch (e: any) {
@@ -637,12 +669,21 @@ export default function PluginManagerView({ visible, httpApiBase }: Props) {
     setConfigSaving(true);
     setConfigMsg("");
     try {
-      await safeFetch(`${apiBaseRef.current()}/api/plugins/${pluginId}/_admin/config`, {
+      const response = await safeFetch(`${apiBaseRef.current()}/api/plugins/${pluginId}/_admin/config`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(configValues),
       });
-      setConfigMsg(t("plugins.configSaved"));
+      const { failure, notice: applyNotice } = await decodeRuntimeOperationResponse(
+        response,
+        t("plugins.configSaveFail"),
+      );
+      if (failure) throw new Error(failure);
+      setConfigMsg(
+        applyNotice
+          ? `${t("plugins.configSaved")}: ${applyNotice}`
+          : t("plugins.configSaved"),
+      );
     } catch (e: any) {
       setConfigMsg(e.message || t("plugins.configSaveFail"));
     } finally {
@@ -653,11 +694,17 @@ export default function PluginManagerView({ visible, httpApiBase }: Props) {
   const handleGrantPermissions = async (pluginId: string, perms: string[]) => {
     setGranting(true);
     try {
-      await safeFetch(`${apiBaseRef.current()}/api/plugins/${pluginId}/_admin/permissions/grant`, {
+      const response = await safeFetch(`${apiBaseRef.current()}/api/plugins/${pluginId}/_admin/permissions/grant`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ permissions: perms, reload: true }),
       });
+      const { failure, notice: applyNotice } = await decodeRuntimeOperationResponse(
+        response,
+        t("plugins.configSaveFail"),
+      );
+      if (failure) throw new Error(failure);
+      if (applyNotice) showToast(applyNotice, "warn");
       await fetchPlugins(false);
       notifyAppsChanged();
     } catch (e: any) {
@@ -670,11 +717,17 @@ export default function PluginManagerView({ visible, httpApiBase }: Props) {
   const handleRevokePermission = async (pluginId: string, perm: string) => {
     setGranting(true);
     try {
-      await safeFetch(`${apiBaseRef.current()}/api/plugins/${pluginId}/_admin/permissions/revoke`, {
+      const response = await safeFetch(`${apiBaseRef.current()}/api/plugins/${pluginId}/_admin/permissions/revoke`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ permissions: [perm], reload: true }),
       });
+      const { failure, notice: applyNotice } = await decodeRuntimeOperationResponse(
+        response,
+        t("plugins.configSaveFail"),
+      );
+      if (failure) throw new Error(failure);
+      if (applyNotice) showToast(applyNotice, "warn");
       await fetchPlugins(false);
       notifyAppsChanged();
     } catch (e: any) {
@@ -1344,7 +1397,7 @@ export default function PluginManagerView({ visible, httpApiBase }: Props) {
                                 {configMsg && (
                                   <span
                                     className="text-sm"
-                                    style={{ color: configMsg === t("plugins.configSaved") ? "var(--ok, #22c55e)" : "var(--error, #f87171)" }}
+                                    style={{ color: configMsg.startsWith(t("plugins.configSaved")) ? "var(--ok, #22c55e)" : "var(--error, #f87171)" }}
                                   >
                                     {configMsg}
                                   </span>
@@ -1533,7 +1586,11 @@ export default function PluginManagerView({ visible, httpApiBase }: Props) {
           style={{
             position: "fixed", bottom: 32, left: "50%", transform: "translateX(-50%)",
             padding: "10px 24px", borderRadius: 8, fontSize: 13, cursor: "pointer",
-            background: toast.type === "ok" ? "var(--ok, #22c55e)" : "var(--danger, #ef4444)",
+            background: toast.type === "ok"
+              ? "var(--ok, #22c55e)"
+              : toast.type === "warn"
+                ? "#d97706"
+                : "var(--danger, #ef4444)",
             color: "#fff", boxShadow: "0 4px 16px rgba(0,0,0,0.18)", zIndex: 9999,
             maxWidth: 420, textAlign: "center", whiteSpace: "pre-line",
             animation: "fadeIn 0.2s ease",
@@ -1562,4 +1619,3 @@ export default function PluginManagerView({ visible, httpApiBase }: Props) {
     </div>
   );
 }
-
