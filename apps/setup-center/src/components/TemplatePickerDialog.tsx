@@ -27,6 +27,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { Loader2 } from "lucide-react";
+import { useTranslation } from "react-i18next";
 
 import {
   Dialog,
@@ -61,6 +62,7 @@ export function TemplatePickerDialog({
   onCreated,
   children,
 }: TemplatePickerDialogProps) {
+  const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const [templates, setTemplates] = useState<TemplateWire[]>([]);
   const [loading, setLoading] = useState(false);
@@ -97,11 +99,11 @@ export function TemplatePickerDialog({
       }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      setError(`无法加载组织模板：${msg}（灰度未启用时是正常的）`);
+      setError(t("org.templatePicker.loadError", { error: msg }));
     } finally {
       setLoading(false);
     }
-  }, [apiBase, selectedId]);
+  }, [apiBase, selectedId, t]);
 
   useEffect(() => {
     if (open) {
@@ -126,22 +128,22 @@ export function TemplatePickerDialog({
       setName("");
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      setError(`实例化失败：${msg}`);
+      setError(t("org.templatePicker.createError", { error: msg }));
     } finally {
       setSubmitting(false);
     }
-  }, [apiBase, selectedId, name, onCreated]);
+  }, [apiBase, selectedId, name, onCreated, t]);
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
-        {children ?? <Button variant="outline">新建组织</Button>}
+        {children ?? <Button variant="outline">{t("org.templatePicker.trigger")}</Button>}
       </DialogTrigger>
       <DialogContent className="sm:max-w-[560px]" data-testid="v2-template-dialog">
         <DialogHeader>
-          <DialogTitle>选择组织模板</DialogTitle>
+          <DialogTitle>{t("org.templatePicker.title")}</DialogTitle>
           <DialogDescription>
-            从内置模板克隆一份新的组织。点选模板，输入组织名称后即可创建。
+            {t("org.templatePicker.description")}
           </DialogDescription>
         </DialogHeader>
 
@@ -149,7 +151,7 @@ export function TemplatePickerDialog({
           {loading && (
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
               <Loader2 className="h-4 w-4 animate-spin" />
-              <span>加载模板中…</span>
+              <span>{t("org.templatePicker.loading")}</span>
             </div>
           )}
 
@@ -164,7 +166,7 @@ export function TemplatePickerDialog({
 
           {!loading && templates.length === 0 && !error && (
             <div className="text-sm text-muted-foreground">
-              暂无可用模板。请确认后端已启用 ``settings.runtime_v2_enabled``。
+              {t("org.templatePicker.empty")}
             </div>
           )}
 
@@ -173,14 +175,14 @@ export function TemplatePickerDialog({
               className="space-y-2 max-h-[42vh] overflow-y-auto px-1 py-1"
               data-testid="v2-template-dialog-list"
             >
-              {templates.map((t) => {
-                const isSelected = selectedId === t.id;
+              {templates.map((template) => {
+                const isSelected = selectedId === template.id;
                 return (
-                  <li key={t.id}>
+                  <li key={template.id}>
                     <button
                       type="button"
-                      onClick={() => setSelectedId(t.id)}
-                      data-testid={`v2-template-card-${t.id}`}
+                      onClick={() => setSelectedId(template.id)}
+                      data-testid={`v2-template-card-${template.id}`}
                       data-selected={isSelected ? "true" : "false"}
                       className={
                         "w-full text-left rounded-md border px-3 py-2 transition " +
@@ -190,20 +192,20 @@ export function TemplatePickerDialog({
                       }
                     >
                       <div className="font-medium text-sm flex items-center gap-2">
-                        <span>{t.name || t.id}</span>
+                        <span>{template.name || template.id}</span>
                         {isSelected && (
                           <span className="text-[10px] font-semibold uppercase tracking-wide text-indigo-600 dark:text-indigo-300">
-                            已选中
+                            {t("org.templatePicker.selected")}
                           </span>
                         )}
                       </div>
-                      {t.description && (
+                      {template.description && (
                         <div className="text-xs text-muted-foreground mt-1 line-clamp-2">
-                          {t.description}
+                          {template.description}
                         </div>
                       )}
                       <div className="text-[11px] text-muted-foreground mt-1">
-                        节点 {t.node_count}
+                        {t("org.templatePicker.nodeCount", { count: template.node_count })}
                       </div>
                     </button>
                   </li>
@@ -214,14 +216,14 @@ export function TemplatePickerDialog({
 
           <div className="space-y-1">
             <label className="text-xs font-medium" htmlFor="tpd-org-name">
-              新组织名称
+              {t("org.templatePicker.nameLabel")}
             </label>
             <input
               id="tpd-org-name"
               type="text"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder="例如：Acme 编辑部"
+              placeholder={t("org.templatePicker.namePlaceholder")}
               className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
             />
           </div>
@@ -230,7 +232,7 @@ export function TemplatePickerDialog({
         <DialogFooter>
           <DialogClose asChild>
             <Button variant="ghost" disabled={submitting}>
-              取消
+              {t("common.cancel")}
             </Button>
           </DialogClose>
           <Button
@@ -239,7 +241,7 @@ export function TemplatePickerDialog({
             data-testid="v2-template-dialog-create"
           >
             {submitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-            创建组织
+            {t("org.templatePicker.create")}
           </Button>
         </DialogFooter>
       </DialogContent>

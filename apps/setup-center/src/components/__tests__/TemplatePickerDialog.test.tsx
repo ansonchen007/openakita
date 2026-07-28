@@ -1,5 +1,6 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, act, fireEvent } from "@testing-library/react";
+import i18n from "../../i18n";
 
 // Mock the API module so the dialog never hits the network. The
 // mocked listTemplates returns 2 templates; instantiateTemplate
@@ -44,6 +45,10 @@ import * as orgsApi from "../../api/orgs";
 import { TemplatePickerDialog } from "../TemplatePickerDialog";
 
 describe("TemplatePickerDialog", () => {
+  beforeEach(async () => {
+    await i18n.changeLanguage("en");
+  });
+
   it("opens, lists templates, and POSTs on create", async () => {
     const onCreated = vi.fn();
     render(
@@ -53,7 +58,7 @@ describe("TemplatePickerDialog", () => {
     );
 
     // 1. Modal is closed initially — no template list.
-    expect(screen.queryByText(/选择 v2 组织模板/)).toBeNull();
+    expect(screen.queryByText("Choose an org template")).toBeNull();
 
     // 2. Click trigger → modal opens, listTemplates called.
     await act(async () => {
@@ -64,6 +69,9 @@ describe("TemplatePickerDialog", () => {
     await act(async () => {
       await Promise.resolve();
     });
+    expect(screen.getByText("Choose an org template")).toBeInTheDocument();
+    expect(screen.getByText("Selected")).toBeInTheDocument();
+    expect(screen.getByText("2 nodes")).toBeInTheDocument();
     expect(screen.getByText("Newsroom")).toBeInTheDocument();
     expect(screen.getByText("Solo Writer")).toBeInTheDocument();
 
@@ -78,11 +86,11 @@ describe("TemplatePickerDialog", () => {
     expect(screen.getByTestId("v2-template-card-tpl_b").getAttribute("data-selected")).toBe("true");
     expect(screen.getByTestId("v2-template-card-tpl_a").getAttribute("data-selected")).toBe("false");
 
-    // 5. Switch back to tpl_a, then type name and click “创建组织”.
+    // 5. Switch back to tpl_a, then type a name and create the org.
     await act(async () => {
       fireEvent.click(screen.getByTestId("v2-template-card-tpl_a"));
     });
-    const input = screen.getByLabelText(/新组织名称/) as HTMLInputElement;
+    const input = screen.getByLabelText("New org name") as HTMLInputElement;
     await act(async () => {
       fireEvent.change(input, { target: { value: "试验编辑部" } });
     });
@@ -121,5 +129,29 @@ describe("TemplatePickerDialog", () => {
     const createBtn = screen.getByTestId("v2-template-dialog-create") as HTMLButtonElement;
     // Auto-selected first template, but name empty → still disabled.
     expect(createBtn.disabled).toBe(true);
+  });
+
+  it("renders the dialog chrome in Chinese when Chinese is selected", async () => {
+    await i18n.changeLanguage("zh");
+    render(
+      <TemplatePickerDialog apiBase="http://test" onCreated={() => {}}>
+        <button data-testid="trigger-zh">open</button>
+      </TemplatePickerDialog>,
+    );
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("trigger-zh"));
+      await Promise.resolve();
+    });
+
+    expect(screen.getByText("选择组织模板")).toBeInTheDocument();
+    expect(screen.getByText("已选中")).toBeInTheDocument();
+    expect(screen.getByText("2 个节点")).toBeInTheDocument();
+    expect(screen.getByLabelText("新组织名称")).toHaveAttribute(
+      "placeholder",
+      "例如：Acme 编辑部",
+    );
+    expect(screen.getByRole("button", { name: "取消" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "创建组织" })).toBeInTheDocument();
   });
 });

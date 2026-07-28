@@ -2944,6 +2944,20 @@
     "llmEndpointsDesc": "Model endpoint status and health checks"
   },
   "org": {
+    "templatePicker": {
+      "trigger": "New org",
+      "title": "Choose an org template",
+      "description": "Create a new org from a built-in template. Select a template and enter an org name to continue.",
+      "loading": "Loading templates…",
+      "loadError": "Unable to load org templates: {{error}}",
+      "createError": "Unable to create org: {{error}}",
+      "empty": "No org templates are available.",
+      "selected": "Selected",
+      "nodeCount": "{{count}} nodes",
+      "nameLabel": "New org name",
+      "namePlaceholder": "For example: Acme Editorial",
+      "create": "Create org"
+    },
     "taskStatus": {
       "todo": "To Do",
       "inProgress": "In Progress",
