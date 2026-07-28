@@ -358,6 +358,14 @@ class MCPClient:
             return 0
 
     async def connect(self, server_name: str) -> MCPConnectResult:
+        """Connect a server and invalidate cached classifications for new tools."""
+        was_connected = server_name in self._connections
+        result = await self._connect_runtime(server_name)
+        if result.success and not was_connected:
+            self._invalidate_policy_classifier_cache()
+        return result
+
+    async def _connect_runtime(self, server_name: str) -> MCPConnectResult:
         """
         连接到 MCP 服务器
 
@@ -818,6 +826,11 @@ class MCPClient:
                 )
 
     async def disconnect(self, server_name: str) -> None:
+        """Disconnect a server and invalidate cached classifications if tools changed."""
+        if await self._disconnect_runtime(server_name):
+            self._invalidate_policy_classifier_cache()
+
+    async def _disconnect_runtime(self, server_name: str) -> bool:
         """断开服务器连接
 
         MCP SDK 的 stdio_client 内部使用 anyio cancel scope。如果 disconnect()
@@ -876,8 +889,9 @@ class MCPClient:
             self._prompts = {
                 k: v for k, v in self._prompts.items() if not k.startswith(f"{server_name}:")
             }
-            self._invalidate_policy_classifier_cache()
             logger.info(f"Disconnected from MCP server: {server_name}")
+            return True
+        return False
 
     @staticmethod
     async def _terminate_stdio_subprocess(stdio_cm: Any) -> None:
@@ -1032,9 +1046,10 @@ class MCPClient:
         self._tools = {k: v for k, v in self._tools.items() if not k.startswith(prefix)}
         self._resources = {k: v for k, v in self._resources.items() if not k.startswith(prefix)}
         self._prompts = {k: v for k, v in self._prompts.items() if not k.startswith(prefix)}
+        result = await self._connect_runtime(server_name)
+        # Reconnection replaces or removes the old capability set. Publish one
+        # invalidation after the complete transition, including failed reconnects.
         self._invalidate_policy_classifier_cache()
-
-        result = await self.connect(server_name)
         if result.success:
             logger.info(
                 "Reconnected to MCP server: %s (%d tools)",
@@ -1309,16 +1324,23 @@ class MCPClient:
         self._servers.pop(name, None)
         self._connections.pop(name, None)
         prefix = f"{name}:"
+        had_runtime_entries = any(
+            key.startswith(prefix)
+            for registry in (self._tools, self._resources, self._prompts)
+            for key in registry
+        )
         self._tools = {k: v for k, v in self._tools.items() if not k.startswith(prefix)}
         self._resources = {k: v for k, v in self._resources.items() if not k.startswith(prefix)}
         self._prompts = {k: v for k, v in self._prompts.items() if not k.startswith(prefix)}
-        self._invalidate_policy_classifier_cache()
+        if had_runtime_entries:
+            self._invalidate_policy_classifier_cache()
 
     async def reset(self) -> None:
         """断开所有连接并清空全部状态（用于重载配置）"""
+        runtime_changed = bool(self._tools or self._resources or self._prompts)
         for name in list(self._connections):
             try:
-                await self.disconnect(name)
+                runtime_changed = await self._disconnect_runtime(name) or runtime_changed
             except Exception as e:
                 logger.warning("Failed to disconnect %s during reset: %s", name, e)
         self._servers.clear()
@@ -1326,7 +1348,8 @@ class MCPClient:
         self._tools.clear()
         self._resources.clear()
         self._prompts.clear()
-        self._invalidate_policy_classifier_cache()
+        if runtime_changed:
+            self._invalidate_policy_classifier_cache()
 
     @staticmethod
     def _invalidate_policy_classifier_cache() -> None:

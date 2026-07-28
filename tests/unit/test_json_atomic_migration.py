@@ -16,11 +16,28 @@ behaviour is covered by the existing per-feature test suites.
 from __future__ import annotations
 
 import json
+import multiprocessing
 from pathlib import Path
 
 import pytest
 
 from openakita.utils.atomic_io import atomic_json_write, read_json_safe
+
+
+def _hold_transaction_lock(path: str, entered, release) -> None:
+    from openakita.utils.atomic_io import path_transaction_lock
+
+    with path_transaction_lock(Path(path)):
+        entered.set()
+        release.wait(timeout=5)
+
+
+def _observe_transaction_lock(path: str, attempted, acquired) -> None:
+    from openakita.utils.atomic_io import path_transaction_lock
+
+    attempted.set()
+    with path_transaction_lock(Path(path)):
+        acquired.set()
 
 
 def _corrupt(path: Path) -> None:
@@ -42,6 +59,39 @@ def test_atomic_json_write_creates_bak_on_overwrite(tmp_path):
     assert bak.exists(), "second write should leave a .bak backup of v1"
     assert json.loads(bak.read_text(encoding="utf-8"))["v"] == 1
     assert json.loads(path.read_text(encoding="utf-8"))["v"] == 2
+
+
+def test_path_transaction_lock_serializes_separate_processes(tmp_path):
+    ctx = multiprocessing.get_context("spawn")
+    target = tmp_path / "shared.json"
+    entered = ctx.Event()
+    release = ctx.Event()
+    attempted = ctx.Event()
+    acquired = ctx.Event()
+    holder = ctx.Process(target=_hold_transaction_lock, args=(str(target), entered, release))
+    waiter = ctx.Process(
+        target=_observe_transaction_lock,
+        args=(str(target), attempted, acquired),
+    )
+
+    holder.start()
+    try:
+        assert entered.wait(timeout=5)
+        waiter.start()
+        assert attempted.wait(timeout=5)
+        assert not acquired.wait(timeout=0.3)
+        release.set()
+        assert acquired.wait(timeout=5)
+        holder.join(timeout=5)
+        waiter.join(timeout=5)
+        assert holder.exitcode == 0
+        assert waiter.exitcode == 0
+    finally:
+        release.set()
+        for process in (holder, waiter):
+            if process.is_alive():
+                process.terminate()
+            process.join(timeout=2)
 
 
 def test_atomic_json_write_can_fail_without_direct_overwrite(tmp_path, monkeypatch):

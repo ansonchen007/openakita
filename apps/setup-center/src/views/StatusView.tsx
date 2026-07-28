@@ -67,9 +67,9 @@ export interface StatusViewProps {
     status: string; latencyMs: number | null; error: string | null; errorCategory: string | null;
     consecutiveFailures: number; cooldownRemaining: number; isExtendedCooldown: boolean; lastCheckedAt: string | null;
   }>>>;
-  imHealth: Record<string, { status: string; error: string | null; lastCheckedAt: string | null }>;
+  imHealth: Record<string, { status: string; error: string | null; lastCheckedAt: string | null; progress?: { percent?: number | null } | null }>;
   setImHealth: React.Dispatch<React.SetStateAction<Record<string, {
-    status: string; error: string | null; lastCheckedAt: string | null;
+    status: string; error: string | null; lastCheckedAt: string | null; progress?: { percent?: number | null } | null;
   }>>>;
   skillSummary: { count: number; systemCount: number; externalCount: number } | null;
   serviceLog: { path: string; content: string; truncated: boolean } | null;
@@ -761,7 +761,7 @@ export function StatusView(props: StatusViewProps) {
                   const h: typeof imHealth = {};
                   for (const c of channels) {
                     const key = c.channel || c.name;
-                    const val = { status: c.status || "unknown", error: c.error || null, lastCheckedAt: c.last_checked_at || null };
+                    const val = { status: c.status || "unknown", error: c.error || null, lastCheckedAt: c.last_checked_at || null, progress: c.progress || null };
                     h[key] = val;
                     const ctype = c.channel_type || key;
                     if (ctype !== key) {
@@ -787,19 +787,32 @@ export function StatusView(props: StatusViewProps) {
             const ih = imHealth[channelId];
             const isOnline = ih && (ih.status === "healthy" || ih.status === "online");
             const isConfigured = ih && ih.status === "configured";
+            const isInstalling = ih && ih.status === "installing_dependencies";
+            const isStarting = ih && ih.status === "starting";
+            const isError = ih && ih.status === "error";
             const channelError = ih?.error?.trim() || "";
             const effectiveEnabled = ih ? true : c.enabled;
             const serviceRunning = serviceStatus?.running;
             const dot = !effectiveEnabled
               ? "disabled"
               : ih
-                ? (isOnline ? "healthy" : isConfigured ? "unknown" : "unhealthy")
+                ? (isOnline ? "healthy" : isConfigured || isInstalling || isStarting ? "unknown" : "unhealthy")
                 : c.ok ? "unknown" : serviceRunning ? "unknown" : "degraded";
             const LogoComp = IM_LOGO_MAP[channelId];
             const label = !effectiveEnabled
               ? t("status.disabled")
               : ih
-                ? (isOnline ? t("status.online") : isConfigured ? t("status.configured") : t("status.offline"))
+                ? (isOnline
+                    ? t("status.online")
+                    : isInstalling
+                      ? `${t("im.botInstallingDependencies")}${typeof ih.progress?.percent === "number" ? ` ${Math.round(ih.progress.percent)}%` : ""}`
+                      : isStarting
+                        ? t("im.botStarting")
+                        : isConfigured
+                          ? t("status.configured")
+                          : isError
+                            ? t("im.botStartFailed")
+                            : t("status.offline"))
                 : c.ok
                   ? t("status.configured")
                   : serviceRunning ? "—" : t("status.keyMissing");

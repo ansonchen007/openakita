@@ -1,13 +1,19 @@
+from types import SimpleNamespace
+
 import pytest
 
 import openakita.api.routes.config as config_routes
 from openakita.api.routes.config import (
-    _PermissionModeBody,
     _apply_permission_mode_defaults,
     _mode_from_security,
     _normalize_permission_mode,
+    _PermissionModeBody,
     write_permission_mode,
 )
+
+
+def _policy_request():
+    return SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace()))
 
 
 def test_permission_mode_accepts_trust_alias():
@@ -109,7 +115,7 @@ def test_schema_default_and_trust_bundle_agree_on_confirmation_mode():
 async def test_write_permission_mode_fails_when_yaml_unreadable(monkeypatch):
     monkeypatch.setattr(config_routes, "_read_policies_yaml", lambda: None)
 
-    result = await write_permission_mode(_PermissionModeBody(mode="smart"))
+    result = await write_permission_mode(_PermissionModeBody(mode="smart"), _policy_request())
 
     assert result["status"] == "error"
 
@@ -120,6 +126,6 @@ async def test_write_permission_mode_fails_when_yaml_write_fails(monkeypatch):
     monkeypatch.setattr(config_routes, "_read_policies_yaml", lambda: data)
     monkeypatch.setattr(config_routes, "_write_policies_yaml", lambda _data: False)
 
-    result = await write_permission_mode(_PermissionModeBody(mode="smart"))
+    result = await write_permission_mode(_PermissionModeBody(mode="smart"), _policy_request())
 
     assert result["status"] == "error"

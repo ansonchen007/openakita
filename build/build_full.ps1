@@ -1,82 +1,40 @@
-# OpenAkita Full Package Build Script (Windows PowerShell)
-# Output: Installer with all dependencies and models (~1GB)
-# Usage: .\build_full.ps1 [-Fast]
+# OpenAkita desktop package with optional modules (Windows PowerShell)
 
-param(
-    [switch]$Fast
-)
+param([switch]$Fast)
 
 $ErrorActionPreference = "Stop"
-
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ProjectRoot = Split-Path -Parent $ScriptDir
 $SetupCenterDir = Join-Path $ProjectRoot "apps\setup-center"
 $ResourceDir = Join-Path $SetupCenterDir "src-tauri\resources"
 
-if ($Fast) {
-    Write-Host "============================================" -ForegroundColor Cyan
-    Write-Host "  OpenAkita Full Package Build [FAST MODE]" -ForegroundColor Cyan
-    Write-Host "============================================" -ForegroundColor Cyan
-} else {
-    Write-Host "============================================" -ForegroundColor Cyan
-    Write-Host "  OpenAkita Full Package Build" -ForegroundColor Cyan
-    Write-Host "============================================" -ForegroundColor Cyan
-}
-
-# Step 1: Build the shared web frontend once before either packager consumes it
-Write-Host "`n[1/5] Building web frontend..." -ForegroundColor Yellow
+Write-Host "[1/4] Building web frontend..." -ForegroundColor Yellow
 Push-Location $SetupCenterDir
 try {
     if (-not (Test-Path "node_modules")) { npm install }
     npm run build:web
     if ($LASTEXITCODE -ne 0) { throw "Web frontend build failed" }
-} finally {
-    Pop-Location
-}
+} finally { Pop-Location }
 
-# Step 2: Package Python backend (full mode)
-Write-Host "`n[2/5] Packaging Python backend (full mode)..." -ForegroundColor Yellow
-$backendArgs = @("$ScriptDir\build_backend.py", "--mode", "full", "--skip-web-build")
-if ($Fast) { $backendArgs += "--fast" }
-python @backendArgs
-if ($LASTEXITCODE -ne 0) { throw "Python backend packaging failed" }
+Write-Host "[2/4] Preparing managed Python runtime..." -ForegroundColor Yellow
+uv run --no-sync python "$ScriptDir\prepare_bootstrap_resources.py" --commit-resources --target-platform win-x64 --require-python-seed
+if ($LASTEXITCODE -ne 0) { throw "Bootstrap resource preparation failed" }
 
-# Step 3: Pre-bundle optional modules
-Write-Host "`n[3/5] Pre-bundling optional modules..." -ForegroundColor Yellow
-python "$ScriptDir\bundle_modules.py"
+Write-Host "[3/4] Pre-bundling optional modules..." -ForegroundColor Yellow
+uv run --no-sync python "$ScriptDir\bundle_modules.py"
 if ($LASTEXITCODE -ne 0) { throw "Module pre-bundling failed" }
-
-# Step 4: Copy to Tauri resources
-Write-Host "`n[4/5] Copying backend and modules to Tauri resources..." -ForegroundColor Yellow
-$DistServerDir = Join-Path $ProjectRoot "dist\openakita-server"
 $ModulesDir = Join-Path $ScriptDir "modules"
-$TargetServerDir = Join-Path $ResourceDir "openakita-server"
 $TargetModulesDir = Join-Path $ResourceDir "modules"
-
-if (Test-Path $TargetServerDir) { Remove-Item -Recurse -Force $TargetServerDir }
 if (Test-Path $TargetModulesDir) { Remove-Item -Recurse -Force $TargetModulesDir }
-New-Item -ItemType Directory -Force -Path $ResourceDir | Out-Null
-Copy-Item -Recurse $DistServerDir $TargetServerDir
-if (Test-Path $ModulesDir) {
-    Copy-Item -Recurse $ModulesDir $TargetModulesDir
-}
-Write-Host "  Backend: $TargetServerDir"
-Write-Host "  Modules: $TargetModulesDir"
+if (Test-Path $ModulesDir) { Copy-Item -Recurse $ModulesDir $TargetModulesDir }
 
-# Step 5: Build Tauri app (add modules resource via TAURI_CONFIG)
-Write-Host "`n[5/5] Building Tauri app..." -ForegroundColor Yellow
+Write-Host "[4/4] Building Tauri app..." -ForegroundColor Yellow
 Push-Location $SetupCenterDir
 try {
-    # Full package needs additional modules resource directory
-    $env:TAURI_CONFIG = '{"bundle":{"resources":["resources/openakita-server/","resources/modules/"]}}'
-    npx tauri build
+    npx tauri build --bundles nsis --config src-tauri/tauri.local-full-build.conf.json
     if ($LASTEXITCODE -ne 0) { throw "Tauri build failed" }
 } finally {
-    $env:TAURI_CONFIG = $null
     Pop-Location
 }
 
-Write-Host "`n============================================" -ForegroundColor Green
-Write-Host "  Full package build completed!" -ForegroundColor Green
-Write-Host "  Installer at: $SetupCenterDir\src-tauri\target\release\bundle\" -ForegroundColor Green
-Write-Host "============================================" -ForegroundColor Green
+Write-Host "Full desktop package build completed." -ForegroundColor Green

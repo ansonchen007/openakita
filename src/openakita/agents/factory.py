@@ -590,6 +590,7 @@ class _PoolEntry:
         "created_at",
         "last_used",
         "runtime_config_version",
+        "profile_generation",
     )
 
     def __init__(
@@ -598,6 +599,7 @@ class _PoolEntry:
         profile_id: str,
         session_id: str,
         runtime_config_version: int = 0,
+        profile_generation: int = 0,
     ):
         self.agent = agent
         self.profile_id = profile_id
@@ -605,6 +607,7 @@ class _PoolEntry:
         self.created_at = time.monotonic()
         self.last_used = time.monotonic()
         self.runtime_config_version = runtime_config_version
+        self.profile_generation = profile_generation
 
     def touch(self) -> None:
         self.last_used = time.monotonic()
@@ -643,6 +646,7 @@ class AgentInstancePool:
         self._create_locks: dict[str, asyncio.Lock] = {}
         self._reaper_task: asyncio.Task | None = None
         self._runtime_config_version: int = 0
+        self._profile_generations: dict[str, int] = {}
 
     @staticmethod
     def _make_key(session_id: str, profile_id: str) -> str:
@@ -696,6 +700,7 @@ class AgentInstancePool:
 
     def invalidate_profile(self, profile_id: str) -> int:
         """Drop all pooled Agent instances bound to *profile_id*."""
+        self._profile_generations[profile_id] = self._profile_generations.get(profile_id, 0) + 1
         to_remove = [key for key, entry in self._pool.items() if entry.profile_id == profile_id]
         removed = 0
         for key in to_remove:
@@ -729,62 +734,76 @@ class AgentInstancePool:
         当全局运行时配置版本变更时，旧的 Agent 会被丢弃并重建，
         确保技能、LLM 端点等会影响 Agent/Brain 构造的配置同步到所有池 Agent。
         """
-        key = self._make_key(session_id, profile.id)
-        current_version = self._runtime_config_version
-
-        entry = self._pool.get(key)
-        if entry:
-            if entry.runtime_config_version >= current_version:
-                entry.touch()
-                return entry.agent
-            logger.info(
-                "Pool agent stale (runtime_config_version %s < %s), recreating: "
-                "session=%s, profile=%s",
-                entry.runtime_config_version,
-                current_version,
-                session_id,
-                profile.id,
-            )
-            self._pool.pop(key, None)
-            self._schedule_shutdown(entry.agent)
-
+        profile_id = profile.id
+        key = self._make_key(session_id, profile_id)
         if key not in self._create_locks:
             self._create_locks[key] = asyncio.Lock()
         create_lock = self._create_locks[key]
 
         async with create_lock:
-            entry = self._pool.get(key)
-            if entry and entry.runtime_config_version >= current_version:
-                entry.touch()
-                return entry.agent
+            while True:
+                current_version = self._runtime_config_version
+                profile_generation = self._profile_generations.get(profile_id, 0)
+                entry = self._pool.get(key)
+                if entry and (
+                    entry.runtime_config_version == current_version
+                    and entry.profile_generation == profile_generation
+                ):
+                    entry.touch()
+                    return entry.agent
+                if entry:
+                    self._pool.pop(key, None)
+                    self._schedule_shutdown(entry.agent)
 
-            parent_brain = None
-            session_entries = [
-                e
-                for e in self._pool.values()
-                if e.session_id == session_id
-                and hasattr(e.agent, "brain")
-                and e.runtime_config_version >= current_version
-            ]
-            if session_entries:
-                # Prefer default/system profiles, then earliest created
-                def _sort_key(e: _PoolEntry) -> tuple:
-                    profile = getattr(e.agent, "_agent_profile", None)
-                    is_default = e.profile_id == "default"
-                    is_system = (
-                        profile is not None and getattr(profile, "type", None) == AgentType.SYSTEM
-                    )
-                    return (not is_default, not is_system, e.created_at)
+                parent_brain = None
+                session_entries = [
+                    e
+                    for e in self._pool.values()
+                    if e.session_id == session_id
+                    and hasattr(e.agent, "brain")
+                    and e.runtime_config_version == current_version
+                    and e.profile_generation
+                    == self._profile_generations.get(e.profile_id, 0)
+                ]
+                if session_entries:
+                    # Prefer default/system profiles, then earliest created
+                    def _sort_key(e: _PoolEntry) -> tuple:
+                        entry_profile = getattr(e.agent, "_agent_profile", None)
+                        is_default = e.profile_id == "default"
+                        is_system = (
+                            entry_profile is not None
+                            and getattr(entry_profile, "type", None) == AgentType.SYSTEM
+                        )
+                        return (not is_default, not is_system, e.created_at)
 
-                best = min(session_entries, key=_sort_key)
-                parent_brain = best.agent.brain
+                    best = min(session_entries, key=_sort_key)
+                    parent_brain = best.agent.brain
 
-            if parent_brain is None:
-                agent = await self._factory.create(profile)
-            else:
-                agent = await self._factory.create(profile, parent_brain=parent_brain)
-            new_entry = _PoolEntry(agent, profile.id, session_id, current_version)
-            self._pool[key] = new_entry
+                if parent_brain is None:
+                    agent = await self._factory.create(profile)
+                else:
+                    agent = await self._factory.create(profile, parent_brain=parent_brain)
+
+                runtime_changed = current_version != self._runtime_config_version
+                profile_changed = profile_generation != self._profile_generations.get(profile_id, 0)
+                if runtime_changed or profile_changed:
+                    self._schedule_shutdown(agent)
+                    if profile_changed:
+                        store = self._get_shared_profile_store()
+                        latest_profile = store.get(profile_id) if store is not None else None
+                        if latest_profile is None:
+                            raise KeyError(f"Agent profile no longer exists: {profile_id}")
+                        profile = latest_profile
+                    continue
+
+                self._pool[key] = _PoolEntry(
+                    agent,
+                    profile_id,
+                    session_id,
+                    current_version,
+                    profile_generation,
+                )
+                break
 
         logger.info(f"Pool created agent: session={session_id}, profile={profile.id}")
         return agent

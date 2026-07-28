@@ -1,21 +1,23 @@
 """
-EndpointManager: LLM 端点配置的唯一管理者。
+EndpointManager: LLM endpoint configuration manager.
 
-所有对 .env 和 llm_endpoints.json 的写操作都必须经过这里。
-提供原子写入、自动备份、线程锁、BOM 容错等保护机制。
+Endpoint JSON writes are owned here. Dotenv mutations delegate to the shared
+transaction writer so other configuration surfaces cannot lose concurrent
+updates.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
-import locale
 import logging
 import os
-import shutil
 import threading
-import time
+from contextlib import contextmanager
 from pathlib import Path
+
+from openakita.utils.atomic_io import atomic_json_write, path_transaction_lock
+from openakita.utils.env_config import parse_env_content, read_text_robust, update_env_file
 
 logger = logging.getLogger(__name__)
 
@@ -37,117 +39,10 @@ _ENDPOINT_LISTS = (
 )
 
 
-def _strip_bom(raw: bytes) -> bytes:
-    """Strip UTF-8 BOM if present."""
-    if raw.startswith(b"\xef\xbb\xbf"):
-        return raw[3:]
-    return raw
-
-
-def _read_text_robust(path: Path) -> str:
-    """Read a text file with BOM stripping and encoding fallback."""
-    if not path.exists():
-        return ""
-    raw = path.read_bytes()
-    raw = _strip_bom(raw)
-    try:
-        return raw.decode("utf-8")
-    except UnicodeDecodeError:
-        logger.warning("Failed to decode %s as UTF-8, falling back to system encoding", path)
-        try:
-            return raw.decode(locale.getpreferredencoding(False), errors="replace")
-        except Exception:
-            return raw.decode("utf-8", errors="replace")
-
-
-def _parse_env(content: str) -> dict[str, str]:
-    """Parse .env content into key-value dict."""
-    env: dict[str, str] = {}
-    for line in content.splitlines():
-        line = line.strip()
-        if not line or line.startswith("#"):
-            continue
-        if "=" not in line:
-            continue
-        key, _, value = line.partition("=")
-        key = key.strip()
-        value = value.strip()
-        if len(value) >= 2 and value[0] == value[-1] and value[0] in ('"', "'"):
-            inner = value[1:-1]
-            if "\\" in inner:
-                inner = inner.replace("\\\\", "\x00").replace('\\"', '"').replace("\x00", "\\")
-            value = inner
-        else:
-            for sep in (" #", "\t#"):
-                idx = value.find(sep)
-                if idx != -1:
-                    value = value[:idx].rstrip()
-                    break
-        env[key] = value
-    return env
-
-
-def _needs_quoting(value: str) -> bool:
-    if not value:
-        return False
-    if value[0] in (" ", "\t") or value[-1] in (" ", "\t"):
-        return True
-    if value[0] in ('"', "'"):
-        return True
-    return any(ch in value for ch in (" ", "#", '"', "'", "\\"))
-
-
-def _quote_env_value(value: str) -> str:
-    if not _needs_quoting(value):
-        return value
-    escaped = value.replace("\\", "\\\\").replace('"', '\\"')
-    return f'"{escaped}"'
-
-
-def _merge_env_content(
-    existing: str,
-    entries: dict[str, str],
-    delete_keys: set[str] | None = None,
-) -> str:
-    """Merge entries into existing .env content (preserves comments, order)."""
-    delete_keys = delete_keys or set()
-    lines = existing.splitlines()
-    updated_keys: set[str] = set()
-    new_lines: list[str] = []
-
-    for line in lines:
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
-            new_lines.append(line)
-            continue
-        if "=" not in stripped:
-            new_lines.append(line)
-            continue
-        key = stripped.split("=", 1)[0].strip()
-        if key in delete_keys:
-            updated_keys.add(key)
-            continue
-        if key in entries:
-            value = entries[key]
-            if value == "":
-                new_lines.append(line)
-            else:
-                new_lines.append(f"{key}={_quote_env_value(value)}")
-            updated_keys.add(key)
-        else:
-            new_lines.append(line)
-
-    for key, value in entries.items():
-        if key not in updated_keys and value != "":
-            new_lines.append(f"{key}={_quote_env_value(value)}")
-
-    return "\n".join(new_lines) + "\n"
-
-
 class EndpointManager:
-    """LLM 端点配置的唯一管理者。
+    """Own endpoint JSON state and coordinate its referenced dotenv secrets.
 
-    所有对 .env 和 llm_endpoints.json 的写操作都必须经过这里。
+    Dotenv read-modify-write operations are serialized by ``update_env_file``.
     """
 
     def __init__(self, workspace_dir: Path, *, config_path: Path | None = None):
@@ -186,7 +81,7 @@ class EndpointManager:
         if endpoint_type not in _ENDPOINT_LISTS:
             raise ValueError(f"Invalid endpoint_type: {endpoint_type}")
 
-        with self._lock:
+        with self._config_transaction():
             config, version = self._read_json_versioned()
 
             if expected_version and expected_version != version:
@@ -224,7 +119,7 @@ class EndpointManager:
         if not endpoints:
             raise ValueError("No endpoints to save")
 
-        with self._lock:
+        with self._config_transaction():
             config, version = self._read_json_versioned()
 
             if expected_version and expected_version != version:
@@ -248,7 +143,7 @@ class EndpointManager:
                     exclude_name=first_name,
                 )
                 if other_users:
-                    env = _parse_env(_read_text_robust(self._env_path))
+                    env = parse_env_content(read_text_robust(self._env_path))
                     old_val = env.get(shared_env_var, "")
                     if old_val and old_val != api_key:
                         shared_env_var = self._allocate_unique_env_var(first, config)
@@ -301,7 +196,7 @@ class EndpointManager:
                 exclude_name=lookup_name,
             )
             if other_users:
-                env = _parse_env(_read_text_robust(self._env_path))
+                env = parse_env_content(read_text_robust(self._env_path))
                 old_val = env.get(env_var, "")
                 if old_val and old_val != api_key:
                     env_var = self._allocate_unique_env_var(endpoint, config)
@@ -337,7 +232,7 @@ class EndpointManager:
         if endpoint_type not in _ENDPOINT_LISTS:
             raise ValueError(f"Invalid endpoint_type: {endpoint_type}")
 
-        with self._lock:
+        with self._config_transaction():
             config, _ = self._read_json_versioned()
             ep_list = config.get(endpoint_type, [])
 
@@ -380,7 +275,7 @@ class EndpointManager:
         if not wanted:
             raise ValueError("No endpoint names to delete")
 
-        with self._lock:
+        with self._config_transaction():
             config, _ = self._read_json_versioned()
             ep_list = config.get(endpoint_type, [])
 
@@ -414,8 +309,9 @@ class EndpointManager:
 
     def list_endpoints(self, endpoint_type: str = "endpoints") -> list[dict]:
         """Read endpoints from config file."""
-        config = self._read_json()
-        return config.get(endpoint_type, [])
+        with self._config_transaction():
+            config = self._read_json()
+            return config.get(endpoint_type, [])
 
     def sync_endpoint_models(
         self,
@@ -456,14 +352,14 @@ class EndpointManager:
         if endpoint_type not in _ENDPOINT_LISTS:
             raise ValueError(f"Invalid endpoint_type: {endpoint_type}")
 
-        with self._lock:
+        with self._config_transaction():
             config, _ = self._read_json_versioned()
             ep_list = config.get(endpoint_type, [])
             target = next((e for e in ep_list if e.get("name") == name), None)
             if target is None:
                 raise KeyError(f"endpoint {name!r} not found in {endpoint_type}")
 
-            env = _parse_env(_read_text_robust(self._env_path))
+            env = parse_env_content(read_text_robust(self._env_path))
             api_key = ""
             env_var = target.get("api_key_env") or ""
             if env_var:
@@ -475,24 +371,30 @@ class EndpointManager:
             api_type = str(target.get("api_type") or "")
             provider = str(target.get("provider") or "")
 
-            error_msg: str | None = None
-            models: list[str] = []
-            try:
-                models = probe_models(
-                    api_type=api_type,
-                    base_url=base_url,
-                    api_key=api_key,
-                    provider=provider,
-                    timeout=timeout,
-                )
-            except ProbeError as exc:
-                error_msg = exc.user_message
-                logger.info(
-                    "sync_endpoint_models name=%s status=err msg=%s",
-                    name,
-                    exc,
-                )
+        error_msg: str | None = None
+        models: list[str] = []
+        try:
+            models = probe_models(
+                api_type=api_type,
+                base_url=base_url,
+                api_key=api_key,
+                provider=provider,
+                timeout=timeout,
+            )
+        except ProbeError as exc:
+            error_msg = exc.user_message
+            logger.info(
+                "sync_endpoint_models name=%s status=err msg=%s",
+                name,
+                exc,
+            )
 
+        with self._config_transaction():
+            config, _ = self._read_json_versioned()
+            ep_list = config.get(endpoint_type, [])
+            target = next((e for e in ep_list if e.get("name") == name), None)
+            if target is None:
+                raise KeyError(f"endpoint {name!r} not found in {endpoint_type}")
             now_ts = _now()
             if error_msg is None:
                 target["supported_models"] = models
@@ -518,17 +420,20 @@ class EndpointManager:
 
     def get_all_config(self) -> dict:
         """Read the entire llm_endpoints.json content."""
-        return self._read_json()
+        with self._config_transaction():
+            return self._read_json()
 
     def get_version(self) -> str:
         """Get the current config version (content hash)."""
-        _, version = self._read_json_versioned()
-        return version
+        with self._config_transaction():
+            _, version = self._read_json_versioned()
+            return version
 
     def get_endpoint_status(self) -> list[dict]:
         """Return key presence status for all endpoints."""
-        config = self._read_json()
-        env = _parse_env(_read_text_robust(self._env_path))
+        with self._config_transaction():
+            config = self._read_json()
+            env = parse_env_content(read_text_robust(self._env_path))
         result = []
         for list_key in _ENDPOINT_LISTS:
             for ep in config.get(list_key, []):
@@ -560,7 +465,7 @@ class EndpointManager:
         if endpoint_type not in _ENDPOINT_LISTS:
             raise ValueError(f"Invalid endpoint_type: {endpoint_type}")
 
-        with self._lock:
+        with self._config_transaction():
             config = self._read_json()
             ep_list = config.get(endpoint_type, [])
 
@@ -592,7 +497,7 @@ class EndpointManager:
         if endpoint_type not in _ENDPOINT_LISTS:
             raise ValueError(f"Invalid endpoint_type: {endpoint_type}")
 
-        with self._lock:
+        with self._config_transaction():
             config = self._read_json()
             ep_list = config.get(endpoint_type, [])
 
@@ -619,7 +524,7 @@ class EndpointManager:
 
     def update_settings(self, settings: dict) -> dict:
         """Merge *settings* into the top-level ``settings`` key of the config."""
-        with self._lock:
+        with self._config_transaction():
             config = self._read_json()
             existing = config.get("settings", {})
             if not isinstance(existing, dict):
@@ -633,10 +538,16 @@ class EndpointManager:
     # File I/O with atomic write + backup
     # ------------------------------------------------------------------
 
+    @contextmanager
+    def _config_transaction(self):
+        """Serialize a complete endpoint config transaction across all writers."""
+        with self._lock, path_transaction_lock(self._json_path):
+            yield
+
     def _read_json(self) -> dict:
         """Read llm_endpoints.json with robust error handling and .bak fallback."""
         try:
-            content = _read_text_robust(self._json_path)
+            content = read_text_robust(self._json_path)
             if not content.strip():
                 return self._empty_config()
             return json.loads(content)
@@ -645,7 +556,7 @@ class EndpointManager:
             if bak.exists():
                 logger.warning("Primary config corrupted (%s), restoring from backup", e)
                 try:
-                    content = _read_text_robust(bak)
+                    content = read_text_robust(bak)
                     data = json.loads(content)
                     # Restore without going through _atomic_write to avoid
                     # overwriting the good .bak with the corrupt primary.
@@ -661,7 +572,7 @@ class EndpointManager:
     def _read_json_versioned(self) -> tuple[dict, str]:
         """Read JSON and return (data, version_hash)."""
         try:
-            content = _read_text_robust(self._json_path)
+            content = read_text_robust(self._json_path)
             if not content.strip():
                 return self._empty_config(), "empty"
             version = hashlib.md5(content.encode()).hexdigest()[:8]
@@ -671,55 +582,15 @@ class EndpointManager:
 
     def _write_json(self, data: dict) -> None:
         """Write llm_endpoints.json atomically with backup."""
-        content = json.dumps(data, ensure_ascii=False, indent=2) + "\n"
-        self._atomic_write(self._json_path, content)
+        atomic_json_write(self._json_path, data)
 
     def _write_env_key(self, key: str, value: str) -> None:
         """Write a single key to .env (merge, not overwrite)."""
-        existing = _read_text_robust(self._env_path)
-        new_content = _merge_env_content(existing, {key: value})
-        self._atomic_write(self._env_path, new_content)
+        update_env_file(self._env_path, entries={key: value})
 
     def _delete_env_key(self, key: str) -> None:
         """Remove a key from .env."""
-        existing = _read_text_robust(self._env_path)
-        new_content = _merge_env_content(existing, {}, delete_keys={key})
-        self._atomic_write(self._env_path, new_content)
-
-    def _atomic_write(self, path: Path, content: str, retries: int = 3) -> None:
-        """Write via temp file + rename for atomicity, with backup."""
-        path.parent.mkdir(parents=True, exist_ok=True)
-
-        # Backup existing file
-        if path.exists():
-            bak = path.with_suffix(path.suffix + ".bak")
-            try:
-                shutil.copy2(path, bak)
-            except OSError as e:
-                logger.warning("Failed to create backup %s: %s", bak, e)
-
-        # Atomic write: tmp → rename
-        tmp = path.with_suffix(path.suffix + ".tmp")
-        tmp.write_text(content, encoding="utf-8")
-
-        last_err: Exception | None = None
-        for attempt in range(retries):
-            try:
-                tmp.replace(path)
-                return
-            except PermissionError as e:
-                last_err = e
-                if attempt < retries - 1:
-                    time.sleep(0.2 * (attempt + 1))
-
-        # All retries failed — fall back to direct write
-        logger.warning(
-            "Atomic rename failed after %d retries (%s), falling back to direct write",
-            retries,
-            last_err,
-        )
-        path.write_text(content, encoding="utf-8")
-        tmp.unlink(missing_ok=True)
+        update_env_file(self._env_path, entries={}, delete_keys={key})
 
     # ------------------------------------------------------------------
     # env var naming

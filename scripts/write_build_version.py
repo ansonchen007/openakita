@@ -17,18 +17,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE_VERSION_FILE = ROOT / "src" / "openakita" / "_bundled_version.txt"
-TAURI_RESOURCE_VERSION_FILE = (
-    ROOT
-    / "apps"
-    / "setup-center"
-    / "src-tauri"
-    / "resources"
-    / "openakita-server"
-    / "_internal"
-    / "openakita"
-    / "_bundled_version.txt"
-)
-
 _HASH_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 _HEX_RE = re.compile(r"^[0-9a-fA-F]+$")
 
@@ -95,10 +83,7 @@ def _resolve_target(path: Path) -> Path:
 
 
 def _default_targets() -> list[Path]:
-    targets = [SOURCE_VERSION_FILE]
-    if TAURI_RESOURCE_VERSION_FILE.exists():
-        targets.append(TAURI_RESOURCE_VERSION_FILE)
-    return targets
+    return [SOURCE_VERSION_FILE]
 
 
 def write_build_version(

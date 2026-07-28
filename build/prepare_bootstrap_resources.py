@@ -65,7 +65,7 @@ UV_RELEASES = {
 # python-build-standalone release tag and CPython version.
 # 必须显式 pin —— 不允许从 "latest" 拉，避免 CI/release 出现"今天打的包跟
 # 上周打的包用了不同 ABI"。升级时调这两个常量并跑全平台 release-dryrun 验证。
-# 当前 pin 与 PyInstaller bundled 后端 (cp311) 严格对齐。
+# 当前 pin 与项目支持的 CPython 3.11 ABI 严格对齐。
 PBS_RELEASE_TAG = "20250409"
 PBS_PYTHON_VERSION = "3.11.12"
 
@@ -850,6 +850,7 @@ def write_manifest(
     manifest_path.write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
+        newline="\n",
     )
 
 
@@ -1005,6 +1006,11 @@ def main() -> int:
         ),
     )
     parser.add_argument("--require-real-assets", action="store_true")
+    parser.add_argument(
+        "--require-python-seed",
+        action="store_true",
+        help="fail instead of writing packaged=false when the target Python seed cannot be prepared",
+    )
     parser.add_argument("--allow-placeholder-assets", action="store_true")
     parser.add_argument(
         "--commit-resources",
@@ -1092,7 +1098,7 @@ def main() -> int:
             seed_info = prepare_python_seed(
                 bootstrap_dir,
                 chosen_target,
-                require_real_assets=args.require_real_assets,
+                require_real_assets=args.require_real_assets or args.require_python_seed,
             )
 
     write_manifest(app_version, packaged_wheel, uv, bootstrap_dir, python_seed=seed_info)

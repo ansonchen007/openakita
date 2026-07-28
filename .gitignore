@@ -108,6 +108,7 @@ apps/setup-center/src-tauri/resources/modules/
 apps/setup-center/src-tauri/resources/bootstrap/bin/
 apps/setup-center/src-tauri/resources/bootstrap/wheels/
 apps/setup-center/src-tauri/resources/bootstrap/wheelhouse/
+apps/setup-center/src-tauri/resources/bootstrap/python/
 
 # Data (keep structure)
 data/*

@@ -113,8 +113,8 @@ export function ToolsView(props: ToolsViewProps) {
           body: JSON.stringify({ entries: { MCP_ENABLED: willDisable ? "false" : "true" } }),
         });
         notifySuccess(willDisable
-          ? t("config.mcpDisabledNeedRestart", { defaultValue: "MCP 已禁用，重启后生效" })
-          : t("config.mcpEnabledNeedRestart", { defaultValue: "MCP 已启用，重启后生效" }));
+          ? t("config.mcpDisabledNextTask", { defaultValue: "MCP 已禁用，下一任务生效" })
+          : t("config.mcpEnabledNextTask", { defaultValue: "MCP 已启用，下一任务生效" }));
       }
     } catch {
       // ignore
@@ -289,4 +289,3 @@ export function ToolsView(props: ToolsViewProps) {
     </div>
   );
 }
-

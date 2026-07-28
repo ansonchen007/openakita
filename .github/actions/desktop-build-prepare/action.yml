@@ -1,6 +1,6 @@
 name: 'Desktop build prepare'
 description: >-
-  Set up Python/Node/Rust, build web/docs assets, run PyInstaller, and prepare
+  Set up Python/Node/Rust, build web/docs assets, and prepare
   the bootstrap resources (wheel + uv + standalone Python seed) with cache.
   Shared between release.yml and release-dryrun.yml so both pipelines exercise
   the exact same prep path. Signing, notarization, artifact upload, and Tauri
@@ -37,9 +37,6 @@ inputs:
     default: '3.11'
 
 outputs:
-  backend_cache_hit:
-    description: 'Whether the exact-input PyInstaller output cache was restored.'
-    value: ${{ steps.backend_cache.outputs.cache-hit }}
   rust_binary_cache_hit:
     description: 'Whether the exact-input Rust desktop binary cache was restored.'
     value: ${{ steps.rust_binary_cache.outputs.cache-hit }}
@@ -130,69 +127,10 @@ runs:
         npm ci
         npm run build
 
-    - name: Install Python project and PyInstaller
+    - name: Install Python build tooling
       shell: bash
       run: |
-        # 先装 monorepo 本地 SDK，避免 desktop 矩阵 job 与 python_release job
-        # 之间的 PyPI 索引时序竞争（即使发布顺序已是 SDK→main，索引刷新仍有
-        # 数秒延迟；多平台/多 runner 并发起手时不一定都能拿到新版本）。
-        # 非 editable：PyInstaller 必须把 SDK 当作普通 site-packages 条目收集
-        # 进 openakita-server 镜像，editable 安装会让打包遗漏 SDK 代码与 web/
-        # 资源（与 ci.yml 同等位置保持一致）。
-        pip install ./openakita-plugin-sdk
-        pip install -e ".[all]"
-        pip install build "pyinstaller>=6.18.0"
-
-    - name: Clean previous PyInstaller output
-      shell: bash
-      run: |
-        rm -rf dist/
-        rm -rf build/openakita-server
-        rm -rf build/pyinstaller_work
-        rm -rf build/modules
-        # macOS: clear stale PyInstaller temp dirs to avoid PYI-6038 symlink conflicts
-        if [ "$(uname)" = "Darwin" ]; then
-          find "${TMPDIR:-/tmp}" -maxdepth 1 -name "_MEI*" -type d -exec rm -rf {} + 2>/dev/null || true
-        fi
-
-    - name: Compute backend build fingerprint
-      id: backend_key
-      shell: bash
-      run: python scripts/build_cache_key.py backend --github-output
-
-    - name: Restore exact PyInstaller output
-      id: backend_cache
-      uses: actions/cache@v4
-      with:
-        path: dist/openakita-server
-        key: desktop-backend-v2-${{ inputs.rust_cache_prefix }}-${{ runner.os }}-${{ runner.arch }}-${{ steps.backend_key.outputs.fingerprint }}
-
-    - name: Package Python backend (PyInstaller)
-      if: steps.backend_cache.outputs.cache-hit != 'true'
-      shell: bash
-      run: |
-        set -euo pipefail
-        export OPENAKITA_BUILD_GIT_HASH="$(git rev-parse HEAD)"
-        python build/build_backend.py --skip-web-build
-
-    - name: Refresh cached backend build identity
-      shell: bash
-      run: |
-        export OPENAKITA_BUILD_GIT_HASH="$(git rev-parse HEAD)"
-        python scripts/write_build_version.py \
-          --target dist/openakita-server/_internal/openakita/_bundled_version.txt \
-          --require-git
-
-    - name: Upload PyInstaller analysis reports
-      if: ${{ always() && steps.backend_cache.outputs.cache-hit != 'true' }}
-      uses: actions/upload-artifact@v6
-      with:
-        name: pyinstaller-analysis-${{ inputs.target_platform }}
-        path: |
-          build/pyinstaller_work/**/warn-*.txt
-          build/pyinstaller_work/**/xref-*.html
-        if-no-files-found: warn
-        retention-days: 7
+        pip install build
 
     - name: Read bootstrap pins (PBS / uv version)
       id: bootstrap_pins

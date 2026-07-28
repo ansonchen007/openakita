@@ -5,10 +5,15 @@ from __future__ import annotations
 import importlib
 import logging
 import os
+import re
 import subprocess
 import sys
+import threading
+import time
+from collections import deque
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 from openakita.channels.deps import CHANNEL_DEPS
 from openakita.config import settings
@@ -25,6 +30,172 @@ from openakita.runtime_manager import (
 
 logger = logging.getLogger(__name__)
 PrintFn = Callable[[str], None]
+ProgressFn = Callable[[dict[str, Any]], None]
+
+_PIP_COLLECTING_RE = re.compile(r"^Collecting\s+([^\s;(]+)", re.IGNORECASE)
+_PIP_DOWNLOADING_RE = re.compile(r"^Downloading\s+(.+?)(?:\s+\(|$)", re.IGNORECASE)
+_PIP_RAW_PROGRESS_RE = re.compile(r"^Progress\s+(\d+)\s+of\s+(\d+)", re.IGNORECASE)
+_PIP_INSTALLING_RE = re.compile(r"^Installing collected packages:\s*(.*)$", re.IGNORECASE)
+
+
+def _emit_install_progress(progress_fn: ProgressFn | None, **payload: Any) -> None:
+    if progress_fn is None:
+        return
+    try:
+        progress_fn(payload)
+    except Exception:
+        logger.debug("IM dependency progress callback failed", exc_info=True)
+
+
+def _parse_pip_progress_line(line: str, state: dict[str, Any]) -> dict[str, Any] | None:
+    """Translate stable pip output anchors into user-facing progress data."""
+    text = line.strip()
+    if not text:
+        return None
+
+    collecting = _PIP_COLLECTING_RE.match(text)
+    if collecting:
+        state["current_package"] = collecting.group(1)
+        return {"phase": "resolving", "current_package": state["current_package"]}
+
+    downloading = _PIP_DOWNLOADING_RE.match(text)
+    if downloading:
+        state["download_started"] = time.monotonic()
+        state["downloaded_bytes"] = 0
+        return {
+            "phase": "downloading",
+            "current_package": state.get("current_package"),
+            "current_artifact": downloading.group(1).rsplit("/", 1)[-1],
+        }
+
+    raw_progress = _PIP_RAW_PROGRESS_RE.match(text)
+    if raw_progress:
+        current = int(raw_progress.group(1))
+        total = int(raw_progress.group(2))
+        download_started = state.get("download_started")
+        elapsed = (
+            max(time.monotonic() - float(download_started), 0.001)
+            if download_started is not None
+            else None
+        )
+        speed = current / elapsed if current > 0 and elapsed is not None else 0.0
+        remaining = max(total - current, 0)
+        eta_seconds = round(remaining / speed) if speed > 0 else None
+        state["downloaded_bytes"] = current
+        return {
+            "phase": "downloading",
+            "current_package": state.get("current_package"),
+            "downloaded_bytes": current,
+            "total_bytes": total,
+            "percent": round(current * 100 / total, 1) if total > 0 else None,
+            "eta_seconds": eta_seconds,
+            "percent_scope": "current_download",
+        }
+
+    installing = _PIP_INSTALLING_RE.match(text)
+    if installing:
+        installing_packages = [
+            package.strip() for package in installing.group(1).split(",") if package.strip()
+        ]
+        state["current_package"] = None
+        state["installing_packages"] = installing_packages
+        return {
+            "phase": "installing",
+            "current_package": None,
+            "package_count": len(installing_packages),
+            "installing_packages": installing_packages,
+        }
+    if text.lower().startswith("successfully installed"):
+        return {"phase": "complete", "percent": 100}
+    return None
+
+
+def _run_pip_command(
+    command: list[str],
+    *,
+    env: dict[str, str],
+    timeout: int,
+    extra: dict[str, Any],
+    progress_fn: ProgressFn | None,
+    packages: list[str],
+    source_label: str,
+) -> subprocess.CompletedProcess[str]:
+    """Run pip with streaming progress when a UI callback is available."""
+    if progress_fn is None:
+        return subprocess.run(
+            command,
+            env=env,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout,
+            **extra,
+        )
+
+    _emit_install_progress(
+        progress_fn,
+        phase="resolving",
+        packages=packages,
+        source=source_label,
+    )
+    process = subprocess.Popen(
+        command,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        bufsize=1,
+        **extra,
+    )
+    output_tail: deque[str] = deque(maxlen=200)
+    timed_out = threading.Event()
+
+    def _terminate_on_timeout() -> None:
+        timed_out.set()
+        try:
+            process.kill()
+        except OSError:
+            pass
+
+    timer = threading.Timer(timeout, _terminate_on_timeout)
+    timer.daemon = True
+    timer.start()
+    state: dict[str, Any] = {}
+    last_emit = 0.0
+    last_phase = ""
+    try:
+        assert process.stdout is not None
+        for line in process.stdout:
+            output_tail.append(line)
+            update = _parse_pip_progress_line(line, state)
+            if update is None:
+                continue
+            now = time.monotonic()
+            phase = str(update.get("phase") or "")
+            should_emit = (
+                phase != last_phase
+                or phase != "downloading"
+                or update.get("percent") == 100
+                or now - last_emit >= 0.4
+            )
+            if should_emit:
+                update.update(packages=packages, source=source_label)
+                _emit_install_progress(progress_fn, **update)
+                last_emit = now
+                last_phase = phase
+        returncode = process.wait()
+    finally:
+        timer.cancel()
+        if process.stdout is not None:
+            process.stdout.close()
+
+    if timed_out.is_set():
+        raise subprocess.TimeoutExpired(command, timeout, output="".join(output_tail))
+    output = "".join(output_tail)
+    return subprocess.CompletedProcess(command, returncode, output, "")
 
 
 def _patch_backports_zstd() -> None:
@@ -244,6 +415,7 @@ def ensure_channel_dependencies(
     *,
     workspace_env: dict[str, str] | None = None,
     print_fn: PrintFn | None = None,
+    progress_fn: ProgressFn | None = None,
 ) -> dict:
     """Install missing optional IM dependencies into the isolated channel target."""
     _patch_backports_zstd()
@@ -415,16 +587,17 @@ def ensure_channel_dependencies(
             "--prefer-binary",
             *missing,
         ]
+        if progress_fn is not None:
+            offline_cmd[4:4] = ["--progress-bar", "raw"]
         try:
-            offline = subprocess.run(
+            offline = _run_pip_command(
                 offline_cmd,
                 env=pip_env,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
                 timeout=subprocess_timeout,
-                **extra,
+                extra=extra,
+                progress_fn=progress_fn,
+                packages=missing,
+                source_label="offline wheels",
             )
             if offline.returncode == 0:
                 _on_install_success("offline", missing)
@@ -467,18 +640,19 @@ def ensure_channel_dependencies(
                 pip_socket_timeout,
                 *packages,
             ]
+            if progress_fn is not None:
+                pip_cmd[4:4] = ["--progress-bar", "raw"]
             if trusted_host:
                 pip_cmd.extend(["--trusted-host", trusted_host])
             try:
-                result = subprocess.run(
+                result = _run_pip_command(
                     pip_cmd,
                     env=pip_env,
-                    capture_output=True,
-                    text=True,
-                    encoding="utf-8",
-                    errors="replace",
                     timeout=subprocess_timeout,
-                    **extra,
+                    extra=extra,
+                    progress_fn=progress_fn,
+                    packages=packages,
+                    source_label=source_label,
                 )
                 if result.returncode == 0:
                     _on_install_success(source_label, packages)

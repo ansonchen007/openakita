@@ -11,7 +11,22 @@ PREPARE = ROOT / ".github" / "actions" / "desktop-build-prepare" / "action.yml"
 CI = ROOT / ".github" / "workflows" / "ci.yml"
 PUBLISH = ROOT / ".github" / "workflows" / "publish-release.yml"
 TAURI_CONFIG = ROOT / "apps" / "setup-center" / "src-tauri" / "tauri.conf.json"
+LOCAL_TAURI_CONFIG = (
+    ROOT / "apps" / "setup-center" / "src-tauri" / "tauri.local-build.conf.json"
+)
+LOCAL_FULL_TAURI_CONFIG = (
+    ROOT / "apps" / "setup-center" / "src-tauri" / "tauri.local-full-build.conf.json"
+)
+LOCAL_PARALLEL_TAURI_CONFIG = (
+    ROOT / "apps" / "setup-center" / "src-tauri" / "tauri.local-parallel-build.conf.json"
+)
 FULL_BUILD_SCRIPTS = (ROOT / "build" / "build_full.ps1", ROOT / "build" / "build_full.sh")
+WINDOWS_BUILD_SCRIPTS = (
+    ROOT / "build" / "build_core.ps1",
+    ROOT / "build" / "build_full.ps1",
+    ROOT / "build" / "build_parallel.ps1",
+)
+POSIX_BUILD_SCRIPTS = (ROOT / "build" / "build_core.sh", ROOT / "build" / "build_full.sh")
 
 
 def test_release_workflows_never_clobber_existing_assets() -> None:
@@ -72,7 +87,7 @@ def test_mobile_release_waits_for_draft_creation_without_an_independent_tag_trig
     assert "--wait-seconds" not in release_contract_run
 
 
-def test_packaging_verifies_checkout_identity_and_chat_api() -> None:
+def test_desktop_packaging_uses_bootstrap_runtime_without_pyinstaller() -> None:
     workflow_sources = [
         path.read_text(encoding="utf-8")
         for path in (
@@ -83,10 +98,11 @@ def test_packaging_verifies_checkout_identity_and_chat_api() -> None:
     ]
     prepare_source = PREPARE.read_text(encoding="utf-8")
 
-    for source in workflow_sources:
-        assert "--expected-git-hash" in source
-        assert "--check-chat-api" in source
-    assert 'OPENAKITA_BUILD_GIT_HASH="$(git rev-parse HEAD)"' in prepare_source
+    for source in (*workflow_sources, prepare_source):
+        assert "build_backend.py" not in source
+        assert "verify_bundled_python_contract.py" not in source
+        assert "dist/openakita-server" not in source
+    assert "prepare_bootstrap_resources.py" in prepare_source
 
 
 def test_full_builds_compile_each_frontend_target_once() -> None:
@@ -95,18 +111,46 @@ def test_full_builds_compile_each_frontend_target_once() -> None:
 
     prepare_source = PREPARE.read_text(encoding="utf-8")
     assert prepare_source.count("npm run build:web") == 1
-    assert "python build/build_backend.py --skip-web-build" in prepare_source
+    assert "build_backend.py" not in prepare_source
 
     ci_source = CI.read_text(encoding="utf-8")
     full_build_job = ci_source.index("tauri_full_build_check:")
     web_build = ci_source.index("npm run build:web", full_build_job)
-    backend_build = ci_source.index("python build/build_backend.py --skip-web-build", web_build)
-    assert web_build < backend_build
+    bootstrap_build = ci_source.index("prepare_bootstrap_resources.py", web_build)
+    assert web_build < bootstrap_build
 
     for path in FULL_BUILD_SCRIPTS:
         source = path.read_text(encoding="utf-8")
         assert source.count("npm run build:web") == 1
-        assert "--skip-web-build" in source
+        assert "prepare_bootstrap_resources.py" in source
+        assert "build_backend.py" not in source
+
+
+def test_local_builds_package_a_required_python_seed() -> None:
+    for path in WINDOWS_BUILD_SCRIPTS:
+        source = path.read_text(encoding="utf-8")
+        assert "--commit-resources" in source
+        assert "--target-platform win-x64" in source
+        assert "--require-python-seed" in source
+        assert "--bundles nsis" in source
+
+    core_config = json.loads(LOCAL_TAURI_CONFIG.read_text(encoding="utf-8"))
+    full_config = json.loads(LOCAL_FULL_TAURI_CONFIG.read_text(encoding="utf-8"))
+    parallel_config = json.loads(LOCAL_PARALLEL_TAURI_CONFIG.read_text(encoding="utf-8"))
+    assert core_config["bundle"]["createUpdaterArtifacts"] is False
+    assert full_config["bundle"]["createUpdaterArtifacts"] is False
+    assert parallel_config["bundle"]["createUpdaterArtifacts"] is False
+    assert parallel_config["build"]["beforeBuildCommand"] == ""
+    assert full_config["bundle"]["resources"] == [
+        "resources/bootstrap/",
+        "resources/modules/",
+    ]
+
+    for path in POSIX_BUILD_SCRIPTS:
+        source = path.read_text(encoding="utf-8")
+        assert "--commit-resources" in source
+        assert "--auto-detect-target-platform" in source
+        assert "--require-python-seed" in source
 
 
 def test_ci_full_build_parallelizes_independent_packagers() -> None:
@@ -118,14 +162,14 @@ def test_ci_full_build_parallelizes_independent_packagers() -> None:
     assert "npm run build:web" in frontend_run.splitlines()
     assert "npm run build" in frontend_run.splitlines()
 
-    parallel_run = steps_by_name["Build backend, Rust, and docs in parallel"]["run"]
-    assert "python build/build_backend.py --skip-web-build" in parallel_run
+    parallel_run = steps_by_name["Build Rust and docs in parallel"]["run"]
     assert "cargo build --release --features tauri/custom-protocol" in parallel_run
     assert "wait_for_build" in parallel_run
     assert all(
         f'wait_for_build "${name}_pid" {name}' in parallel_run
-        for name in ("backend", "rust", "docs")
+        for name in ("rust", "docs")
     )
+    assert "backend_pid" not in parallel_run
     assert "frontend_pid" not in parallel_run
 
     tauri_run = steps_by_name["Build Tauri bundles (full build)"]["run"]
@@ -133,17 +177,16 @@ def test_ci_full_build_parallelizes_independent_packagers() -> None:
     assert "npx tauri build" not in tauri_run
 
 
-def test_desktop_workflows_cache_exact_expensive_outputs() -> None:
+def test_desktop_workflows_cache_only_rust_binary() -> None:
     prepare_source = PREPARE.read_text(encoding="utf-8")
     ci_source = CI.read_text(encoding="utf-8")
 
     for source in (prepare_source, ci_source):
-        assert "python scripts/build_cache_key.py backend" in source
-        assert "desktop-backend-v2-" in source
-        assert "dist/openakita-server" in source
+        assert "scripts/build_cache_key.py backend" not in source
+        assert "desktop-backend-v2-" not in source
+        assert "dist/openakita-server" not in source
     assert "python scripts/build_cache_key.py rust" in prepare_source
     assert "desktop-rust-binary-v2-" in prepare_source
-    assert "Refresh cached backend build identity" in prepare_source
 
 
 def test_release_workflows_compile_then_bundle_without_destroying_rust_cache() -> None:
@@ -173,10 +216,10 @@ def test_intel_macos_dmg_bypasses_create_dmg() -> None:
         assert "Intel runner: using hdiutil directly" in source
 
 
-def test_pyinstaller_analysis_reports_are_uploaded() -> None:
+def test_desktop_workflows_do_not_upload_pyinstaller_reports() -> None:
     for source in (PREPARE.read_text(encoding="utf-8"), CI.read_text(encoding="utf-8")):
-        assert "warn-*.txt" in source
-        assert "xref-*.html" in source
+        assert "warn-*.txt" not in source
+        assert "xref-*.html" not in source
 
 
 def test_publish_release_mirrors_optional_assets_before_publishing() -> None:

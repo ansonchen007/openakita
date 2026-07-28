@@ -1271,11 +1271,6 @@ fn modules_dir() -> PathBuf {
     openakita_root_dir().join("modules")
 }
 
-/// 获取内嵌 PyInstaller 打包后端的目录
-fn bundled_backend_dir() -> PathBuf {
-    bundled_resource_dir("openakita-server")
-}
-
 fn bootstrap_resource_dir() -> PathBuf {
     bundled_resource_dir("bootstrap")
 }
@@ -1289,8 +1284,7 @@ fn bundled_resource_dir(resource_name: &str) -> PathBuf {
 
     // macOS: exe 在 .app/Contents/MacOS/，Tauri 将 resources 放在
     // .app/Contents/Resources/ 下并保留原始目录结构。
-    // tauri.conf.json 配置 "resources": ["resources/openakita-server/"]，
-    // 因此实际路径是 .app/Contents/Resources/resources/openakita-server/
+    // tauri.conf.json 中的资源保留 resources/ 目录层级。
     #[cfg(target_os = "macos")]
     {
         if let Some(contents_dir) = exe_dir.parent() {
@@ -1336,7 +1330,7 @@ fn bundled_resource_dir(resource_name: &str) -> PathBuf {
             "open-akita-desktop",
         ];
 
-        // deb 常见布局: /usr/lib/<app-name>/resources/openakita-server/
+        // deb 常见布局: /usr/lib/<app-name>/resources/<resource_name>/
         if let Some(ref name) = exe_name {
             candidates.push(
                 Path::new("/usr/lib")
@@ -1584,25 +1578,33 @@ fn python_tuple_literal(values: &[&str]) -> String {
     }
 }
 
+const CANONICAL_BACKEND_ENTRYPOINT: &str =
+    "from openakita.main import app as openakita_app; openakita_app()";
+
+fn canonical_backend_args() -> Vec<String> {
+    vec![
+        "-u".into(),
+        "-c".into(),
+        CANONICAL_BACKEND_ENTRYPOINT.into(),
+        "serve".into(),
+    ]
+}
+
 fn runtime_venv_backend_args(venv_dir: &Path) -> Vec<String> {
     if cfg!(windows) && runtime_venv_home_python_path(venv_dir).is_some() {
         if let Some(site_packages) = runtime_venv_site_packages_dir(venv_dir) {
             let venv_python = runtime_venv_python_path(venv_dir);
             let code = format!(
-                "import runpy, site, sys; sys.prefix = sys.exec_prefix = {}; sys.executable = {}; site.addsitedir({}); runpy.run_module('openakita.main', run_name='__main__')",
+                "import site, sys; sys.prefix = sys.exec_prefix = {}; sys.executable = {}; site.addsitedir({}); {}",
                 python_string_literal(venv_dir),
                 python_string_literal(&venv_python),
-                python_string_literal(&site_packages)
+                python_string_literal(&site_packages),
+                CANONICAL_BACKEND_ENTRYPOINT,
             );
             return vec!["-u".into(), "-c".into(), code, "serve".into()];
         }
     }
-    vec![
-        "-u".into(),
-        "-m".into(),
-        "openakita.main".into(),
-        "serve".into(),
-    ]
+    canonical_backend_args()
 }
 
 fn runtime_venv_backend_python_path(venv_dir: &Path) -> PathBuf {
@@ -1802,7 +1804,7 @@ fn runtime_manifest_mismatch(
 }
 
 fn bootstrap_wheelhouse_dir() -> PathBuf {
-    bootstrap_resource_dir().join("wheels")
+    bootstrap_resource_dir().join("wheelhouse")
 }
 
 fn bootstrap_declares_complete_wheelhouse(bootstrap: &BootstrapManifest) -> bool {
@@ -2743,11 +2745,8 @@ fn write_runtime_manifest(info: &RuntimeEnvInfo, bootstrap: &BootstrapManifest) 
 fn mark_legacy_runtime_mode(error: &str) {
     let pip_index = resolve_runtime_pip_index();
     let now = now_epoch_secs().to_string();
-    // 即便 dual-venv 创建失败回退到 PyInstaller bundled 后端，也把 bootstrap
-    // manifest 中的 wheel sha256 写进 runtime manifest。否则 wheel_hash 永远是
-    // 空串，`runtime_wheel_hash_matches_bootstrap()` 永远返回 false，下一次
-    // `startup_version_check` 会判定"wheel 变了"并主动 stop_backend_for_restart，
-    // 把刚 fallback 拉起来的 bundled 后端反复杀掉，造成"启动一下又无响应"循环。
+    // Persist the bootstrap identity even when runtime creation fails so the
+    // diagnostics page can explain which wheel and Python seed were attempted.
     let (wheel_hash, python_version) = match read_bootstrap_manifest() {
         Ok(b) => (b.wheel.sha256, b.python_version),
         Err(_) => (String::new(), "3.12".to_string()),
@@ -2939,42 +2938,11 @@ fn apply_dual_runtime_env(cmd: &mut Command) {
     apply_runtime_core_env(cmd);
 }
 
-/// 获取安装包内置的 Python 解释器路径（openakita-server/_internal）
-fn bundled_internal_python_path() -> Option<PathBuf> {
-    let bundled = bundled_backend_dir();
-    if !bundled.exists() {
-        return None;
-    }
-    let candidates: Vec<PathBuf> = if cfg!(windows) {
-        vec![bundled.join("_internal").join("python.exe")]
-    } else {
-        vec![
-            bundled.join("_internal").join("python3"),
-            bundled.join("_internal").join("python"),
-        ]
-    };
-    let internal_dir = bundled.join("_internal");
-    for internal_py in candidates {
-        if !internal_py.exists() {
-            continue;
-        }
-        let mut c = Command::new(&internal_py);
-        c.args(["-c", "import pip; print(pip.__version__)"]);
-        apply_bundled_python_env(&mut c, &internal_dir);
-        apply_no_window(&mut c);
-        if let Ok(output) = c.output() {
-            if output.status.success() {
-                return Some(internal_py);
-            }
-        }
-    }
-    None
-}
-
-/// 获取后端可执行文件及参数
-/// 优先使用 dual app-venv，失败后保留 PyInstaller legacy fallback。
+/// 获取后端可执行文件及参数。
+///
+/// Release builds use the managed app-venv exclusively. The legacy venv path
+/// remains only for existing development and pre-dual-runtime installations.
 fn get_backend_executable(venv_dir: &str) -> (PathBuf, Vec<String>) {
-    // 1. 优先: dual runtime app venv
     match ensure_dual_runtime_env() {
         Ok(runtime) => {
             let backend_python = runtime_venv_backend_python_path(&runtime.app_venv);
@@ -2987,39 +2955,24 @@ fn get_backend_executable(venv_dir: &str) -> (PathBuf, Vec<String>) {
             return (backend_python, runtime_venv_backend_args(&runtime.app_venv));
         }
         Err(e) => {
-            log_to_file(&format!(
-                "[runtime] dual venv unavailable, fallback to legacy: {e}"
-            ));
+            log_to_file(&format!("[runtime] dual venv unavailable: {e}"));
             mark_legacy_runtime_mode(&e);
         }
     }
 
-    // 2. fallback: 内嵌的 PyInstaller 打包后端
-    let bundled_dir = bundled_backend_dir();
-    let bundled_exe = if cfg!(windows) {
-        bundled_dir.join("openakita-server.exe")
-    } else {
-        bundled_dir.join("openakita-server")
-    };
-    if bundled_exe.exists() {
-        return (bundled_exe, vec!["serve".to_string()]);
-    }
-    // 3. 最后降级: 旧 ~/.openakita/venv python（开发模式 / 旧安装）
+    // Compatibility only: old installations and local development may still
+    // have ~/.openakita/venv. New installers do not create this environment.
     eprintln!(
-        "[backend] dual runtime and bundled openakita-server unavailable at: {}\n\
+        "[backend] managed app runtime unavailable\n\
          [backend] current_exe: {:?}\n\
          [backend] falling back to venv python in: {}",
-        bundled_exe.display(),
         std::env::current_exe()
             .ok()
             .map(|p| p.display().to_string()),
         venv_dir,
     );
     let py = venv_pythonw_path(venv_dir);
-    (
-        py,
-        vec!["-m".into(), "openakita.main".into(), "serve".into()],
-    )
+    (py, canonical_backend_args())
 }
 
 /// 构建可选模块路径字符串（自动从 module_definitions 获取模块列表）
@@ -3055,8 +3008,8 @@ fn find_pip_python() -> Option<PathBuf> {
     if venv_py.exists() {
         return Some(venv_py);
     }
-    // 2. 安装包内置 python（PyInstaller _internal 目录）
-    if let Some(py) = bundled_internal_python_path() {
+    // 2. 安装包内置的 standalone Python seed
+    if let Some(py) = managed_python_seed_path() {
         return Some(py);
     }
     // 不再搜索用户系统 PATH 中的 Python，也不再运行时下载 Python。
@@ -3206,7 +3159,7 @@ fn module_definitions() -> Vec<(
     // (id, name, description, pip_packages, estimated_size_mb, category)
     //
     // 仅体积大(>50MB)或有特殊二进制依赖的包才需要模块化安装。
-    // 其余轻量包(文档处理/图像处理/桌面自动化/IM适配器等)已直接打包进 PyInstaller bundle。
+    // 其余轻量包(文档处理/图像处理/桌面自动化/IM适配器等)随 core wheel 安装。
     // browser (playwright + browser-use + langchain-openai) 已内置到 core 包，不再作为外置模块
     vec![
         ("vector-memory", "向量记忆增强", "让 Akita 拥有长期记忆，能根据语义搜索历史对话。体积较大（约 2.5GB，含 PyTorch），安装耗时较长", &["sentence-transformers", "chromadb", "regex>=2023.6.3"], 2500, "core"),
@@ -3683,8 +3636,7 @@ fn check_environment() -> EnvironmentCheck {
 
     // venv 是打包后应用运行时的关键组件：
     // - venv: 用于 pip install 模块（vector-memory 等）和工具执行
-    // Python 基座改为安装包内置 _internal，不再依赖 runtime 下载链路。
-    let _bundled_exists = bundled_backend_dir().exists();
+    // Python 基座来自 bootstrap seed，不依赖运行时下载链路。
 
     let mut conflicts = Vec::new();
     if !running.is_empty() {
@@ -3719,26 +3671,24 @@ struct BackendAvailability {
 
 #[tauri::command]
 fn check_backend_availability(venv_dir: String) -> BackendAvailability {
-    let bundled_dir = bundled_backend_dir();
-    let bundled_exe = if cfg!(windows) {
-        bundled_dir.join("openakita-server.exe")
-    } else {
-        bundled_dir.join("openakita-server")
-    };
+    let managed_seed = managed_python_seed_path();
     let venv_py = venv_pythonw_path(&venv_dir);
-    let bundled = bundled_exe.exists();
+    let bundled = managed_seed.is_some();
     let venv_ready = legacy_venv_has_openakita_backend(&venv_dir);
-    let exe_path = if bundled {
-        bundled_exe.to_string_lossy().to_string()
+    let exe_path = if let Some(ref seed) = managed_seed {
+        seed.to_string_lossy().to_string()
     } else if venv_ready {
         venv_py.to_string_lossy().to_string()
     } else {
         String::new()
     };
     eprintln!(
-        "[backend-check] bundled={} ({}) venv={} ({})",
+        "[backend-check] bootstrap_seed={} ({}) venv={} ({})",
         bundled,
-        bundled_exe.display(),
+        managed_seed
+            .as_deref()
+            .unwrap_or_else(|| Path::new("<missing>"))
+            .display(),
         venv_ready,
         venv_py.display()
     );
@@ -3746,7 +3696,14 @@ fn check_backend_availability(venv_dir: String) -> BackendAvailability {
         bundled,
         venv_ready,
         exe_path,
-        bundled_checked: bundled_exe.to_string_lossy().to_string(),
+        bundled_checked: managed_seed
+            .map(|path| path.to_string_lossy().to_string())
+            .unwrap_or_else(|| {
+                bootstrap_resource_dir()
+                    .join("python")
+                    .to_string_lossy()
+                    .to_string()
+            }),
         venv_checked: venv_py.to_string_lossy().to_string(),
     }
 }
@@ -5342,18 +5299,6 @@ fn set_current_workspace(id: String) -> Result<(), String> {
     Ok(())
 }
 
-/// 读取安装包内 bundled 后端版本号（不启动 Python，直接读文件）。
-fn bundled_backend_version() -> Option<String> {
-    let version_file = bundled_backend_dir()
-        .join("_internal")
-        .join("openakita")
-        .join("_bundled_version.txt");
-    fs::read_to_string(&version_file)
-        .ok()
-        .map(|v| v.trim().to_string())
-        .filter(|v| !v.is_empty())
-}
-
 /// 启动时后端版本对账的结果。
 ///
 /// 三种状态覆盖所有情况，调用方据此决定是否启动新后端，
@@ -5382,11 +5327,8 @@ fn runtime_wheel_hash_matches_bootstrap() -> bool {
     }
     read_runtime_manifest()
         .map(|m| {
-            // legacy 模式下 dual-venv 没创建成功，wheel hash 字段写不写都
-            // 不代表"app-venv 包含 bootstrap wheel 的代码"。但如果重启后
-            // 端只会再走一遍 dual-venv 创建（大概率仍然失败）然后再 fallback
-            // 到同一个 PyInstaller bundled 后端，重启没有任何意义，反而把
-            // 唯一能用的后端杀掉。所以 legacy 模式直接视为 hash 匹配。
+            // Legacy venv compatibility does not install from the bootstrap
+            // wheel, so its hash cannot be reconciled with the managed runtime.
             if m.legacy_mode {
                 return true;
             }
@@ -5525,31 +5467,9 @@ fn startup_version_check(workspace_id: &str, app_version: &str, port: u16) -> Ve
         return stop_backend_for_restart(workspace_id, pid, port);
     }
 
-    // 核心防护：检查安装包内 bundled 后端版本。
-    // 如果 bundled 版本和运行中版本相同，重启只会拉起同样版本的后端，
-    // 杀死毫无意义且可能影响用户正在使用的服务。
-    let bundled_v = bundled_backend_version()
-        .unwrap_or_default()
-        .trim_start_matches('v')
-        .to_string();
-    if !bundled_v.is_empty() && bundled_v == backend_version {
-        eprintln!(
-            "Version mismatch: backend={} desktop={}, but bundled backend is also {}. \
-             Restart would not help — keeping current backend.",
-            backend_version, desktop_version, bundled_v
-        );
-        return VersionCheckResult::RunningOk;
-    }
-
     eprintln!(
-        "Version mismatch: running={} bundled={} desktop={}. Stopping old backend for upgrade...",
-        backend_version,
-        if bundled_v.is_empty() {
-            "?"
-        } else {
-            &bundled_v
-        },
-        desktop_version
+        "Version mismatch: running={} desktop={}. Stopping old backend for upgrade...",
+        backend_version, desktop_version
     );
 
     // graceful_stop_pid 内部已包含：POST /api/shutdown → 等待 5s → force kill → 等待 2s
@@ -6135,13 +6055,8 @@ fn main() {
                             continue;
                         }
                         let venv_dir = openakita_root_dir().join("venv");
-                        let bundled_exe = if cfg!(windows) {
-                            bundled_backend_dir().join("openakita-server.exe")
-                        } else {
-                            bundled_backend_dir().join("openakita-server")
-                        };
                         let venv_dir_str = venv_dir.to_string_lossy().to_string();
-                        if !bundled_exe.exists()
+                        if managed_python_seed_path().is_none()
                             && !legacy_venv_has_openakita_backend(&venv_dir_str)
                         {
                             consecutive_failures = 0;
@@ -6580,8 +6495,8 @@ fn apply_no_window(_cmd: &mut Command) {}
 /// 清除可能干扰 Python 运行环境的外部环境变量。
 ///
 /// 常见场景：用户安装了 Anaconda/Miniconda、系统设置了 PYTHONPATH 等，
-/// 这些变量会在 Python 启动时被注入到 sys.path 最前面，覆盖 PyInstaller
-/// 内置的包（如 pydantic_core），导致 C 扩展不兼容而崩溃。
+/// 这些变量会在 Python 启动时被注入到 sys.path 最前面，覆盖托管虚拟环境
+/// 中的包（如 pydantic_core），导致 C 扩展不兼容而崩溃。
 ///
 /// 同时清除 pip 行为干扰变量（PIP_TARGET/PIP_PREFIX 等），
 /// 避免 pip install --target 时被用户配置覆盖。
@@ -6633,110 +6548,6 @@ fn strip_harmful_toolchain_env(cmd: &mut Command) {
         cmd.env_remove("LIBRARY_PATH");
         cmd.env_remove("PKG_CONFIG_PATH");
     }
-}
-
-/// Configure environment for invoking `_internal/python{3}` directly.
-///
-/// PyInstaller packs `encodings`, `codecs` and other bootstrap modules into
-/// `base_library.zip`.  When calling the raw Python binary we must make sure
-/// it can find them.
-///
-/// Platform-specific behaviour:
-/// - **Windows**: `._pth` files (created by `ensure_bundled_pth_file`) are the
-///   primary mechanism; `PYTHONHOME` + `PYTHONPATH` serve as fallback.
-/// - **macOS / Linux**: `._pth` files are Windows-only and ignored.
-///   Setting `PYTHONHOME` to `_internal/` fails because Python expects
-///   `PYTHONHOME/lib/pythonX.Y/` which does not exist in a PyInstaller layout.
-///   We rely on `PYTHONPATH` alone and suppress user site-packages.
-fn apply_bundled_python_env(cmd: &mut Command, internal_dir: &std::path::Path) {
-    ensure_bundled_pth_file(internal_dir);
-    strip_harmful_python_env(cmd);
-
-    // PYTHONHOME: Windows only.  On macOS/Linux it breaks stdlib resolution
-    // because _internal/ lacks the expected lib/pythonX.Y/ subdirectory.
-    #[cfg(target_os = "windows")]
-    cmd.env("PYTHONHOME", internal_dir);
-
-    #[cfg(not(target_os = "windows"))]
-    {
-        cmd.env_remove("PYTHONHOME");
-        cmd.env("PYTHONNOUSERSITE", "1");
-    }
-
-    let mut parts: Vec<PathBuf> = vec![];
-    let base_lib = internal_dir.join("base_library.zip");
-    if base_lib.exists() {
-        parts.push(base_lib);
-    }
-    parts.push(internal_dir.to_path_buf());
-    let lib = internal_dir.join("Lib");
-    if lib.is_dir() {
-        parts.push(lib);
-    }
-    let dlls = internal_dir.join("DLLs");
-    if dlls.is_dir() {
-        parts.push(dlls);
-    }
-    if let Ok(joined) = std::env::join_paths(&parts) {
-        cmd.env("PYTHONPATH", joined);
-    }
-}
-
-/// 确保 `_internal/` 目录中存在 `python3XX._pth` 文件。
-///
-/// `._pth` 文件是 CPython 最底层的路径配置机制，在 `PYTHONPATH`/`PYTHONHOME`
-/// 之前生效，确保 `base_library.zip` 在 Python 启动最早阶段就能被搜索到。
-/// 对于已有新版构建（build_backend.py 已创建 ._pth）的安装，此函数直接返回；
-/// 对于旧版安装（无 ._pth），此函数动态创建。
-fn ensure_bundled_pth_file(internal_dir: &std::path::Path) {
-    // Detect Python version from DLL (Windows) or shared lib (Unix).
-    let detected_ver: Option<u32> = (8..=15).find(|minor| {
-        let dll = internal_dir.join(format!("python3{}.dll", minor));
-        if dll.exists() {
-            return true;
-        }
-        if let Ok(entries) = std::fs::read_dir(internal_dir) {
-            for entry in entries.flatten() {
-                let name = entry.file_name();
-                let name = name.to_string_lossy();
-                if name.starts_with(&format!("libpython3.{}", minor)) && name.contains(".so") {
-                    return true;
-                }
-            }
-        }
-        false
-    });
-    let Some(minor) = detected_ver else { return };
-
-    let pth_name = format!("python3{}._pth", minor);
-    let pth_path = internal_dir.join(&pth_name);
-
-    if pth_path.exists() {
-        if let Ok(content) = std::fs::read_to_string(&pth_path) {
-            if content.contains("base_library.zip") {
-                return;
-            }
-        }
-    }
-
-    let mut lines = vec![];
-    if internal_dir.join("base_library.zip").exists() {
-        lines.push("base_library.zip".to_string());
-    }
-    let zip_name = format!("python3{}.zip", minor);
-    if internal_dir.join(&zip_name).exists() {
-        lines.push(zip_name);
-    }
-    lines.push(".".to_string());
-    if internal_dir.join("Lib").is_dir() {
-        lines.push("Lib".to_string());
-    }
-    if internal_dir.join("DLLs").is_dir() {
-        lines.push("DLLs".to_string());
-    }
-    lines.push("import site".to_string());
-    let content = lines.join("\n") + "\n";
-    let _ = std::fs::write(&pth_path, content);
 }
 
 async fn spawn_blocking_result<R: Send + 'static>(
@@ -6965,7 +6776,7 @@ fn openakita_service_start_impl(
         }
     }
 
-    // 优先使用内嵌 PyInstaller 后端，降级到 venv python
+    // Resolve the managed app-venv backend (legacy venv is compatibility-only).
     let backend_resolve_started = Instant::now();
     let (backend_exe, backend_args) = get_backend_executable(&venv_dir);
     log_to_file(&format!(
@@ -6978,19 +6789,9 @@ fn openakita_service_start_impl(
         backend_exe.exists()
     ));
     if !backend_exe.exists() {
-        let bundled_dir = bundled_backend_dir();
-        let bundled_name = if cfg!(windows) {
-            "openakita-server.exe"
-        } else {
-            "openakita-server"
-        };
         return Err(format!(
             "后端可执行文件不存在: {}\n\
-             已检查路径:\n  - bundled: {}/{}\n  - venv: {}\n\
-             请尝试: 1) 重新安装桌面端  2) 运行 quickstart.sh 创建 venv",
-            backend_exe.to_string_lossy(),
-            bundled_dir.display(),
-            bundled_name,
+             请在设置中心修复 Python 运行环境，或重新安装桌面端。",
             backend_exe.to_string_lossy(),
         ));
     }
@@ -7041,7 +6842,7 @@ fn openakita_service_start_impl(
 
     // 设置可选模块路径（已安装的可选模块 site-packages）
     // 重要：不能使用 PYTHONPATH！Python 启动时 PYTHONPATH 会被插入到 sys.path
-    // 最前面，覆盖 PyInstaller 内置的包（如 pydantic），导致外部 pydantic 的
+    // 最前面，覆盖托管虚拟环境中的包（如 pydantic），导致外部 pydantic 的
     // C 扩展 pydantic_core._pydantic_core 加载失败，进程在 import 阶段崩溃。
     // 改用自定义环境变量 OPENAKITA_MODULE_PATHS，由 Python 端的
     // inject_module_paths() 读取并 append 到 sys.path 末尾。
@@ -7050,9 +6851,7 @@ fn openakita_service_start_impl(
     }
 
     // Playwright 浏览器二进制路径
-    // 优先级: 打包内置 > 旧版外置模块安装路径
-    // 注: browser 模块已内置到 core 包，Python 端会自动检测 _MEIPASS/playwright-browsers/
-    // 这里作为兜底，兼容旧版外置安装
+    // browser 模块已包含在 core wheel 中；这里兼容旧版外置浏览器安装路径。
     let browsers_dir = modules_dir().join("browser").join("browsers");
     if browsers_dir.exists() {
         cmd.env("PLAYWRIGHT_BROWSERS_PATH", &browsers_dir);
@@ -8399,8 +8198,8 @@ fn detect_python() -> Vec<PythonCandidate> {
         });
     }
 
-    if let Some(bundled_py) = bundled_internal_python_path() {
-        let c = vec![bundled_py.to_string_lossy().to_string()];
+    if let Some(seed_py) = managed_python_seed_path() {
+        let c = vec![seed_py.to_string_lossy().to_string()];
         let mut cmd = c.clone();
         cmd.push("--version".into());
         let version_text = run_capture(&cmd).unwrap_or_else(|e| e);
@@ -8476,8 +8275,8 @@ fn python_diag_generated_at() -> String {
 ///   0. Check heartbeat to distinguish "not started" / "starting" / "running".
 ///   1. If the backend is running → call GET /api/diagnostics (the backend
 ///      self-reports, no fragile _internal/python3 invocation needed).
-///   2. If the backend is NOT running → basic file-existence check on the
-///      bundled openakita-server binary.
+///   2. If the backend is NOT running → check the managed Python seed and
+///      application virtual environment.
 #[tauri::command]
 fn diagnose_python_env(venv_dir: String) -> PythonDiagnostic {
     let _ = venv_dir;
@@ -8527,41 +8326,29 @@ fn diagnose_python_env(venv_dir: String) -> PythonDiagnostic {
         return make_backend_api_unreachable_diagnostic(trace_id, port);
     }
 
-    // --- Strategy 2: backend not reachable — static file check ---
-    let bundled_dir = bundled_backend_dir();
-    let bundled_exe = if cfg!(windows) {
-        bundled_dir.join("openakita-server.exe")
-    } else {
-        bundled_dir.join("openakita-server")
-    };
-    let internal_dir = bundled_dir.join("_internal");
-
+    // --- Strategy 2: backend not reachable — managed seed check ---
     let mut contracts: Vec<PythonContractResult> = vec![];
 
-    if bundled_exe.exists() && internal_dir.exists() {
+    if let Some(seed) = managed_python_seed_path() {
         contracts.push(PythonContractResult {
-            id: "C1_BUNDLED_RUNTIME".into(),
+            id: "C1_MANAGED_RUNTIME".into(),
             title: "内置运行时".into(),
             status: "pass".into(),
             code: "RUNTIME_OK".into(),
-            evidence: vec![format!("binary: {}", bundled_exe.display())],
+            evidence: vec![format!("python seed: {}", seed.display())],
             auto_fix: false,
             fix_hint: None,
         });
     } else {
-        let mut missing = vec![];
-        if !bundled_exe.exists() {
-            missing.push(format!("missing: {}", bundled_exe.display()));
-        }
-        if !internal_dir.exists() {
-            missing.push(format!("missing: {}", internal_dir.display()));
-        }
         contracts.push(PythonContractResult {
-            id: "C1_BUNDLED_RUNTIME".into(),
+            id: "C1_MANAGED_RUNTIME".into(),
             title: "内置运行时".into(),
             status: "fail".into(),
             code: "RUNTIME_MISSING".into(),
-            evidence: missing,
+            evidence: vec![format!(
+                "missing: {}",
+                bootstrap_resource_dir().join("python").display()
+            )],
             auto_fix: false,
             fix_hint: Some("请重装 OpenAkita 以恢复内置运行时".into()),
         });
@@ -8782,16 +8569,16 @@ fn install_bundled_python_sync(
     _python_series: Option<String>,
     _log_path: Option<PathBuf>,
 ) -> Result<BundledPythonInstallResult, String> {
-    let py = bundled_internal_python_path().ok_or_else(|| {
-        "安装包内置 Python 不可用。请重新安装 OpenAkita 以恢复 resources/openakita-server/_internal".to_string()
+    let py = managed_python_seed_path().ok_or_else(|| {
+        "安装包内置 Python 不可用。请重新安装 OpenAkita 以恢复 resources/bootstrap/python"
+            .to_string()
     })?;
-    let bundled_dir = bundled_backend_dir();
     Ok(BundledPythonInstallResult {
         python_command: vec![py.to_string_lossy().to_string()],
         python_path: py.to_string_lossy().to_string(),
-        install_dir: bundled_dir.to_string_lossy().to_string(),
-        asset_name: "bundled-internal".to_string(),
-        tag: "bundled".to_string(),
+        install_dir: bootstrap_resource_dir().to_string_lossy().to_string(),
+        asset_name: "managed-python-seed".to_string(),
+        tag: "bootstrap".to_string(),
     })
 }
 
@@ -8823,10 +8610,8 @@ async fn create_venv(
 
             if !venv.exists() {
                 pip_install_set_stage(install_id_ref, "创建 venv", 10);
-                let mut c = if let Some(bundled_py) = bundled_internal_python_path() {
-                    let mut cmd = Command::new(&bundled_py);
-                    apply_bundled_python_env(&mut cmd, &bundled_backend_dir().join("_internal"));
-                    cmd
+                let mut c = if let Some(seed_py) = managed_python_seed_path() {
+                    Command::new(seed_py)
                 } else {
                     command_from_python_command(&python_command)?
                 };
@@ -8881,41 +8666,18 @@ fn venv_python_path(venv_dir: &str) -> PathBuf {
     }
 }
 
-/// 解析可用的 Python 解释器路径，并可选返回需要设置的 PYTHONPATH（bundled 模式）。
-/// 只使用安装包内置 Python 创建的环境：venv → bundled _internal/python.exe
+/// 解析可用的 Python 解释器路径。
+/// 只使用 OpenAkita 管理的环境：venv → bootstrap Python seed。
 fn resolve_python(venv_dir: &str) -> Result<(PathBuf, Option<String>), String> {
     let venv_py = venv_python_path(venv_dir);
     if venv_py.exists() {
         return Ok((venv_py, None));
     }
     let py = find_pip_python().ok_or_else(|| {
-        "未找到可用 Python 解释器（venv/bundled）。请重新安装 OpenAkita 以恢复内置 Python。"
+        "未找到可用 Python 解释器（venv/bootstrap）。请重新安装 OpenAkita 以恢复内置 Python。"
             .to_string()
     })?;
-    let bundled = bundled_backend_dir();
-    let internal_dir = bundled.join("_internal");
-    let pythonpath = if py.starts_with(&internal_dir) {
-        let mut parts: Vec<PathBuf> = vec![];
-        let base_lib = internal_dir.join("base_library.zip");
-        if base_lib.exists() {
-            parts.push(base_lib);
-        }
-        parts.push(internal_dir.clone());
-        let lib = internal_dir.join("Lib");
-        if lib.is_dir() {
-            parts.push(lib);
-        }
-        let dlls = internal_dir.join("DLLs");
-        if dlls.is_dir() {
-            parts.push(dlls);
-        }
-        let joined = std::env::join_paths(parts)
-            .map_err(|e| format!("构建 bundled PYTHONPATH 失败: {e}"))?;
-        Some(joined.to_string_lossy().to_string())
-    } else {
-        None
-    };
-    Ok((py, pythonpath))
+    Ok((py, None))
 }
 
 fn venv_pythonw_path(venv_dir: &str) -> PathBuf {
@@ -9450,22 +9212,7 @@ async fn openakita_list_models(
 #[tauri::command]
 async fn openakita_version(venv_dir: String) -> Result<String, String> {
     spawn_blocking_result(move || {
-        // 1. 尝试从打包后端读取 _bundled_version.txt（最快且无需 Python）
-        let bundled = bundled_backend_dir();
-        let version_file = bundled
-            .join("_internal")
-            .join("openakita")
-            .join("_bundled_version.txt");
-        if version_file.exists() {
-            if let Ok(v) = fs::read_to_string(&version_file) {
-                let v = v.trim().to_string();
-                if !v.is_empty() {
-                    return Ok(v);
-                }
-            }
-        }
-
-        // 2. 使用 resolve_python 查找可用 Python 并获取版本
+        // Use the managed environment to obtain the installed wheel version.
         let (py, pythonpath) = resolve_python(&venv_dir)?;
         let mut c = Command::new(&py);
         apply_no_window(&mut c);
@@ -11741,6 +11488,24 @@ mod tests {
     use super::*;
 
     #[test]
+    fn backend_entrypoint_imports_one_canonical_main_module() {
+        let args = canonical_backend_args();
+        assert_eq!(args[0], "-u");
+        assert_eq!(args[1], "-c");
+        assert!(args[2].contains("from openakita.main import app"));
+        assert!(!args[2].contains("runpy"));
+        assert_eq!(args[3], "serve");
+    }
+
+    #[test]
+    fn bootstrap_wheelhouse_uses_dependency_directory() {
+        assert_eq!(
+            bootstrap_wheelhouse_dir().file_name().and_then(|name| name.to_str()),
+            Some("wheelhouse")
+        );
+    }
+
+    #[test]
     fn manual_backend_stop_marker_persists_until_explicit_start() {
         let test_dir = std::env::temp_dir().join(format!(
             "openakita-manual-stop-test-{}-{}",
@@ -11774,17 +11539,6 @@ mod tests {
         assert!(onboarding_required(&state));
         state.onboarding_completed = Some(true);
         assert!(!onboarding_required(&state));
-    }
-
-    #[test]
-    fn test_bundled_backend_dir_returns_non_empty_path() {
-        let dir = bundled_backend_dir();
-        assert!(!dir.to_string_lossy().is_empty());
-        assert!(
-            dir.to_string_lossy().contains("openakita-server"),
-            "bundled_backend_dir should contain 'openakita-server': {:?}",
-            dir
-        );
     }
 
     #[test]

@@ -632,13 +632,17 @@ class PluginManager:
         granted = self._resolve_permissions(manifest, state_entry.granted_permissions)
         state_entry.granted_permissions = granted
 
-        data_dir = self._plugins_dir.parent / "plugin_data" / manifest.id
+        from .config_store import PluginConfigStore
+
+        config_store = PluginConfigStore.for_plugin(self._plugins_dir, manifest.id)
+        data_dir = config_store.config_path.parent
         data_dir.mkdir(parents=True, exist_ok=True)
         api = PluginAPI(
             plugin_id=manifest.id,
             manifest=manifest,
             granted_permissions=granted,
             data_dir=data_dir,
+            config_store=config_store,
             host_refs=self._host_refs,
             hook_registry=self._hook_registry,
         )
@@ -1295,7 +1299,32 @@ class PluginManager:
                     e,
                 )
 
-    async def unload_plugin(self, plugin_id: str) -> bool:
+    async def unload_plugin(
+        self,
+        plugin_id: str,
+        *,
+        collect_garbage: bool = True,
+    ) -> bool:
+        """Unload a plugin and invalidate policy classification when tools changed."""
+        changed, runtime_changed = await self._unload_plugin_runtime(
+            plugin_id,
+            collect_garbage=collect_garbage,
+        )
+        if runtime_changed:
+            self._invalidate_policy_classifier_cache(plugin_id)
+        return changed
+
+    async def _unload_plugin_runtime(
+        self,
+        plugin_id: str,
+        *,
+        collect_garbage: bool,
+    ) -> tuple[bool, bool]:
+        """Unload plugin-owned runtime state without publishing cache invalidation.
+
+        Composite operations such as reload use this core and publish one
+        classifier invalidation after the complete registry transition.
+        """
         # Clear any prior failure record. Both "previously loaded then
         # unloaded" and "never successfully loaded" must drop the
         # ``_failed`` entry — otherwise stale errors keep showing in the
@@ -1306,7 +1335,7 @@ class PluginManager:
         if loaded is None:
             # Nothing to tear down, but if we just cleared a failure row
             # let the caller know the operation actually changed state.
-            return had_failure
+            return had_failure, False
 
         # 1. Plugin's own on_unload — best effort, never blocks the rest.
         try:
@@ -1353,10 +1382,21 @@ class PluginManager:
             except ValueError:
                 pass
 
-        # 4. Force GC — some C-extensions (sqlite3, ssl) only release OS
-        #    handles when their Python wrapper is collected. We do TWO passes
-        #    with a brief yield in between because aiosqlite + httpx tend to
-        #    have one layer of cyclic refs through their connection pools.
+        # 4. Force GC for standalone unloads. Batch shutdown defers this to one
+        #    shared pass after every plugin has released its resources; running
+        #    full-heap GC concurrently per plugin is both redundant and slow.
+        if collect_garbage:
+            await self._collect_plugin_garbage()
+
+        self._unload_plugin_skills(loaded)
+        self._unmount_plugin_ui(plugin_id)
+
+        logger.info("Plugin '%s' unloaded", plugin_id)
+        return True, True
+
+    @staticmethod
+    async def _collect_plugin_garbage() -> None:
+        """Run the two-pass collection needed by cyclic SQLite/HTTP wrappers."""
         try:
             gc.collect()
             await asyncio.sleep(0)
@@ -1364,23 +1404,14 @@ class PluginManager:
         except Exception:
             pass
 
-        self._unload_plugin_skills(loaded)
-        self._unmount_plugin_ui(plugin_id)
-
-        # C10: this plugin's manifest.tool_classes contributions are gone, so
-        # the ApprovalClassifier's LRU cache may hold stale (klass, source)
-        # entries for those tool names. Broadcast a clear so the next
-        # classification falls through the lookup chain again. Cheap and
-        # idempotent — engine may not exist yet (in which case it's a no-op).
+    @staticmethod
+    def _invalidate_policy_classifier_cache(plugin_id: str) -> None:
         try:
             from ..core.policy_v2.global_engine import invalidate_classifier_cache
 
             invalidate_classifier_cache()
         except Exception as exc:
             logger.debug("Plugin '%s' classifier invalidate skipped: %s", plugin_id, exc)
-
-        logger.info("Plugin '%s' unloaded", plugin_id)
-        return True
 
     @staticmethod
     async def _cancel_stray_plugin_tasks(plugin_id: str, loaded: _LoadedPlugin) -> None:
@@ -1586,7 +1617,7 @@ class PluginManager:
         if loaded is not None:
             plugin_dir = loaded.plugin_dir
             manifest = loaded.manifest
-            await self.unload_plugin(plugin_id)
+            await self._unload_plugin_runtime(plugin_id, collect_garbage=True)
         else:
             plugin_dir = self._find_plugin_dir(plugin_id)
             if plugin_dir is None:
@@ -1607,27 +1638,14 @@ class PluginManager:
                 timeout=manifest.load_timeout,
             )
             logger.info("Plugin '%s' reloaded after permission grant", plugin_id)
-            # C10: reloaded plugin's manifest.tool_classes may have changed
-            # (typical reload trigger is permission grant — but author may have
-            # also tweaked approval_class for a tool). Invalidate so next
-            # classify() picks up the new declaration instead of the cache.
-            try:
-                from ..core.policy_v2.global_engine import (
-                    invalidate_classifier_cache,
-                )
-
-                invalidate_classifier_cache()
-            except Exception as exc:
-                logger.debug(
-                    "Plugin '%s' post-reload classifier invalidate skipped: %s",
-                    plugin_id,
-                    exc,
-                )
         except Exception as e:
             msg = f"{type(e).__name__}: {e}"
             logger.error("Plugin '%s' reload failed: %s", plugin_id, msg)
             self._failed[plugin_id] = msg
             self._failed_at[plugin_id] = time.monotonic()
+        # One invalidation covers both removal of the old registrations and
+        # publication of the new ones, including a failed reload.
+        self._invalidate_policy_classifier_cache(plugin_id)
         self._save_state()
 
     def _unmount_plugin_ui(self, plugin_id: str) -> None:
@@ -1757,7 +1775,8 @@ class PluginManager:
             async with sem:
                 try:
                     return await asyncio.wait_for(
-                        self.unload_plugin(pid), timeout=per_plugin_timeout_s
+                        self.unload_plugin(pid, collect_garbage=False),
+                        timeout=per_plugin_timeout_s,
                     )
                 except TimeoutError:
                     logger.warning(
@@ -1775,6 +1794,7 @@ class PluginManager:
                     return False
 
         results = await asyncio.gather(*[_one(pid) for pid in plugin_ids])
+        await self._collect_plugin_garbage()
         return sum(1 for r in results if r)
 
     async def shutdown(self, *, unload_plugins: bool = True) -> None:

@@ -25,6 +25,7 @@ from ...plugins.errors import PluginErrorCode, make_error_response
 from ...plugins.installer import InstallProgress, PluginInstallError
 from ...plugins.manifest import ManifestError, parse_manifest
 from ...plugins.state import PluginState
+from ..runtime_response import runtime_operation_response
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +71,15 @@ def _require_manager(request: Request):
             detail=make_error_response(PluginErrorCode.MANAGER_UNAVAILABLE),
         )
     return pm
+
+
+def _runtime_operation_result(runtime, data: dict[str, Any], **extra: Any) -> dict[str, Any]:
+    """Report a committed plugin operation separately from runtime propagation."""
+    return runtime_operation_response(
+        runtime,
+        {"data": data, **extra},
+        ok=True,
+    )
 
 
 _SAFE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9\-_.]{0,128}$")
@@ -814,6 +824,29 @@ async def _do_install(src: str, plugins_dir: Path, progress: InstallProgress, re
     return plugin_id, hot_loaded
 
 
+def _finalize_plugin_install(
+    request: Request,
+    progress: InstallProgress,
+    plugin_id: str,
+    hot_loaded: bool,
+):
+    """Publish one canonical completion result for foreground and background installs."""
+    from openakita.runtime_config_coordinator import get_runtime_config_coordinator
+
+    runtime = get_runtime_config_coordinator(request).plugin_changed(
+        plugin_id,
+        "installed",
+    )
+    install_data = {
+        "plugin_id": plugin_id,
+        "hot_loaded": hot_loaded,
+        "update_policy": "disk-only",
+        "reload_required": not hot_loaded,
+    }
+    progress.finish(result={**install_data, "runtime": runtime.to_dict()})
+    return runtime, install_data
+
+
 @router.post("/install")
 async def install_plugin(body: InstallBody, request: Request) -> dict[str, Any]:
     plugins_dir = _plugins_dir()
@@ -828,14 +861,7 @@ async def install_plugin(body: InstallBody, request: Request) -> dict[str, Any]:
             async with _plugin_op_lock:
                 try:
                     plugin_id, hot_loaded = await _do_install(src, plugins_dir, progress, request)
-                    progress.finish(
-                        result={
-                            "plugin_id": plugin_id,
-                            "hot_loaded": hot_loaded,
-                            "update_policy": "disk-only",
-                            "reload_required": not hot_loaded,
-                        }
-                    )
+                    _finalize_plugin_install(request, progress, plugin_id, hot_loaded)
                 except Exception as e:
                     logger.exception("Background install failed for %s", src)
                     progress.finish(error=str(e))
@@ -874,25 +900,20 @@ async def install_plugin(body: InstallBody, request: Request) -> dict[str, Any]:
                 detail=make_error_response(PluginErrorCode.INTERNAL_ERROR),
             ) from e
 
-        progress.finish(
-            result={
-                "plugin_id": plugin_id,
-                "hot_loaded": hot_loaded,
-                "update_policy": "disk-only",
-                "reload_required": not hot_loaded,
-            }
+        runtime, install_data = _finalize_plugin_install(
+            request,
+            progress,
+            plugin_id,
+            hot_loaded,
         )
         installer._unregister_progress(install_id)
-        return {
-            "ok": True,
-            "data": {
-                "plugin_id": plugin_id,
-                "hot_loaded": hot_loaded,
+        return _runtime_operation_result(
+            runtime,
+            {
+                **install_data,
                 "install_id": install_id,
-                "update_policy": "disk-only",
-                "reload_required": not hot_loaded,
             },
-        }
+        )
 
 
 @router.get("/install/progress/{install_id}")
@@ -996,14 +1017,20 @@ async def uninstall_plugin(
                 state = PluginState.load(state_path)
                 state.remove_plugin(plugin_id)
                 state.save(state_path)
-            return {
-                "ok": True,
-                "data": {
+            from openakita.runtime_config_coordinator import get_runtime_config_coordinator
+
+            runtime = get_runtime_config_coordinator(request).plugin_changed(
+                plugin_id,
+                "uninstalled",
+            )
+            return _runtime_operation_result(
+                runtime,
+                {
                     "plugin_id": plugin_id,
                     "purged_data": bool(result.get("purged_data")),
                     "warnings": warnings,
                 },
-            }
+            )
 
         # Partial / total failure: keep an entry in plugin_state so the leftover
         # directory is NOT silently re-discovered & auto-loaded as a "new"
@@ -1059,7 +1086,16 @@ async def enable_plugin(plugin_id: str, request: Request) -> dict[str, Any]:
     async with _plugin_op_lock:
         pm = _require_manager(request)
         await pm.enable_plugin(plugin_id)
-        return {"ok": True, "data": {"plugin_id": plugin_id, "enabled": True}}
+        from openakita.runtime_config_coordinator import get_runtime_config_coordinator
+
+        runtime = get_runtime_config_coordinator(request).plugin_changed(
+            plugin_id,
+            "enabled",
+        )
+        return _runtime_operation_result(
+            runtime,
+            {"plugin_id": plugin_id, "enabled": True},
+        )
 
 
 @router.post("/{plugin_id}/_admin/disable")
@@ -1068,11 +1104,34 @@ async def disable_plugin(plugin_id: str, request: Request) -> dict[str, Any]:
     async with _plugin_op_lock:
         pm = _require_manager(request)
         await pm.disable_plugin(plugin_id)
-        return {"ok": True, "data": {"plugin_id": plugin_id, "enabled": False}}
+        from openakita.runtime_config_coordinator import get_runtime_config_coordinator
+
+        runtime = get_runtime_config_coordinator(request).plugin_changed(
+            plugin_id,
+            "disabled",
+        )
+        return _runtime_operation_result(
+            runtime,
+            {"plugin_id": plugin_id, "enabled": False},
+        )
 
 
-def _plugin_config_path(plugin_id: str) -> Path:
-    return _plugins_dir() / plugin_id / "config.json"
+def _plugin_config_store(plugin_id: str):
+    from openakita.plugins.config_store import PluginConfigStore
+
+    return PluginConfigStore.for_plugin(_plugins_dir(), plugin_id)
+
+
+def _read_plugin_config(plugin_id: str) -> dict[str, Any]:
+    """Read the canonical config, migrating the legacy management-API file once."""
+    try:
+        return _plugin_config_store(plugin_id).read()
+    except (OSError, ValueError) as exc:
+        logger.warning("Plugin config read failed for %s: %s", plugin_id, exc)
+        raise HTTPException(
+            status_code=500,
+            detail=make_error_response(PluginErrorCode.CONFIG_INVALID),
+        ) from exc
 
 
 @router.get("/{plugin_id}/_admin/config")
@@ -1084,18 +1143,7 @@ async def get_plugin_config(plugin_id: str) -> dict[str, Any]:
             status_code=404,
             detail=make_error_response(PluginErrorCode.NOT_FOUND),
         )
-    path = _plugin_config_path(plugin_id)
-    if not path.is_file():
-        return {"ok": True, "data": {}}
-    try:
-        config = json.loads(path.read_text(encoding="utf-8"))
-        return {"ok": True, "data": config}
-    except (json.JSONDecodeError, OSError) as e:
-        logger.warning("Plugin config read failed for %s: %s", plugin_id, e)
-        raise HTTPException(
-            status_code=500,
-            detail=make_error_response(PluginErrorCode.CONFIG_INVALID),
-        ) from e
+    return {"ok": True, "data": _read_plugin_config(plugin_id)}
 
 
 @router.put("/{plugin_id}/_admin/config")
@@ -1111,21 +1159,11 @@ async def update_plugin_config(
             status_code=404,
             detail=make_error_response(PluginErrorCode.NOT_FOUND),
         )
-    path = _plugin_config_path(plugin_id)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    current: dict[str, Any] = {}
-    if path.is_file():
-        try:
-            current = json.loads(path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError as e:
-            raise HTTPException(
-                status_code=500,
-                detail=make_error_response(PluginErrorCode.CONFIG_INVALID),
-            ) from e
-    current.update(body)
-
     schema = _read_config_schema(plugin_dir)
-    if schema is not None:
+
+    def _validate_config(current: dict[str, Any]) -> None:
+        if schema is None:
+            return
         try:
             from jsonschema import ValidationError as JsonSchemaError
             from jsonschema import validate
@@ -1144,23 +1182,24 @@ async def update_plugin_config(
         except Exception as ve:
             logger.debug("Config schema validation error: %s", ve)
 
-    path.write_text(
-        json.dumps(current, indent=2, ensure_ascii=False),
-        encoding="utf-8",
+    try:
+        current = _plugin_config_store(plugin_id).update(body, validate=_validate_config)
+    except HTTPException:
+        raise
+    except (OSError, ValueError) as exc:
+        logger.warning("Plugin config write failed for %s: %s", plugin_id, exc)
+        raise HTTPException(
+            status_code=500,
+            detail=make_error_response(PluginErrorCode.CONFIG_INVALID),
+        ) from exc
+    from openakita.runtime_config_coordinator import get_runtime_config_coordinator
+
+    runtime = await get_runtime_config_coordinator(request).apply_plugin_config(
+        plugin_id,
+        current,
+        _get_plugin_manager(request),
     )
-    pm = _get_plugin_manager(request)
-    if pm is not None:
-        hook_reg = getattr(pm, "_hook_registry", None)
-        if hook_reg is not None:
-            try:
-                await hook_reg.dispatch(
-                    "on_config_change",
-                    plugin_id=plugin_id,
-                    config=current,
-                )
-            except Exception:
-                logger.debug("on_config_change dispatch failed for '%s'", plugin_id)
-    return {"ok": True, "data": current}
+    return _runtime_operation_result(runtime, current, saved=True)
 
 
 @router.get("/{plugin_id}/_admin/readme")
@@ -1204,7 +1243,13 @@ async def grant_permissions(
     pm.approve_permissions(plugin_id, body.permissions)
     if body.reload:
         await pm.reload_plugin(plugin_id)
-    return {"ok": True, "data": {"granted": body.permissions}}
+    from openakita.runtime_config_coordinator import get_runtime_config_coordinator
+
+    runtime = get_runtime_config_coordinator(request).plugin_changed(
+        plugin_id,
+        "permissions_granted",
+    )
+    return _runtime_operation_result(runtime, {"granted": body.permissions})
 
 
 class PermissionRevokeBody(BaseModel):
@@ -1222,7 +1267,13 @@ async def revoke_permissions(
     pm.revoke_permissions(plugin_id, body.permissions)
     if body.reload:
         await pm.reload_plugin(plugin_id)
-    return {"ok": True, "data": {"revoked": body.permissions}}
+    from openakita.runtime_config_coordinator import get_runtime_config_coordinator
+
+    runtime = get_runtime_config_coordinator(request).plugin_changed(
+        plugin_id,
+        "permissions_revoked",
+    )
+    return _runtime_operation_result(runtime, {"revoked": body.permissions})
 
 
 @router.get("/{plugin_id}/_admin/permissions")
@@ -1400,9 +1451,15 @@ async def reload_plugin(plugin_id: str, request: Request) -> dict[str, Any]:
                 new_source=pending_source,
             )
             _cleanup_pending_updates(plugin_id)
-        return {
-            "ok": True,
-            "data": {
+        from openakita.runtime_config_coordinator import get_runtime_config_coordinator
+
+        runtime = get_runtime_config_coordinator(request).plugin_changed(
+            plugin_id,
+            "reloaded",
+        )
+        return _runtime_operation_result(
+            runtime,
+            {
                 "plugin_id": plugin_id,
                 "resynced": resynced,
                 "resync_mode": resync_info if resynced else "",
@@ -1410,7 +1467,7 @@ async def reload_plugin(plugin_id: str, request: Request) -> dict[str, Any]:
                 "pending_revision": pending_info if applied_pending else "",
                 "rolled_back": False,
             },
-        }
+        )
 
 
 @router.get("/{plugin_id}/_admin/logs")

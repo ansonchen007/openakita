@@ -303,3 +303,33 @@ class TestRuntimeConfigConstraints:
         assert "✅" in result
         assert monitor.timeout_seconds == 0
         assert monitor.hard_timeout_seconds == 0
+
+
+def test_config_handler_rolls_back_env_when_runtime_state_write_fails(tmp_path, monkeypatch):
+    from openakita.config import runtime_state, settings
+    from openakita.tools.handlers.config import ConfigHandler
+    from openakita.utils import atomic_io
+
+    env_path = tmp_path / ".env"
+    original = "ANTHROPIC_API_KEY=old-key\n"
+    env_path.write_text(original, encoding="utf-8")
+    monkeypatch.setattr(settings, "project_root", tmp_path)
+    monkeypatch.setattr(settings, "anthropic_api_key", "old-key")
+    monkeypatch.setattr(settings, "persona_name", "default")
+    monkeypatch.setattr(runtime_state, "_state_file", tmp_path / "data" / "runtime_state.json")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "old-key")
+    monkeypatch.setattr(
+        atomic_io,
+        "atomic_json_write",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("disk full")),
+    )
+
+    result = ConfigHandler(agent=None)._set_config(
+        {"updates": {"ANTHROPIC_API_KEY": "new-key", "PERSONA_NAME": "jarvis"}}
+    )
+
+    assert result.startswith("❌ 配置保存失败")
+    assert env_path.read_text(encoding="utf-8") == original
+    assert os.environ["ANTHROPIC_API_KEY"] == "old-key"
+    assert settings.anthropic_api_key == "old-key"
+    assert settings.persona_name == "default"

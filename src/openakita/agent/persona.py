@@ -545,3 +545,35 @@ class PersonaManager:
         """获取指定维度的询问问题"""
         dim_info = PERSONA_DIMENSIONS.get(dimension)
         return dim_info["question"] if dim_info else None
+
+
+def apply_persona_runtime(
+    agent: Any,
+    preset_name: str,
+    *,
+    reason: str = "persona config changed",
+) -> bool:
+    """Apply a persisted persona selection to one live Agent.
+
+    Returns ``False`` when no Agent is initialized yet. A missing preset or
+    runtime refresh failure is raised so each caller can report that the
+    durable configuration will take effect on the next initialization.
+    """
+    actual_agent = getattr(agent, "_local_agent", agent)
+    if actual_agent is None:
+        return False
+
+    persona_manager = getattr(actual_agent, "persona_manager", None)
+    if persona_manager is not None and not persona_manager.switch_preset(preset_name):
+        raise ValueError(f"Persona preset not found: {preset_name}")
+
+    invalidate_prompt = getattr(actual_agent, "_invalidate_system_prompt_cache", None)
+    if callable(invalidate_prompt):
+        invalidate_prompt(reason)
+
+    context = getattr(actual_agent, "_context", None)
+    build_prompt = getattr(actual_agent, "_build_system_prompt", None)
+    if context is not None and getattr(context, "system", None) and callable(build_prompt):
+        context.system = build_prompt()
+
+    return True

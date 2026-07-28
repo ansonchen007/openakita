@@ -17,6 +17,7 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
+from openakita.api.runtime_response import runtime_operation_response
 from openakita.tools.mcp_catalog import MCPConfigField
 from openakita.tools.mcp_workspace import (
     add_server_to_workspace,
@@ -224,7 +225,9 @@ async def connect_mcp_server(request: Request, body: MCPConnectRequest):
     if body.server_name in client.list_connected():
         tools = client.list_tools(body.server_name)
         return {
-            "status": "already_connected",
+            "status": "ok",
+            "operation_status": "ok",
+            "connection_status": "already_connected",
             "server": body.server_name,
             "tools": [{"name": t.name, "description": t.description} for t in tools],
         }
@@ -262,12 +265,21 @@ async def connect_mcp_server(request: Request, body: MCPConnectRequest):
     if result.success:
         _sync_tools_to_catalog(request, body.server_name, client)
         tools = client.list_tools(body.server_name)
-        return {
-            "status": "connected",
-            "server": body.server_name,
-            "tools": [{"name": t.name, "description": t.description} for t in tools],
-            "tool_count": result.tool_count,
-        }
+        from openakita.runtime_config_coordinator import get_runtime_config_coordinator
+
+        runtime = get_runtime_config_coordinator(request).mcp_changed(
+            body.server_name,
+            "connected",
+        )
+        return runtime_operation_response(
+            runtime,
+            {
+                "connection_status": "connected",
+                "server": body.server_name,
+                "tools": [{"name": t.name, "description": t.description} for t in tools],
+                "tool_count": result.tool_count,
+            },
+        )
     else:
         return {
             "status": "failed",
@@ -284,10 +296,24 @@ async def disconnect_mcp_server(request: Request, body: MCPConnectRequest):
         return {"error": "Agent not initialized"}
 
     if body.server_name not in client.list_connected():
-        return {"status": "not_connected", "server": body.server_name}
+        return {
+            "status": "ok",
+            "operation_status": "ok",
+            "connection_status": "not_connected",
+            "server": body.server_name,
+        }
 
     await client.disconnect(body.server_name)
-    return {"status": "disconnected", "server": body.server_name}
+    from openakita.runtime_config_coordinator import get_runtime_config_coordinator
+
+    runtime = get_runtime_config_coordinator(request).mcp_changed(
+        body.server_name,
+        "disconnected",
+    )
+    return runtime_operation_response(
+        runtime,
+        {"connection_status": "disconnected", "server": body.server_name},
+    )
 
 
 @router.get("/api/mcp/tools")
@@ -363,6 +389,14 @@ async def add_mcp_server(request: Request, body: MCPServerAddRequest):
         client=client,
         catalog=catalog,
     )
+    if result.get("status") == "ok":
+        from openakita.runtime_config_coordinator import get_runtime_config_coordinator
+
+        runtime = get_runtime_config_coordinator(request).mcp_changed(
+            body.name.strip(),
+            "added",
+        )
+        return runtime_operation_response(runtime, result)
 
     return result
 
@@ -381,29 +415,44 @@ async def toggle_mcp_server(request: Request, server_name: str, body: MCPToggleR
     if not server_info:
         raise HTTPException(404, f"MCP server '{server_name}' not found")
 
-    server_info.enabled = body.enabled
-    catalog.invalidate_cache()
-
     if server_info.config_dir:
         from openakita.utils.atomic_io import atomic_json_write, read_json_safe
 
         metadata_path = Path(server_info.config_dir) / "SERVER_METADATA.json"
-        if metadata_path.exists():
-            try:
-                metadata = read_json_safe(metadata_path) or {}
-                metadata["enabled"] = body.enabled
-                atomic_json_write(metadata_path, metadata)
-            except Exception as e:
-                logger.warning("Failed to persist enabled state for %s: %s", server_name, e)
+        try:
+            metadata = read_json_safe(metadata_path) or {}
+            metadata["enabled"] = body.enabled
+            atomic_json_write(metadata_path, metadata)
+        except Exception as e:
+            logger.exception("Failed to persist enabled state for %s", server_name)
+            return {
+                "status": "error",
+                "message": f"Failed to persist enabled state: {e}",
+            }
+    else:
+        return {
+            "status": "error",
+            "message": f"MCP server '{server_name}' has no writable configuration directory",
+        }
 
-    if not body.enabled and client.is_connected(server_name):
+    server_info.enabled = body.enabled
+    catalog.invalidate_cache()
+
+    disconnected = not body.enabled and client.is_connected(server_name)
+    if disconnected:
         await client.disconnect(server_name)
 
-    return {
-        "status": "ok",
-        "server": server_name,
-        "enabled": body.enabled,
-    }
+    from openakita.runtime_config_coordinator import get_runtime_config_coordinator
+
+    runtime = get_runtime_config_coordinator(request).mcp_changed(
+        server_name,
+        "enabled" if body.enabled else "disabled",
+    )
+
+    return runtime_operation_response(
+        runtime,
+        {"server": server_name, "enabled": body.enabled},
+    )
 
 
 @router.delete("/api/mcp/servers/{server_name}")
@@ -423,5 +472,13 @@ async def remove_mcp_server(request: Request, server_name: str):
         client=client,
         catalog=catalog,
     )
+    if result.get("status") == "ok":
+        from openakita.runtime_config_coordinator import get_runtime_config_coordinator
+
+        runtime = get_runtime_config_coordinator(request).mcp_changed(
+            server_name,
+            "removed",
+        )
+        return runtime_operation_response(runtime, result)
 
     return result

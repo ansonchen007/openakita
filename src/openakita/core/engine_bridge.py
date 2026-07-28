@@ -24,13 +24,14 @@ from __future__ import annotations
 import asyncio
 import logging
 import queue as stdlib_queue
-from collections.abc import AsyncIterator, Coroutine
-from typing import Any
+from collections.abc import AsyncIterator, Callable, Coroutine
+from typing import Any, TypeVar
 
 logger = logging.getLogger(__name__)
 
 _engine_loop: asyncio.AbstractEventLoop | None = None
 _api_loop: asyncio.AbstractEventLoop | None = None
+_T = TypeVar("_T")
 
 
 def set_engine_loop(loop: asyncio.AbstractEventLoop) -> None:
@@ -81,6 +82,23 @@ async def to_engine(coro: Coroutine[Any, Any, Any]) -> Any:
         return await coro
     future = asyncio.run_coroutine_threadsafe(coro, _engine_loop)
     return await asyncio.wrap_future(future)
+
+
+def call_in_engine(callback: Callable[[], _T]) -> _T:
+    """Run a synchronous callable in the engine loop.
+
+    Configuration endpoints expose several synchronous runtime operations. In
+    dual-loop mode those operations must still execute in the engine thread,
+    because Agent pools and Gateway-owned objects are not thread-safe.
+    """
+    if _engine_loop is None or _current_loop() is _engine_loop:
+        return callback()
+
+    async def _invoke() -> _T:
+        return callback()
+
+    future = asyncio.run_coroutine_threadsafe(_invoke(), _engine_loop)
+    return future.result()
 
 
 async def to_api(coro: Coroutine[Any, Any, Any]) -> Any:

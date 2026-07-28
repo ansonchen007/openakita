@@ -24,7 +24,6 @@ type IMConfigViewProps = {
   currentWorkspaceId: string | null;
   venvDir?: string;
   apiBaseUrl?: string;
-  onRequestRestart?: () => void;
   wizardMode?: boolean;
 };
 
@@ -43,7 +42,7 @@ const PLATFORMS = [
 export function IMConfigView(props: IMConfigViewProps) {
   const {
     envDraft, setEnvDraft, venvDir = "",
-    apiBaseUrl, onRequestRestart, wizardMode = false,
+    apiBaseUrl, wizardMode = false,
   } = props;
   const { t } = useTranslation();
   const [showCmdRef, setShowCmdRef] = useState(false);
@@ -170,7 +169,6 @@ export function IMConfigView(props: IMConfigViewProps) {
       {!wizardMode && (
         <BotConfigTab
           apiBase={apiBaseUrl ?? DEFAULT_API}
-          onRequestRestart={onRequestRestart}
           venvDir={venvDir}
           apiBaseUrl={apiBaseUrl}
         />

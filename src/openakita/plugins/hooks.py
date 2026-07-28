@@ -38,7 +38,13 @@ HOOK_NAMES = frozenset(
 )
 
 DEFAULT_HOOK_TIMEOUT = 5.0
-_SKIP = object()  # sentinel for skipped/failed callbacks
+_SKIP = object()  # sentinel for skipped callbacks
+
+
+class _HookFailure:
+    def __init__(self, plugin_id: str, reason: str) -> None:
+        self.plugin_id = plugin_id
+        self.reason = reason
 
 
 def _wrap_callback(fn: Callable, plugin_id: str) -> Callable:
@@ -122,7 +128,14 @@ class HookRegistry:
             removed += before - len(self._hooks[hook_name])
         return removed
 
-    async def dispatch(self, hook_name: str, **kwargs) -> list[Any]:
+    async def dispatch(
+        self,
+        hook_name: str,
+        *,
+        fail_on_error: bool = False,
+        target_plugin_id: str | None = None,
+        **kwargs,
+    ) -> list[Any]:
         """Dispatch a hook to all registered callbacks in parallel.
 
         Each callback is independently wrapped with timeout and exception
@@ -131,6 +144,12 @@ class HookRegistry:
         Snapshot the callback list to avoid concurrent-modification issues.
         """
         callbacks = list(self._hooks.get(hook_name, []))
+        if target_plugin_id is not None:
+            callbacks = [
+                callback
+                for callback in callbacks
+                if getattr(callback, "__plugin_id__", "") == target_plugin_id
+            ]
         if not callbacks:
             return []
 
@@ -155,7 +174,7 @@ class HookRegistry:
                         e,
                     )
                     self._error_tracker.record_error(plugin_id, f"hook:{hook_name}:match", str(e))
-                    return _SKIP
+                    return _HookFailure(plugin_id, f"match predicate failed: {e}")
 
             try:
                 if asyncio.iscoroutinefunction(callback):
@@ -175,7 +194,7 @@ class HookRegistry:
                 self._error_tracker.record_error(
                     plugin_id, f"hook:{hook_name}", "timeout", kind="timeout"
                 )
-                return _SKIP
+                return _HookFailure(plugin_id, "timeout")
             except BaseException as e:
                 logger.error(
                     "Hook '%s' callback from plugin '%s' raised %s: %s",
@@ -185,14 +204,18 @@ class HookRegistry:
                     e,
                 )
                 self._error_tracker.record_error(plugin_id, f"hook:{hook_name}", str(e))
-                return _SKIP
+                return _HookFailure(plugin_id, str(e))
             else:
                 if plugin_id and plugin_id != "unknown":
                     self._error_tracker.record_success(plugin_id)
                 return result
 
         raw = await asyncio.gather(*(_run_one(cb) for cb in callbacks))
-        return [r for r in raw if r is not _SKIP]
+        failures = [result for result in raw if isinstance(result, _HookFailure)]
+        if fail_on_error and failures:
+            summary = "; ".join(f"{item.plugin_id}: {item.reason}" for item in failures)
+            raise RuntimeError(f"Hook '{hook_name}' failed: {summary}")
+        return [r for r in raw if r is not _SKIP and not isinstance(r, _HookFailure)]
 
     def dispatch_sync(self, hook_name: str, **kwargs) -> list[Any]:
         """Synchronous dispatch — runs each callback serially in the current thread.

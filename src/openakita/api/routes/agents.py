@@ -15,6 +15,7 @@ from openakita.api.agent_events import (
     emit_agent_categories_changed,
     emit_agent_profiles_changed,
 )
+from openakita.api.runtime_response import runtime_operation_response
 from openakita.memory.json_utils import coerce_text
 
 logger = logging.getLogger(__name__)
@@ -22,6 +23,7 @@ router = APIRouter()
 
 _deleting_bot_ids: set[str] = set()
 _deleting_lock = asyncio.Lock()
+_bot_apply_tasks: set[asyncio.Task[None]] = set()
 
 AGENT_ICON_MAX_SIZE = 4 * 1024 * 1024
 AGENT_ICON_MAX_FIELD_LENGTH = 1000
@@ -81,33 +83,149 @@ def _invalidate_bot_agent_sessions(bot_cfg: dict) -> None:
         logger.warning(f"[Agents API] Failed to invalidate bot agent sessions: {e}")
 
 
-def _invalidate_profile_agents(request: Request, profile_id: str) -> None:
-    """Drop pooled Agent instances for *profile_id* so edits apply next turn."""
-    for pool_attr in ("agent_pool", "orchestrator"):
-        obj = getattr(request.app.state, pool_attr, None)
-        if obj is None:
-            continue
-        pool = getattr(obj, "_pool", obj)
-        if hasattr(pool, "invalidate_profile"):
-            try:
-                pool.invalidate_profile(profile_id)
-            except Exception as e:
-                logger.warning(
-                    f"[Agents API] Failed to invalidate profile pool "
-                    f"({pool_attr}, profile={profile_id}): {e}"
-                )
-
-
-def _invalidate_profile_runtime(request: Request, profile_id: str, reason: str) -> None:
-    """Invalidate prompt and pooled runtime state after profile-affecting edits."""
+def _persist_im_bots(settings, runtime_state, bots: list[dict]) -> None:
+    """Persist IM bots without leaving settings ahead of durable state."""
     try:
-        from openakita.prompt.builder import clear_prompt_section_cache
-
-        clear_prompt_section_cache()
+        runtime_state.save_updates(im_bots=bots)
     except Exception as exc:
-        logger.warning(f"[Agents API] Failed to clear prompt cache ({reason}): {exc}")
+        logger.exception("[Agents API] Failed to persist IM bot configuration")
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "im_config_save_failed",
+                "message": "IM configuration could not be saved",
+            },
+        ) from exc
 
-    _invalidate_profile_agents(request, profile_id)
+
+async def _apply_persisted_bot_change(
+    request: Request,
+    *,
+    bots: list[dict],
+    index: int,
+    bot: dict,
+    old_bot: dict,
+    operation: str,
+    restore_old_runtime: bool,
+):
+    """Persist one bot mutation and roll it back when runtime startup fails."""
+    from openakita.agents.profile import get_profile_store
+    from openakita.config import runtime_state, settings
+    from openakita.main import get_im_bot_runtime_error
+    from openakita.runtime_config_coordinator import (
+        get_runtime_config_coordinator,
+        profile_reference_change_lock,
+    )
+
+    with profile_reference_change_lock():
+        profile_id = str(bot.get("agent_profile_id") or "default")
+        if get_profile_store().get(profile_id) is None:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Agent profile '{profile_id}' does not exist",
+            )
+        _persist_im_bots(settings, runtime_state, bots)
+
+    coordinator = get_runtime_config_coordinator(request)
+    runtime_operation = operation if bot.get("enabled", True) else "disable"
+    runtime = await coordinator.apply_im_bot(bot, runtime_operation)
+    if not bot.get("enabled", True) or (not runtime.failed and not runtime.warnings):
+        return runtime
+
+    runtime_error = get_im_bot_runtime_error(f"{bot.get('type', '')}:{bot.get('id', '')}")
+    rolled_back_bots = list(bots)
+    rolled_back_bots[index] = old_bot
+    with profile_reference_change_lock():
+        _persist_im_bots(settings, runtime_state, rolled_back_bots)
+    if restore_old_runtime and old_bot.get("enabled", True):
+        await coordinator.apply_im_bot(old_bot, "rollback")
+
+    error = runtime_error or runtime.failed.get(
+        "im_gateway", "The IM runtime did not accept the bot"
+    )
+    raise HTTPException(status_code=502, detail=f"Failed to start bot: {error}")
+
+
+def _invalidate_profile_runtime(request: Request, profile_id: str, reason: str):
+    """Invalidate prompt and pooled runtime state after profile-affecting edits."""
+    from openakita.runtime_config_coordinator import get_runtime_config_coordinator
+
+    coordinator = get_runtime_config_coordinator(request)
+    result = coordinator.clear_prompt_cache()
+    result.merge(
+        coordinator.invalidate_agent_pools(
+            reason,
+            profile_id=profile_id,
+        )
+    )
+    if result.failed:
+        logger.warning("[Agents API] Profile runtime invalidation failed: %s", result.failed)
+    return result
+
+
+def _profile_references(request: Request, profile_id: str) -> list[dict[str, str]]:
+    """Return persisted runtime owners that still refer to a profile."""
+    from openakita.config import settings
+
+    references: list[dict[str, str]] = []
+    for bot in settings.im_bots:
+        if not isinstance(bot, dict) or bot.get("agent_profile_id", "default") != profile_id:
+            continue
+        references.append(
+            {
+                "kind": "im_bot",
+                "id": str(bot.get("id", "")),
+                "name": str(bot.get("name") or bot.get("id") or ""),
+            }
+        )
+
+    manager = getattr(request.app.state, "org_manager", None)
+    can_scan_orgs = manager is not None and (
+        hasattr(manager, "list_organizations_strict") or hasattr(manager, "list_orgs")
+    )
+    if not can_scan_orgs:
+        if references:
+            return references
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": "profile_reference_check_unavailable",
+                "message": "Organization references cannot be verified while the manager is unavailable",
+            },
+        )
+    try:
+        if hasattr(manager, "list_organizations_strict"):
+            organizations = [
+                (str(getattr(org, "id", "")), org) for org in manager.list_organizations_strict()
+            ]
+        else:
+            organizations = [
+                (
+                    str(summary.get("id", "")),
+                    manager.get(str(summary.get("id", ""))),
+                )
+                for summary in manager.list_orgs(include_archived=True)
+            ]
+        for org_id, org in organizations:
+            for node in getattr(org, "nodes", []) if org is not None else []:
+                if getattr(node, "agent_profile_id", None) == profile_id:
+                    references.append(
+                        {
+                            "kind": "org_node",
+                            "id": f"{org_id}:{getattr(node, 'id', '')}",
+                            "name": str(getattr(node, "name", "") or getattr(node, "id", "")),
+                        }
+                    )
+    except Exception as exc:
+        logger.exception("[Agents API] Failed to inspect organization profile references")
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "profile_reference_check_failed",
+                "message": "Could not verify whether the profile is still in use",
+            },
+        ) from exc
+    return references
 
 
 def _detect_agent_icon_extension(data: bytes) -> str | None:
@@ -306,20 +424,70 @@ def _validate_bot_credentials(bot_type: str, credentials: dict) -> None:
         )
 
 
-def _runtime_bot_view(bot: dict, detail: dict | None) -> dict:
-    from openakita.main import get_im_bot_runtime_error
+def _runtime_bot_view(bot: dict, detail: dict | None, gateway=None) -> dict:
+    from openakita.channels.runtime_status import resolve_bot_runtime_state
 
     result = _mask_bot_credentials(bot)
     channel = f"{bot.get('type', '')}:{bot.get('id', '')}"
+    runtime = resolve_bot_runtime_state(channel, gateway)
+    runtime_status = str(runtime.get("status") or "unknown")
     if detail:
+        if runtime_status == "unknown":
+            runtime_status = str(detail.get("runtime_status") or "unknown")
         result.update(
             configured=detail.get("configured", False),
             missing_credentials=detail.get("missing", []),
-            runtime_seen=detail.get("runtime_seen", False),
-            runtime_status=detail.get("runtime_status", "unknown"),
+            runtime_seen=detail.get("runtime_seen", False) or runtime_status != "unknown",
         )
-    result["runtime_error"] = get_im_bot_runtime_error(channel)
+    result["runtime_status"] = runtime_status
+    result["runtime_error"] = runtime.get("error")
+    result["runtime_progress"] = runtime.get("progress")
     return result
+
+
+def _schedule_bot_apply(bot: dict, coordinator=None) -> None:
+    """Start one persisted bot in the background and expose progress via runtime state."""
+    from openakita.main import (
+        _bot_channel_name,
+        _set_im_bot_runtime_state,
+        apply_im_bot,
+        get_im_bot_runtime_error,
+    )
+
+    bot_snapshot = dict(bot)
+    channel_name = _bot_channel_name(bot_snapshot)
+    _set_im_bot_runtime_state(channel_name, "starting")
+
+    async def _apply() -> None:
+        if coordinator is None:
+            applied = await apply_im_bot(bot_snapshot)
+        else:
+            runtime = await coordinator.apply_im_bot(bot_snapshot, "create")
+            applied = not runtime.failed and not runtime.warnings
+        if not applied and not get_im_bot_runtime_error(channel_name):
+            _set_im_bot_runtime_state(
+                channel_name,
+                "error",
+                "The IM runtime is not available to start this bot",
+            )
+
+    task = asyncio.create_task(_apply(), name=f"apply-im-bot:{channel_name}")
+    _bot_apply_tasks.add(task)
+
+    def _finish(done: asyncio.Task[None]) -> None:
+        _bot_apply_tasks.discard(done)
+        if done.cancelled():
+            return
+        error = done.exception()
+        if error is not None:
+            _set_im_bot_runtime_state(channel_name, "error", str(error))
+            logger.error(
+                "[Agents API] Background bot startup failed: %s",
+                channel_name,
+                exc_info=(type(error), error, error.__traceback__),
+            )
+
+    task.add_done_callback(_finish)
 
 
 # ─── Bot CRUD routes ─────────────────────────────────────────────────────
@@ -332,7 +500,8 @@ async def list_bots():
     from openakita.config import settings
     from openakita.main import get_message_gateway
 
-    status = collect_effective_im_status(settings, get_message_gateway())
+    gateway = get_message_gateway()
+    status = collect_effective_im_status(settings, gateway)
     details = {
         detail.get("id"): detail
         for detail in status["details"]
@@ -340,7 +509,7 @@ async def list_bots():
     }
     return {
         "bots": [
-            _runtime_bot_view(bot, details.get(bot.get("id")))
+            _runtime_bot_view(bot, details.get(bot.get("id")), gateway)
             for bot in settings.im_bots
             if isinstance(bot, dict)
         ]
@@ -348,8 +517,8 @@ async def list_bots():
 
 
 @router.post("/api/agents/bots")
-async def create_bot(body: BotCreateRequest):
-    """Add a new bot. Validates id uniqueness and type."""
+async def create_bot(body: BotCreateRequest, request: Request):
+    """Persist a new bot and accept its runtime startup as background work."""
     from openakita.config import runtime_state, settings
 
     if body.id.strip() == "":
@@ -364,41 +533,43 @@ async def create_bot(body: BotCreateRequest):
     if body.enabled:
         _validate_bot_credentials(body.type, body.credentials)
 
-    existing_ids = {b.get("id") for b in settings.im_bots if isinstance(b, dict)}
-    if body.id in existing_ids:
-        raise HTTPException(status_code=400, detail=f"bot id '{body.id}' already exists")
+    from openakita.agents.profile import get_profile_store
+    from openakita.runtime_config_coordinator import profile_reference_change_lock
 
-    bot = {
-        "id": body.id,
-        "type": body.type,
-        "name": body.name,
-        "agent_profile_id": body.agent_profile_id,
-        "enabled": body.enabled,
-        "credentials": body.credentials,
-    }
-    previous_bots = list(settings.im_bots)
-    settings.im_bots = previous_bots + [bot]
-    runtime_state.save()
+    with profile_reference_change_lock():
+        if get_profile_store().get(body.agent_profile_id) is None:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Agent profile '{body.agent_profile_id}' does not exist",
+            )
+        existing_ids = {b.get("id") for b in settings.im_bots if isinstance(b, dict)}
+        if body.id in existing_ids:
+            raise HTTPException(status_code=400, detail=f"bot id '{body.id}' already exists")
+
+        bot = {
+            "id": body.id,
+            "type": body.type,
+            "name": body.name,
+            "agent_profile_id": body.agent_profile_id,
+            "enabled": body.enabled,
+            "credentials": body.credentials,
+        }
+        _persist_im_bots(settings, runtime_state, list(settings.im_bots) + [bot])
 
     if bot.get("enabled", True):
-        from openakita.main import apply_im_bot, get_im_bot_runtime_error
+        from openakita.runtime_config_coordinator import get_runtime_config_coordinator
 
-        applied = await apply_im_bot(bot)
-        runtime_error = get_im_bot_runtime_error(f"{body.type}:{body.id}")
-        if not applied and runtime_error:
-            settings.im_bots = previous_bots
-            runtime_state.save()
-            raise HTTPException(status_code=502, detail=f"Failed to start bot: {runtime_error}")
+        _schedule_bot_apply(bot, get_runtime_config_coordinator(request))
 
     logger.info(f"[Agents API] Created bot: {body.id}")
 
-    return {"status": "ok", "bot": _mask_bot_credentials(bot)}
+    return {"status": "accepted", "bot": _mask_bot_credentials(bot)}
 
 
 @router.put("/api/agents/bots/{bot_id}")
-async def update_bot(bot_id: str, body: BotUpdateRequest):
+async def update_bot(bot_id: str, body: BotUpdateRequest, request: Request):
     """Update an existing bot. Partial update (only provided fields are changed)."""
-    from openakita.config import runtime_state, settings
+    from openakita.config import settings
 
     bots = list(settings.im_bots)
     idx = next(
@@ -432,34 +603,26 @@ async def update_bot(bot_id: str, body: BotUpdateRequest):
 
     old_bot = dict(bots[idx])
     bots[idx] = bot
-    settings.im_bots = bots
-    runtime_state.save()
+    runtime = await _apply_persisted_bot_change(
+        request,
+        bots=bots,
+        index=idx,
+        bot=bot,
+        old_bot=old_bot,
+        operation="update",
+        restore_old_runtime=True,
+    )
     logger.info(f"[Agents API] Updated bot: {bot_id}")
 
     new_agent_profile = bot.get("agent_profile_id", "default")
     if new_agent_profile != old_agent_profile:
         _invalidate_bot_agent_sessions(bot)
 
-    from openakita.main import apply_im_bot, get_im_bot_runtime_error, remove_im_bot
-
-    if bot.get("enabled", True):
-        applied = await apply_im_bot(bot)
-        runtime_error = get_im_bot_runtime_error(f"{bot.get('type', '')}:{bot_id}")
-        if not applied and runtime_error:
-            bots[idx] = old_bot
-            settings.im_bots = bots
-            runtime_state.save()
-            if old_bot.get("enabled", True):
-                await apply_im_bot(old_bot)
-            raise HTTPException(status_code=502, detail=f"Failed to start bot: {runtime_error}")
-    else:
-        await remove_im_bot(bot)
-
-    return {"status": "ok", "bot": _mask_bot_credentials(bot)}
+    return runtime_operation_response(runtime, {"bot": _mask_bot_credentials(bot)})
 
 
 @router.delete("/api/agents/bots/{bot_id}")
-async def delete_bot(bot_id: str):
+async def delete_bot(bot_id: str, request: Request):
     """Remove a bot (idempotent & mutex-protected)."""
     async with _deleting_lock:
         if bot_id in _deleting_bot_ids:
@@ -475,14 +638,20 @@ async def delete_bot(bot_id: str):
         if len(new_bots) == len(bots):
             return {"status": "ok", "detail": "bot already removed"}
 
-        settings.im_bots = new_bots
-        runtime_state.save()
+        from openakita.runtime_config_coordinator import profile_reference_change_lock
+
+        with profile_reference_change_lock():
+            _persist_im_bots(settings, runtime_state, new_bots)
         logger.info(f"[Agents API] Deleted bot: {bot_id}")
 
         if deleted:
-            from openakita.main import _bot_channel_name, get_message_gateway, remove_im_bot
+            from openakita.main import _bot_channel_name, get_message_gateway
+            from openakita.runtime_config_coordinator import get_runtime_config_coordinator
 
-            await remove_im_bot(deleted[0])
+            runtime = await get_runtime_config_coordinator(request).apply_im_bot(
+                deleted[0],
+                "delete",
+            )
 
             channel_name = _bot_channel_name(deleted[0])
             gw = get_message_gateway()
@@ -493,16 +662,18 @@ async def delete_bot(bot_id: str):
                         f"[Agents API] Purged {purged} sessions for deleted bot: {channel_name}"
                     )
 
-        return {"status": "ok"}
+        if deleted:
+            return runtime_operation_response(runtime)
+        return {"status": "ok", "detail": "bot already removed"}
     finally:
         async with _deleting_lock:
             _deleting_bot_ids.discard(bot_id)
 
 
 @router.post("/api/agents/bots/{bot_id}/toggle")
-async def toggle_bot(bot_id: str, body: BotToggleRequest):
+async def toggle_bot(bot_id: str, body: BotToggleRequest, request: Request):
     """Enable or disable a bot."""
-    from openakita.config import runtime_state, settings
+    from openakita.config import settings
 
     bots = list(settings.im_bots)
     idx = next(
@@ -517,24 +688,18 @@ async def toggle_bot(bot_id: str, body: BotToggleRequest):
     old_bot = dict(bot)
     bot["enabled"] = body.enabled
     bots[idx] = bot
-    settings.im_bots = bots
-    runtime_state.save()
+    runtime = await _apply_persisted_bot_change(
+        request,
+        bots=bots,
+        index=idx,
+        bot=bot,
+        old_bot=old_bot,
+        operation="enable",
+        restore_old_runtime=False,
+    )
     logger.info(f"[Agents API] Toggled bot {bot_id}: enabled={body.enabled}")
 
-    from openakita.main import apply_im_bot, get_im_bot_runtime_error, remove_im_bot
-
-    if body.enabled:
-        applied = await apply_im_bot(bot)
-        runtime_error = get_im_bot_runtime_error(f"{bot.get('type', '')}:{bot_id}")
-        if not applied and runtime_error:
-            bots[idx] = old_bot
-            settings.im_bots = bots
-            runtime_state.save()
-            raise HTTPException(status_code=502, detail=f"Failed to start bot: {runtime_error}")
-    else:
-        await remove_im_bot(bot)
-
-    return {"status": "ok", "bot": _mask_bot_credentials(bot)}
+    return runtime_operation_response(runtime, {"bot": _mask_bot_credentials(bot)})
 
 
 # ─── Agent category routes ───────────────────────────────────────────────
@@ -728,32 +893,52 @@ async def update_agent_profile(profile_id: str, body: ProfileUpdateRequest, requ
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e))
 
-    _invalidate_profile_agents(request, profile_id)
+    runtime = _invalidate_profile_runtime(request, profile_id, f"profile updated:{profile_id}")
     logger.info(f"[Agents API] Updated profile: {profile_id}")
     emit_agent_profiles_changed("updated", profile_id=profile_id)
     emit_agent_categories_changed("profile_updated", profile_id=profile_id)
-    return {"status": "ok", "profile": updated.to_dict()}
+    return runtime_operation_response(runtime, {"profile": updated.to_dict()})
 
 
 @router.delete("/api/agents/profiles/{profile_id}")
-async def delete_agent_profile(profile_id: str):
+async def delete_agent_profile(profile_id: str, request: Request):
     """Delete a custom agent profile."""
     from openakita.agents.profile import get_profile_store
+    from openakita.runtime_config_coordinator import profile_reference_change_lock
 
     store = get_profile_store()
+    with profile_reference_change_lock():
+        existing = store.get(profile_id)
+        if existing is None:
+            raise HTTPException(status_code=404, detail=f"Profile '{profile_id}' not found")
+        if existing.is_system:
+            raise HTTPException(
+                status_code=403, detail=f"Cannot delete SYSTEM profile: {profile_id}"
+            )
+        references = _profile_references(request, profile_id)
+        if references:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error": "profile_in_use",
+                    "message": "Profile is still referenced and cannot be deleted",
+                    "references": references,
+                },
+            )
 
-    try:
-        deleted = store.delete(profile_id)
-    except PermissionError as e:
-        raise HTTPException(status_code=403, detail=str(e))
+        try:
+            deleted = store.delete(profile_id)
+        except PermissionError as e:
+            raise HTTPException(status_code=403, detail=str(e))
 
-    if not deleted:
-        raise HTTPException(status_code=404, detail=f"Profile '{profile_id}' not found")
+        if not deleted:
+            raise HTTPException(status_code=404, detail=f"Profile '{profile_id}' not found")
 
+    runtime = _invalidate_profile_runtime(request, profile_id, f"profile deleted:{profile_id}")
     logger.info(f"[Agents API] Deleted profile: {profile_id}")
     emit_agent_profiles_changed("deleted", profile_id=profile_id)
     emit_agent_categories_changed("profile_deleted", profile_id=profile_id)
-    return {"status": "ok"}
+    return runtime_operation_response(runtime)
 
 
 @router.post("/api/agents/profiles/{profile_id}/reset")
@@ -782,12 +967,15 @@ async def reset_agent_profile(profile_id: str, request: Request):
         store._cache[profile_id] = profile
         store._persist(profile)
 
-    _invalidate_profile_agents(request, profile_id)
+    runtime = _invalidate_profile_runtime(request, profile_id, f"profile reset:{profile_id}")
     logger.info(f"[Agents API] Reset profile to defaults: {profile_id}")
     result = store.get(profile_id)
     emit_agent_profiles_changed("reset", profile_id=profile_id)
     emit_agent_categories_changed("profile_reset", profile_id=profile_id)
-    return {"status": "ok", "profile": result.to_dict() if result else {}}
+    return runtime_operation_response(
+        runtime,
+        {"profile": result.to_dict() if result else {}},
+    )
 
 
 @router.patch("/api/agents/profiles/{profile_id}/visibility")
@@ -833,8 +1021,8 @@ async def init_profile_identity(profile_id: str, request: Request):
     resolver = ProfileIdentityResolver(identity_dir, settings.identity_path)
     resolver.ensure_independent_files()
 
-    _invalidate_profile_runtime(request, profile_id, "profile identity init")
-    return {"status": "ok", "identity_dir": str(identity_dir)}
+    runtime = _invalidate_profile_runtime(request, profile_id, "profile identity init")
+    return runtime_operation_response(runtime, {"identity_dir": str(identity_dir)})
 
 
 @router.get("/api/agents/profiles/{profile_id}/identity/{filename}")
@@ -892,9 +1080,9 @@ async def write_profile_identity_file(
     fp = identity_dir / filename
     fp.write_text(body.content, encoding="utf-8")
 
-    _invalidate_profile_runtime(request, profile_id, f"profile identity {filename} write")
+    runtime = _invalidate_profile_runtime(request, profile_id, f"profile identity {filename} write")
     logger.info(f"[Agents API] Wrote identity file {filename} for profile {profile_id}")
-    return {"status": "ok", "filename": filename}
+    return runtime_operation_response(runtime, {"filename": filename})
 
 
 @router.get("/api/agents/profiles/{profile_id}/memory/stats")
@@ -994,9 +1182,9 @@ async def delete_profile_data(profile_id: str, request: Request):
         },
     )
 
-    _invalidate_profile_agents(request, profile_id)
+    runtime = _invalidate_profile_runtime(request, profile_id, f"profile data deleted:{profile_id}")
     logger.info(f"[Agents API] Deleted profile data dir for {profile_id}")
-    return {"status": "ok"}
+    return runtime_operation_response(runtime)
 
 
 @router.get("/api/agents/health")

@@ -184,25 +184,3 @@ async def test_missing_chromium_requires_confirmation_without_downloading(
 
     assert browser_manager.chromium_install_required is True
     download.assert_not_awaited()
-
-
-def test_packaging_excludes_chromium_and_playwright_driver() -> None:
-    root = Path(__file__).parents[2]
-    spec = (root / "build" / "openakita.spec").read_text(encoding="utf-8")
-    backend = (root / "build" / "build_backend.py").read_text(encoding="utf-8")
-
-    assert "_pw_driver_dir" not in spec
-    assert '"playwright/driver"' not in spec
-    assert 'copy_metadata("playwright")' in spec
-    assert "_pw_browser_dir" not in spec
-    assert "Bundling Playwright Chromium" not in spec
-    assert '".local-browsers" not in entry[0]' in spec
-    assert 'scripts" / "pyinstaller_hooks' in spec
-    assert "ensure_playwright_chromium" not in backend
-    assert '"playwright", "install", "chromium"' not in backend
-
-    hook_dir = root / "scripts" / "pyinstaller_hooks"
-    for api in ("async_api", "sync_api"):
-        hook = (hook_dir / f"hook-playwright.{api}.py").read_text(encoding="utf-8")
-        assert "collect_data_files" not in hook
-        assert "datas = []" in hook

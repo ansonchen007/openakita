@@ -441,8 +441,8 @@ class TestMirrorConsistency:
                 break
         assert found, "未找到 official preset 数据行"
 
-    def test_bundled_python_contract_in_main_rs(self):
-        """契约A：运行时应使用打包内置 Python（不走运行时下载）"""
+    def test_managed_python_contract_in_main_rs(self):
+        """契约A：运行时应使用 bootstrap seed 创建持久化托管环境"""
         main_rs_path = (
             Path(__file__).parent.parent / "apps" / "setup-center" / "src-tauri" / "src" / "main.rs"
         )
@@ -455,15 +455,9 @@ class TestMirrorConsistency:
             "应存在 install_bundled_python_sync 作为内置 Python 校验入口"
         )
         assert "install_bundled_python" in content, "应暴露 install_bundled_python 命令供前端调用"
-        assert 'bundled.join("_internal").join("python.exe")' in content, (
-            "Windows 应从 _internal/python.exe 探测内置 Python"
-        )
-        assert 'bundled.join("_internal").join("python3")' in content, (
-            "Unix 应优先从 _internal/python3 探测内置 Python"
-        )
-        assert 'bundled.join("_internal").join("python")' in content, (
-            "Unix 应兼容 _internal/python 命名差异"
-        )
+        assert "fn managed_python_seed_path()" in content
+        assert 'bootstrap_resource_dir().join("python")' in content
+        assert "ensure_app_venv" in content
 
     def test_python_diagnostic_contract_model_in_main_rs(self):
         """Python 诊断应使用契约化模型（生产级：可扩展/可导出/可修复）"""
@@ -482,7 +476,7 @@ class TestMirrorConsistency:
         assert "generated_at: String" in content
 
         # 契约化错误码（最小覆盖）
-        assert '"C1_BUNDLED_RUNTIME"' in content
+        assert '"C1_MANAGED_RUNTIME"' in content
         assert '"C0_BACKEND_OFFLINE"' in content
 
         # 已不再依赖 system python 诊断项

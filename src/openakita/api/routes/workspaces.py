@@ -359,11 +359,20 @@ async def switch_workspace(body: SwitchWorkspaceRequest, request: Request):
     from openakita import config as cfg
 
     cfg._restart_requested = True
+    from openakita.runtime_config_coordinator import get_runtime_config_coordinator
+
+    runtime = get_runtime_config_coordinator(request).request_process_restart(
+        f"workspace_switch:{ws_id}"
+    )
     shutdown_event = getattr(request.app.state, "shutdown_event", None)
     if shutdown_event is not None:
         logger.info(f"[Workspaces] Switching to workspace '{ws_id}', triggering restart")
         shutdown_event.set()
-        return {"status": "restarting", "workspace_id": ws_id}
+        return {
+            "status": "restarting",
+            "workspace_id": ws_id,
+            "runtime": runtime.to_dict(),
+        }
     else:
         cfg._restart_requested = False
         os.chdir(cfg.settings.project_root)

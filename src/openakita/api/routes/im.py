@@ -64,6 +64,7 @@ async def list_channels(request: Request):
     # Build lookup tables from persisted bot/profile config so the viewer
     # shows the same agent binding that MessageGateway applies at runtime.
     from openakita.agents.profile import get_profile_store
+    from openakita.channels.runtime_status import resolve_bot_runtime_state
     from openakita.channels.status import collect_effective_im_status
     from openakita.config import settings
 
@@ -98,10 +99,17 @@ async def list_channels(request: Request):
             or getattr(adapter, "channel_type", "unknown")
         )
         # ChannelAdapter base class has is_running property (backed by _running flag)
-        status = (
+        adapter_status = (
             "online"
             if getattr(adapter, "is_running", False) or getattr(adapter, "_running", False)
             else "offline"
+        )
+        runtime = resolve_bot_runtime_state(str(name), gateway)
+        runtime_status = str(runtime.get("status") or "unknown")
+        status = (
+            "online"
+            if adapter_status == "online"
+            else (runtime_status if runtime_status != "unknown" else adapter_status)
         )
         session_count = 0
         last_active = None
@@ -136,10 +144,11 @@ async def list_channels(request: Request):
             "agentProfileId": agent_profile_id,
             "agentProfileName": agent_profile_name,
         }
-        if status == "offline":
-            reasons = getattr(gateway, "_failed_adapter_reasons", {}) if gateway is not None else {}
-            if name in reasons:
-                entry["error"] = format_user_friendly_error(str(reasons[name]))
+        runtime_error = runtime.get("error")
+        if runtime_error:
+            entry["error"] = format_user_friendly_error(str(runtime_error))
+        if runtime.get("progress"):
+            entry["progress"] = runtime["progress"]
         channels.append(entry)
 
     seen_channels = {str(c.get("channel") or "") for c in channels}
@@ -151,21 +160,31 @@ async def list_channels(request: Request):
             continue
         if not detail.get("enabled") and not detail.get("configured"):
             continue
-        channels.append(
-            {
-                "channel": channel,
-                "channel_type": detail.get("type"),
-                "name": detail.get("name") or channel,
-                "status": "configured" if detail.get("configured") else "offline",
-                "sessionCount": 0,
-                "lastActive": None,
-                "agentProfileId": "default",
-                "agentProfileName": profile_name_map.get("default", "Default Agent"),
-                "source": "im_bots",
-                "configured": detail.get("configured", False),
-                "missing": detail.get("missing", []),
-            }
+        runtime = resolve_bot_runtime_state(channel, gateway)
+        runtime_status = str(runtime.get("status") or "unknown")
+        status = (
+            runtime_status
+            if runtime_status != "unknown"
+            else ("configured" if detail.get("configured") else "offline")
         )
+        entry = {
+            "channel": channel,
+            "channel_type": detail.get("type"),
+            "name": detail.get("name") or channel,
+            "status": status,
+            "sessionCount": 0,
+            "lastActive": None,
+            "agentProfileId": "default",
+            "agentProfileName": profile_name_map.get("default", "Default Agent"),
+            "source": "im_bots",
+            "configured": detail.get("configured", False),
+            "missing": detail.get("missing", []),
+        }
+        if runtime.get("error"):
+            entry["error"] = format_user_friendly_error(str(runtime["error"]))
+        if runtime.get("progress"):
+            entry["progress"] = runtime["progress"]
+        channels.append(entry)
         seen_channels.add(channel)
 
     return JSONResponse(

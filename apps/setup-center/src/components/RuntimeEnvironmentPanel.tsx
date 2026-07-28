@@ -152,7 +152,7 @@ export function RuntimeEnvironmentPanel({
             </span>
           </div>
           <p className="mt-1 text-xs leading-5 text-muted-foreground">
-            桌面端会优先创建 app runtime venv 和 agent tools venv；失败时回退到 legacy PyInstaller 兼容模式。
+            桌面端使用内置 Python 创建 app runtime venv 和 agent tools venv；失败时可在此修复运行环境。
           </p>
         </div>
         <div className="flex flex-wrap justify-end gap-2">

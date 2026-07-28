@@ -398,11 +398,10 @@ jobs:
           prefix-key: ci-rust-nocachebin-v1
           cache-bin: false
 
-      - name: Create resource placeholder for cargo check
+      - name: Create gitignored placeholders for cargo check
         if: ${{ hashFiles('apps/setup-center/src-tauri/Cargo.toml') != '' }}
         shell: bash
         run: |
-          mkdir -p apps/setup-center/src-tauri/resources/openakita-server
           # user_custom.md is gitignored (personal data); create placeholder for include_str!()
           mkdir -p identity/personas
           if [ ! -f identity/personas/user_custom.md ]; then
@@ -471,16 +470,9 @@ jobs:
           prefix-key: ci-tauri-full-nocachebin-v1
           cache-bin: false
 
-      - name: Install Python project and PyInstaller
+      - name: Install Python build tooling
         run: |
-          pip install -e ".[all]"
-          # Non-editable so PyInstaller picks the SDK up as a normal site-packages
-          # entry; the bundled openakita-server image must contain the SDK so
-          # first-class plugin code (tongyi-image / seedance-video) loads
-          # inside Tauri.  Note: as of SDK 0.7.0 the old contrib subpackage
-          # is gone — plugins vendor their own helpers under <plugin>_inline/.
-          pip install ./openakita-plugin-sdk
-          pip install build "pyinstaller>=6.18.0"
+          pip install build
 
       - name: Install frontend dependencies
         working-directory: apps/setup-center
@@ -492,21 +484,12 @@ jobs:
           npm run build:web
           npm run build
 
-      - name: Compute exact build fingerprints
+      - name: Compute exact Rust build fingerprint
         id: build_keys
         shell: bash
         run: |
-          BACKEND_KEY=$(python scripts/build_cache_key.py backend)
           RUST_KEY=$(python scripts/build_cache_key.py rust)
-          echo "backend=${BACKEND_KEY}" >> "$GITHUB_OUTPUT"
           echo "rust=${RUST_KEY}" >> "$GITHUB_OUTPUT"
-
-      - name: Restore exact PyInstaller output
-        id: backend_cache
-        uses: actions/cache@v4
-        with:
-          path: dist/openakita-server
-          key: desktop-backend-v2-ci-full-ubuntu-latest-${{ runner.os }}-${{ runner.arch }}-${{ steps.build_keys.outputs.backend }}
 
       - name: Restore exact Rust desktop binary
         id: rust_binary_cache
@@ -517,13 +500,6 @@ jobs:
             apps/setup-center/src-tauri/target/release/openakita_setup_center.pdb
           key: desktop-rust-binary-v2-ci-full-ubuntu-latest-${{ runner.os }}-${{ runner.arch }}-${{ steps.build_keys.outputs.rust }}
 
-      - name: Clean previous PyInstaller output
-        if: steps.backend_cache.outputs.cache-hit != 'true'
-        run: |
-          rm -rf dist/
-          rm -rf build/openakita-server
-          rm -rf build/pyinstaller_work
-
       - name: Create gitignored placeholders
         run: |
           mkdir -p identity/personas
@@ -533,24 +509,12 @@ jobs:
 
       # Tauri's generate_context! macro reads frontendDist at Rust compile time,
       # so the desktop frontend must exist before this parallel phase starts.
-      - name: Build backend, Rust, and docs in parallel
+      - name: Build Rust and docs in parallel
         shell: bash
         env:
-          BACKEND_CACHE_HIT: ${{ steps.backend_cache.outputs.cache-hit }}
           RUST_BINARY_CACHE_HIT: ${{ steps.rust_binary_cache.outputs.cache-hit }}
         run: |
           set -euo pipefail
-
-          (
-            if [ "$BACKEND_CACHE_HIT" = "true" ]; then
-              echo "[backend] Reusing exact cached PyInstaller output"
-            else
-              echo "[backend] Starting PyInstaller"
-              python build/build_backend.py --skip-web-build
-              echo "[backend] Completed"
-            fi
-          ) &
-          backend_pid=$!
 
           (
             if [ "$RUST_BINARY_CACHE_HIT" = "true" ]; then
@@ -585,7 +549,6 @@ jobs:
           }
 
           failed=0
-          wait_for_build "$backend_pid" backend || failed=1
           wait_for_build "$rust_pid" rust || failed=1
           wait_for_build "$docs_pid" docs || failed=1
           if [ "$failed" -ne 0 ]; then
@@ -594,25 +557,6 @@ jobs:
 
       - name: Prepare Cargo binary for Tauri bundler
         run: python scripts/prepare_tauri_binary.py
-
-      - name: Refresh cached backend build identity
-        shell: bash
-        run: |
-          export OPENAKITA_BUILD_GIT_HASH="$(git rev-parse HEAD)"
-          python scripts/write_build_version.py \
-            --target dist/openakita-server/_internal/openakita/_bundled_version.txt \
-            --require-git
-
-      - name: Upload PyInstaller analysis reports
-        if: ${{ always() && steps.backend_cache.outputs.cache-hit != 'true' }}
-        uses: actions/upload-artifact@v6
-        with:
-          name: pyinstaller-analysis-ci-linux-x64
-          path: |
-            build/pyinstaller_work/**/warn-*.txt
-            build/pyinstaller_work/**/xref-*.html
-          if-no-files-found: warn
-          retention-days: 7
 
       - name: Prepare bootstrap resources (wheel + uv + standalone Python seed)
         run: |
@@ -639,23 +583,6 @@ jobs:
             fi
           done
           [ "$fail" -eq 0 ]
-
-      - name: Copy backend to Tauri resources
-        run: |
-          RESOURCE_DIR="apps/setup-center/src-tauri/resources"
-          mkdir -p "$RESOURCE_DIR"
-          rm -rf "$RESOURCE_DIR/openakita-server"
-          cp -r dist/openakita-server "$RESOURCE_DIR/openakita-server"
-
-      - name: Verify bundled Python contract (seed packaged)
-        shell: bash
-        run: |
-          python build/verify_bundled_python_contract.py \
-            --backend-dir apps/setup-center/src-tauri/resources/openakita-server \
-            --bootstrap-manifest apps/setup-center/src-tauri/resources/bootstrap/manifest.json \
-            --require-seed-packaged \
-            --expected-git-hash "$(git rev-parse HEAD)" \
-            --check-chat-api
 
       - name: Build Tauri bundles (full build)
         working-directory: apps/setup-center

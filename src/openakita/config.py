@@ -4,6 +4,7 @@ OpenAkita 配置模块
 
 import logging
 import os
+import threading
 from pathlib import Path
 
 os.environ.setdefault("OPENAKITA", "1")
@@ -1457,7 +1458,7 @@ class Settings(BaseSettings):
         _skip = set(_PERSISTABLE_KEYS)
         fresh = Settings()
         changed: list[str] = []
-        for field_name in self.model_fields:
+        for field_name in type(self).model_fields:
             if field_name in _skip:
                 continue
             old_val = getattr(self, field_name)
@@ -1647,13 +1648,14 @@ class RuntimeState:
     """
     轻量级运行时状态持久化。
 
-    在 settings 单例上修改可持久化字段后，调用 save() 写入磁盘；
-    在 Agent 启动时调用 load() 从磁盘恢复。
+    配置写入方应调用 save_updates()，在同一锁内更新 settings、生成快照并写入磁盘；
+    save() 仅用于持久化已有 settings 快照，load() 用于启动时恢复。
     """
 
     def __init__(self, state_file: Path | None = None):
         # 延迟解析（settings 还没创建时不能访问 project_root）
         self._state_file = state_file
+        self._lock = threading.RLock()
 
     @property
     def state_file(self) -> Path:
@@ -1663,42 +1665,93 @@ class RuntimeState:
 
     def save(self) -> None:
         """把当前 settings 中的可持久化字段写入 JSON 文件（原子写入 + 备份）。"""
+        from .utils.atomic_io import path_transaction_lock
+
+        with self._lock, path_transaction_lock(self.state_file):
+            data = self._validate_snapshot(
+                {key: getattr(settings, key) for key in _PERSISTABLE_KEYS}
+            )
+            self._save_locked(data)
+
+    def _save_locked(self, data: dict) -> None:
+        """Persist a complete snapshot while ``_lock`` is held."""
         from .utils.atomic_io import atomic_json_write
         from .utils.redaction import redact_value
 
-        data: dict = {}
-        for key in _PERSISTABLE_KEYS:
-            data[key] = getattr(settings, key)
         try:
             atomic_json_write(self.state_file, data)
             logger.info(f"[RuntimeState] Saved: {redact_value(data)}")
         except Exception as e:
             logger.error(f"[RuntimeState] Failed to save: {e}")
+            raise
+
+    @staticmethod
+    def _validate_snapshot(data: dict) -> dict:
+        """Validate all persisted fields together without mutating global settings."""
+        if not isinstance(data, dict):
+            raise ValueError("runtime state must be a JSON object")
+        candidate = settings.model_dump()
+        candidate.update({key: data[key] for key in _PERSISTABLE_KEYS if key in data})
+        validated = Settings.model_validate(candidate)
+        return {key: getattr(validated, key) for key in _PERSISTABLE_KEYS}
+
+    def save_updates(self, **updates) -> None:
+        """Persist merged state while applying only explicit updates locally."""
+        unknown = set(updates) - set(_PERSISTABLE_KEYS)
+        if unknown:
+            raise KeyError(f"Settings are not runtime-persistable: {', '.join(sorted(unknown))}")
+
+        from .utils.atomic_io import path_transaction_lock, read_json_safe
+
+        with self._lock, path_transaction_lock(self.state_file):
+            local = {key: getattr(settings, key) for key in _PERSISTABLE_KEYS}
+            disk = read_json_safe(self.state_file)
+            if disk is not None:
+                local.update(self._validate_snapshot(disk))
+            local.update(updates)
+            validated = self._validate_snapshot(local)
+            previous = {key: getattr(settings, key) for key in updates}
+            for key in updates:
+                setattr(settings, key, validated[key])
+            try:
+                self._save_locked(validated)
+            except Exception:
+                for key, value in previous.items():
+                    setattr(settings, key, value)
+                raise
 
     def load(self) -> None:
         """从 JSON 文件恢复设置到 settings 单例，仅覆盖可持久化字段（支持 .bak 回退）。"""
-        from .utils.atomic_io import read_json_safe
+        from .utils.atomic_io import path_transaction_lock, read_json_safe
         from .utils.redaction import redact_value
 
-        data = read_json_safe(self.state_file)
-        if data is None:
-            logger.info("[RuntimeState] No saved state found, using defaults.")
-            return
-        try:
+        with self._lock, path_transaction_lock(self.state_file):
+            raw = read_json_safe(self.state_file)
+            if raw is None:
+                logger.info("[RuntimeState] No saved state found, using defaults.")
+                return
+            try:
+                data = self._validate_snapshot(raw)
+            except Exception as exc:
+                logger.error("[RuntimeState] Invalid saved state, ignoring it: %s", exc)
+                return
+            previous = {key: getattr(settings, key) for key in _PERSISTABLE_KEYS}
             applied = []
-            for key in _PERSISTABLE_KEYS:
-                if key in data:
-                    old_val = getattr(settings, key)
-                    new_val = data[key]
+            try:
+                for key, new_val in data.items():
+                    old_val = previous[key]
                     if old_val != new_val:
                         setattr(settings, key, new_val)
                         applied.append(f"{key}: {redact_value(old_val)} -> {redact_value(new_val)}")
+            except Exception as exc:
+                for key, value in previous.items():
+                    setattr(settings, key, value)
+                logger.error("[RuntimeState] Failed to apply state, rolled back: %s", exc)
+                return
             if applied:
                 logger.info(f"[RuntimeState] Restored: {'; '.join(applied)}")
             else:
                 logger.info("[RuntimeState] State loaded, no changes needed.")
-        except Exception as e:
-            logger.error(f"[RuntimeState] Failed to load: {e}")
 
 
 def _create_settings_safe() -> Settings:
@@ -1737,9 +1790,9 @@ def _create_settings_safe() -> Settings:
             logger.warning(f"[Config] Removing poisoned key '{bad_field}' from .env and retrying")
 
             try:
-                lines = env_path.read_text(encoding="utf-8", errors="replace").splitlines()
-                cleaned = [ln for ln in lines if not ln.strip().startswith(f"{bad_field}=")]
-                env_path.write_text("\n".join(cleaned) + "\n", encoding="utf-8")
+                from .utils.env_config import update_env_file
+
+                update_env_file(env_path, entries={}, delete_keys={bad_field})
             except Exception as io_err:
                 logger.error(f"[Config] Failed to repair .env: {io_err}")
                 break

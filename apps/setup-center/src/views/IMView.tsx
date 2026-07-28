@@ -42,7 +42,7 @@ type IMChannel = {
   channel: string;
   channel_type?: string;
   name: string;
-  status: "online" | "offline";
+  status: IMRuntimeStatus;
   sessionCount: number;
   lastActive: string | null;
   agentProfileId?: string;
@@ -97,9 +97,35 @@ type IMBot = {
   configured?: boolean;
   missing_credentials?: string[];
   runtime_seen?: boolean;
-  runtime_status?: "online" | "offline" | "unknown";
+  runtime_status?: IMRuntimeStatus;
   runtime_error?: string | null;
+  runtime_progress?: IMInstallProgress | null;
 };
+
+type IMInstallProgress = {
+  phase?: "checking" | "resolving" | "downloading" | "installing" | "complete";
+  current_package?: string | null;
+  current_artifact?: string | null;
+  percent?: number | null;
+  eta_seconds?: number | null;
+  package_count?: number | null;
+  installing_packages?: string[] | null;
+  started_at?: number | null;
+  source?: string | null;
+};
+
+type IMRuntimeStatus =
+  | "installing_dependencies"
+  | "starting"
+  | "online"
+  | "offline"
+  | "error"
+  | "unknown";
+
+const TRANSIENT_IM_STATUSES = new Set<IMRuntimeStatus>([
+  "installing_dependencies",
+  "starting",
+]);
 
 type AgentProfile = {
   id: string;
@@ -435,7 +461,6 @@ function MessagesTab({ serviceRunning, apiBase }: { serviceRunning: boolean; api
   }, [serviceRunning, selectedSessionId, fetchMessages, dateFrom, dateTo]);
 
   useEffect(() => {
-    if (!IS_WEB) return;
     return onWsEvent((event, data) => {
       if (event === "im:channel_status") {
         fetchChannels();
@@ -1250,7 +1275,7 @@ function GroupPolicyTab({ apiBase }: { apiBase: string }) {
 
 // ─── Bot Configuration Tab ──────────────────────────────────────────────
 
-export function BotConfigTab({ apiBase, onRequestRestart, venvDir, apiBaseUrl }: { apiBase: string; onRequestRestart?: () => void; venvDir?: string; apiBaseUrl?: string; enabledChannels?: string[] }) {
+export function BotConfigTab({ apiBase, venvDir, apiBaseUrl }: { apiBase: string; venvDir?: string; apiBaseUrl?: string; enabledChannels?: string[] }) {
   const { t } = useTranslation();
   const [bots, setBots] = useState<IMBot[]>([]);
   const [profiles, setProfiles] = useState<AgentProfile[]>([]);
@@ -1288,8 +1313,9 @@ export function BotConfigTab({ apiBase, onRequestRestart, venvDir, apiBaseUrl }:
     try {
       const res = await safeFetch(`${apiBase}/api/agents/bots`);
       const data = await res.json();
-      setBots(data.bots || []);
-    setLoading(false);
+      const nextBots = (data.bots || []) as IMBot[];
+      setBots(nextBots);
+      setLoading(false);
       return true;
     } catch (e) {
       logger.warn("IM", "Failed to fetch bots", { error: String(e) });
@@ -1321,15 +1347,22 @@ export function BotConfigTab({ apiBase, onRequestRestart, venvDir, apiBaseUrl }:
     return () => { cancelled = true; clearTimeout(retryTimer); };
   }, [fetchBots, fetchProfiles]);
 
-  useEffect(() => {
-    const timer = setInterval(fetchBots, IS_WEB ? 60_000 : 30_000);
-    return () => clearInterval(timer);
-  }, [fetchBots]);
+  const hasFastPollingBot = bots.some((bot) =>
+    bot.enabled && (
+      bot.runtime_status === "unknown"
+      || TRANSIENT_IM_STATUSES.has(bot.runtime_status || "unknown")
+    )
+  );
 
   useEffect(() => {
-    if (!IS_WEB) return;
+    const interval = hasFastPollingBot ? 2000 : IS_WEB ? 60_000 : 30_000;
+    const timer = setInterval(fetchBots, interval);
+    return () => clearInterval(timer);
+  }, [fetchBots, hasFastPollingBot]);
+
+  useEffect(() => {
     return onWsEvent((event) => {
-      if (event === "im:bot_config_changed") fetchBots();
+      if (event === "im:bot_config_changed" || event === "im:channel_status") fetchBots();
     });
   }, [fetchBots]);
 
@@ -1399,50 +1432,6 @@ export function BotConfigTab({ apiBase, onRequestRestart, venvDir, apiBaseUrl }:
     setSaving(false);
   };
 
-  const handleSaveAndRestart = async () => {
-    if (!editingBot.id.trim()) return;
-    if (editingBot.enabled && !areCredsFilled(editingBot.type, editingBot.credentials)) {
-      toast.error(t("im.wizardCredRequired"));
-      return;
-    }
-    setSaving(true);
-    try {
-      const url = isCreating
-        ? `${apiBase}/api/agents/bots`
-        : `${apiBase}/api/agents/bots/${editingBot.id}`;
-      const method = isCreating ? "POST" : "PUT";
-      const payload = isCreating
-        ? {
-            id: editingBot.id,
-            type: editingBot.type,
-            name: editingBot.name,
-            agent_profile_id: editingBot.agent_profile_id,
-            enabled: editingBot.enabled,
-            credentials: editingBot.credentials,
-          }
-        : {
-            type: editingBot.type,
-            name: editingBot.name,
-            agent_profile_id: editingBot.agent_profile_id,
-            enabled: editingBot.enabled,
-            credentials: editingBot.credentials,
-          };
-
-      await safeFetch(url, {
-        method,
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      closeEditor();
-      fetchBots();
-      toast.success(t("im.botSaveSuccess"));
-      onRequestRestart?.();
-    } catch (e) {
-      toast.error(String(e) || t("im.botSaveFailed"));
-    }
-    setSaving(false);
-  };
-
   const handleDelete = async (botId: string) => {
     try {
       await safeFetch(`${apiBase}/api/agents/bots/${botId}`, { method: "DELETE" });
@@ -1506,20 +1495,44 @@ export function BotConfigTab({ apiBase, onRequestRestart, venvDir, apiBaseUrl }:
       <div className="grid grid-cols-[repeat(auto-fill,minmax(280px,1fr))] gap-3.5">
         {bots.map((bot) => {
           const agentProfile = profiles.find((p) => p.id === bot.agent_profile_id);
+          const installProgress = bot.runtime_status === "installing_dependencies"
+            ? bot.runtime_progress
+            : null;
+          const installPercent = typeof installProgress?.percent === "number"
+            ? Math.min(100, Math.max(0, installProgress.percent))
+            : null;
+          const installElapsed = installProgress?.started_at
+            ? Math.max(0, Math.round(Date.now() / 1000 - installProgress.started_at))
+            : null;
+          const installPhaseKey = installProgress?.phase === "downloading"
+            ? "im.installPhaseDownloading"
+            : installProgress?.phase === "installing"
+              ? "im.installPhaseInstalling"
+              : installProgress?.phase === "resolving"
+                ? "im.installPhaseResolving"
+                : "im.installPhaseChecking";
+          const installPhaseLabel = installProgress?.phase === "installing"
+            && typeof installProgress.package_count === "number"
+            ? t("im.installPhaseInstallingCount", { count: installProgress.package_count })
+            : t(installPhaseKey);
           const runtimeLabel = !bot.enabled
             ? t("im.botDisabled")
-            : bot.runtime_error
-              ? t("im.botStartFailed")
-              : bot.configured === false
-                ? t("im.botConfigInvalid")
-                : bot.runtime_status === "online"
-                  ? t("im.botOnline")
-                  : bot.runtime_status === "offline"
-                    ? t("im.botOffline")
-                    : t("im.botPendingStart");
+            : bot.runtime_status === "installing_dependencies"
+              ? t("im.botInstallingDependencies")
+              : bot.runtime_status === "starting"
+                ? t("im.botStarting")
+                : bot.runtime_error || bot.runtime_status === "error"
+                  ? t("im.botStartFailed")
+                  : bot.configured === false
+                    ? t("im.botConfigInvalid")
+                    : bot.runtime_status === "online"
+                      ? t("im.botOnline")
+                      : bot.runtime_status === "offline"
+                        ? t("im.botOffline")
+                        : t("im.botPendingStart");
           const runtimeVariant = !bot.enabled
             ? "secondary"
-            : bot.runtime_error || bot.configured === false || bot.runtime_status === "offline"
+            : bot.runtime_error || bot.configured === false || bot.runtime_status === "offline" || bot.runtime_status === "error"
               ? "destructive"
               : bot.runtime_status === "online" ? "default" : "outline";
           return (
@@ -1536,6 +1549,9 @@ export function BotConfigTab({ apiBase, onRequestRestart, venvDir, apiBaseUrl }:
                   {t(BOT_TYPE_LABEL_KEYS[bot.type] || "", { defaultValue: bot.type })}
                 </Badge>
                 <Badge variant={runtimeVariant} className="text-[10px] px-1.5 py-0">
+                  {TRANSIENT_IM_STATUSES.has(bot.runtime_status || "unknown") && (
+                    <Loader2 className="mr-1 size-3 animate-spin" />
+                  )}
                   {runtimeLabel}
                 </Badge>
               </div>
@@ -1551,6 +1567,38 @@ export function BotConfigTab({ apiBase, onRequestRestart, venvDir, apiBaseUrl }:
               <p className="text-xs text-muted-foreground mb-2.5">
                 {t("im.botAgent")}: {agentProfile?.name || bot.agent_profile_id}
               </p>
+              {bot.runtime_status === "installing_dependencies" && (
+                <div className="mb-3 space-y-1.5" aria-live="polite">
+                  <div className="flex min-h-4 items-center justify-between gap-2 text-[11px] text-muted-foreground">
+                    <span className="min-w-0 truncate" title={installProgress?.current_package || undefined}>
+                      {installPhaseLabel}
+                      {installProgress?.current_package ? `: ${installProgress.current_package}` : ""}
+                    </span>
+                    <span className="shrink-0 tabular-nums">
+                      {installPercent !== null
+                        ? `${Math.round(installPercent)}%`
+                        : installElapsed !== null
+                          ? t("im.installElapsed", { seconds: installElapsed })
+                          : ""}
+                    </span>
+                  </div>
+                  <div className="relative h-1.5 overflow-hidden rounded-sm bg-muted">
+                    {installPercent !== null ? (
+                      <div
+                        className="h-full bg-primary transition-[width] duration-300"
+                        style={{ width: `${installPercent}%` }}
+                      />
+                    ) : (
+                      <div className="h-full w-2/5 animate-pulse bg-primary/70" />
+                    )}
+                  </div>
+                  {typeof installProgress?.eta_seconds === "number" && installProgress.eta_seconds > 0 && (
+                    <div className="text-right text-[10px] tabular-nums text-muted-foreground">
+                      {t("im.installCurrentDownloadEta", { seconds: installProgress.eta_seconds })}
+                    </div>
+                  )}
+                </div>
+              )}
               {(bot.runtime_error || (bot.missing_credentials?.length ?? 0) > 0) && (
                 <p className="text-[11px] text-destructive mb-2.5 break-words">
                   {bot.runtime_error || t("im.botMissingCredentials", { fields: bot.missing_credentials?.join(", ") })}
@@ -2004,10 +2052,7 @@ export function BotConfigTab({ apiBase, onRequestRestart, venvDir, apiBaseUrl }:
           <DialogFooter className="border-t pt-4 mt-2">
             <Button variant="outline" onClick={closeEditor}>{t("common.cancel")}</Button>
             <Button onClick={handleSave} disabled={saving || !editingBot.id.trim()}>
-              {saving ? "..." : t("im.botSaveOnly")}
-            </Button>
-            <Button className="btnApplyRestart" onClick={handleSaveAndRestart} disabled={saving || !editingBot.id.trim()} title={t("im.botApplyRestartHint")}>
-              {saving ? "..." : t("im.botApplyRestart")}
+              {saving ? "..." : t("im.botApply")}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -2070,7 +2115,6 @@ export function BotConfigTab({ apiBase, onRequestRestart, venvDir, apiBaseUrl }:
         onClose={() => setWizardOpen(false)}
         apiBase={apiBase}
         profiles={profiles}
-        onRequestRestart={onRequestRestart}
         venvDir={venvDir}
         apiBaseUrl={apiBaseUrl}
         onCreated={fetchBots}
@@ -2151,7 +2195,6 @@ function BotCreationWizard({
   onClose,
   apiBase,
   profiles,
-  onRequestRestart,
   venvDir,
   apiBaseUrl,
   onCreated,
@@ -2160,7 +2203,6 @@ function BotCreationWizard({
   onClose: () => void;
   apiBase: string;
   profiles: AgentProfile[];
-  onRequestRestart?: () => void;
   venvDir?: string;
   apiBaseUrl?: string;
   onCreated: () => void;
@@ -2221,7 +2263,7 @@ function BotCreationWizard({
     setCredWarning(false);
   };
 
-  const handleSave = async (restart: boolean) => {
+  const handleSave = async () => {
     if (!bot.id.trim()) return;
     setSaving(true);
     try {
@@ -2240,7 +2282,6 @@ function BotCreationWizard({
       toast.success(t("im.wizardSaved"));
       onCreated();
       onClose();
-      if (restart) onRequestRestart?.();
     } catch (e) {
       toast.error(String(e));
     }
@@ -2764,14 +2805,9 @@ function BotCreationWizard({
                 </span>
               )}
               {step === "done" ? (
-                <>
-                  <Button variant="outline" onClick={() => handleSave(false)} disabled={saving || !bot.id.trim()}>
-                    {saving ? "..." : t("im.botSaveOnly")}
-                  </Button>
-                  <Button onClick={() => handleSave(true)} disabled={saving || !bot.id.trim()}>
-                    {saving ? "..." : t("im.botApplyRestart")}
-                  </Button>
-                </>
+                <Button onClick={handleSave} disabled={saving || !bot.id.trim()}>
+                  {saving ? "..." : t("im.botApply")}
+                </Button>
               ) : (
                 <>
                   <Button variant="outline" onClick={onClose}>{t("common.cancel")}</Button>

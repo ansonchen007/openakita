@@ -19,6 +19,8 @@ from unittest.mock import MagicMock
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from tests.api.contracts.conftest import _async_return
+
 
 def _wire_org_node(app: FastAPI, org_dir: Path, node_id: str = "n1") -> None:
     """Wire ``mgr.get(org_id).get_node(node_id)`` + ``mgr.get_org_dir``."""
@@ -26,10 +28,6 @@ def _wire_org_node(app: FastAPI, org_dir: Path, node_id: str = "n1") -> None:
     org.get_node.return_value = MagicMock(id=node_id) if node_id else None
     app.state.org_manager.get.return_value = org
     app.state.org_manager.get_org_dir.return_value = str(org_dir)
-
-
-from tests.api.contracts.conftest import _async_return
-
 
 # ---------------------------------------------------------------------------
 # B18-B21: schedules CRUD
@@ -183,6 +181,30 @@ def test_b23_update_identity_empty_string_unlinks(
     assert not (base / "ROLE.md").exists()
 
 
+def test_b23_update_identity_preserves_success_when_runtime_invalidation_fails(
+    mint_app: FastAPI, mint_client: TestClient, tmp_path
+) -> None:
+    from openakita.runtime_config_coordinator import RuntimeApplyResult
+
+    _wire_org_node(mint_app, tmp_path)
+    result = RuntimeApplyResult(failed={"org_node": "runtime unavailable"})
+    mint_app.state.runtime_config_coordinator = MagicMock()
+    mint_app.state.runtime_config_coordinator.invalidate_org_node.return_value = result
+
+    resp = mint_client.put(
+        "/api/v2/orgs/o1/nodes/n1/identity",
+        json={"SOUL.md": "persisted"},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["operation_status"] == "ok"
+    assert resp.json()["status"] == "failed"
+    assert resp.json()["runtime"]["failed"]["org_node"] == "runtime unavailable"
+    assert (tmp_path / "nodes" / "n1" / "identity" / "SOUL.md").read_text(
+        encoding="utf-8"
+    ) == "persisted"
+
+
 # ---------------------------------------------------------------------------
 # B24-B25: MCP config
 # ---------------------------------------------------------------------------
@@ -215,6 +237,28 @@ def test_b25_update_mcp_writes_file(mint_app: FastAPI, mint_client: TestClient, 
     assert resp.status_code == 200
     p = tmp_path / "nodes" / "n1" / "mcp_config.json"
     assert p.is_file()
+
+
+def test_b25_update_mcp_preserves_success_when_runtime_invalidation_fails(
+    mint_app: FastAPI, mint_client: TestClient, tmp_path
+) -> None:
+    from openakita.runtime_config_coordinator import RuntimeApplyResult
+
+    _wire_org_node(mint_app, tmp_path)
+    result = RuntimeApplyResult(failed={"org_node": "runtime unavailable"})
+    mint_app.state.runtime_config_coordinator = MagicMock()
+    mint_app.state.runtime_config_coordinator.invalidate_org_node.return_value = result
+
+    resp = mint_client.put(
+        "/api/v2/orgs/o1/nodes/n1/mcp",
+        json={"mode": "override", "servers": []},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["operation_status"] == "ok"
+    assert resp.json()["status"] == "failed"
+    assert resp.json()["runtime"]["failed"]["org_node"] == "runtime unavailable"
+    assert (tmp_path / "nodes" / "n1" / "mcp_config.json").is_file()
 
 
 def test_b25_update_mcp_404_on_missing_node(mint_app: FastAPI, mint_client: TestClient) -> None:

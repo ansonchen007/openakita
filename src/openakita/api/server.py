@@ -793,6 +793,9 @@ def create_app(
     app.state.gateway = gateway
     app.state.orchestrator = orchestrator
     app.state.agent_pool = agent_pool
+    from openakita.runtime_config_coordinator import RuntimeConfigCoordinator
+
+    app.state.runtime_config_coordinator = RuntimeConfigCoordinator(app.state)
     app.state.startup_phase = "http_ready" if gateway is None else "running"
     app.state.readiness = {
         "phase": app.state.startup_phase,
@@ -947,6 +950,7 @@ def create_app(
             tool_host_provider=_orgs_v2_node_tool_host_provider,
         )
     )
+    app.state.org_agent_cache = agent_cache
 
     # Sprint-6 P0-2 (RCA ``_v17_p1_rca.md`` §2.5): resolve the
     # cancel source the outcome cache stashed

@@ -63,6 +63,7 @@ function applyBackupSettings(env: EnvMap, settings: Partial<BackupSettings>): vo
 
 export function useEnvManager(opts: UseEnvManagerOpts) {
   const [envDraft, setEnvDraft] = useState<EnvMap>({});
+  const [envBaseline, setEnvBaseline] = useState<EnvMap>({});
   const [secretShown, setSecretShown] = useState<Record<string, boolean>>({});
   const envLoadedForWs = useRef<string | null>(null);
 
@@ -109,14 +110,26 @@ export function useEnvManager(opts: UseEnvManagerOpts) {
       if (!(dk in parsed)) parsed[dk] = dv;
     }
     setEnvDraft(parsed);
+    setEnvBaseline({ ...parsed });
     envLoadedForWs.current = workspaceId;
     return parsed;
   }
 
-  async function saveEnvKeys(keys: string[]): Promise<{ restartRequired?: boolean; hotReloadable?: boolean }> {
+  async function saveEnvKeys(keys: string[]): Promise<{
+    restartRequired?: boolean;
+    hotReloadable?: boolean;
+    applyMode?: "immediate" | "next_task" | "component_reload" | "process_restart";
+  }> {
     const { shouldUseHttpApi, httpApiBase, currentWorkspaceId } = optsRef.current;
     const savesBackupSettings = keys.some((key) => BACKUP_ENV_KEYS.has(key));
     const backupSettings = backupSettingsFromEnv(envDraft);
+    const markKeysSaved = () => {
+      setEnvBaseline((previous) => {
+        const next = { ...previous };
+        for (const key of keys) next[key] = envDraft[key] ?? "";
+        return next;
+      });
+    };
 
     const entries: Record<string, string> = {};
     const deleteKeys: string[] = [];
@@ -153,9 +166,11 @@ export function useEnvManager(opts: UseEnvManagerOpts) {
             body: JSON.stringify(backupSettings),
           });
         }
+        markKeysSaved();
         return {
           restartRequired: data.restart_required ?? false,
           hotReloadable: data.hot_reloadable ?? true,
+          applyMode: data.apply_mode,
         };
       } catch {
         logger.warn("useEnvManager", "saveEnvKeys: HTTP failed, falling back to Tauri");
@@ -175,6 +190,12 @@ export function useEnvManager(opts: UseEnvManagerOpts) {
           content: JSON.stringify(backupSettings, null, 2),
         });
       }
+      markKeysSaved();
+      return {
+        restartRequired: true,
+        hotReloadable: false,
+        applyMode: "process_restart",
+      };
     }
     return {};
   }
@@ -182,14 +203,29 @@ export function useEnvManager(opts: UseEnvManagerOpts) {
   function resetEnvLoaded() {
     envLoadedForWs.current = null;
     setEnvDraft({});
+    setEnvBaseline({});
   }
 
-  function markEnvLoaded(workspaceId: string) {
+  function markEnvLoaded(workspaceId: string, loadedEnv?: EnvMap) {
     envLoadedForWs.current = workspaceId;
+    if (loadedEnv) setEnvBaseline((previous) => ({ ...previous, ...loadedEnv }));
+  }
+
+  function mergeEffectiveEnvDefaults(values: EnvMap) {
+    const mergeMissing = (previous: EnvMap) => {
+      const next = { ...previous };
+      for (const [key, value] of Object.entries(values)) {
+        if (!Object.prototype.hasOwnProperty.call(previous, key)) next[key] = value;
+      }
+      return next;
+    };
+    setEnvDraft(mergeMissing);
+    setEnvBaseline(mergeMissing);
   }
 
   return {
     envDraft,
+    envBaseline,
     setEnvDraft,
     secretShown,
     setSecretShown,
@@ -197,5 +233,6 @@ export function useEnvManager(opts: UseEnvManagerOpts) {
     saveEnvKeys,
     resetEnvLoaded,
     markEnvLoaded,
+    mergeEffectiveEnvDefaults,
   };
 }
