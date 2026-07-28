@@ -45,6 +45,7 @@ import logging
 import time
 from contextlib import suppress
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from .command_models import (
@@ -172,6 +173,94 @@ def delivery_language_directive(text: str) -> str:
         "and folder in English and write their contents in English to match the "
         "user's language."
     )
+
+
+def _project_manifest_file_attachments(
+    delivery_manifest: dict[str, Any] | None,
+    artifact_records: tuple[Any, ...],
+) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
+    """Hydrate declared deliverables with their runtime-registered local files.
+
+    Nodes commonly submit only ``asset_ids`` / ``task_ids`` in the final
+    manifest. The artifact ledger is the authoritative mapping from those IDs
+    to downloaded files, so terminal consumers should not need to repeat that
+    lookup independently.
+    """
+    if delivery_manifest is None:
+        return None, []
+
+    projected = dict(delivery_manifest)
+    raw_artifacts = delivery_manifest.get("artifacts")
+    if not isinstance(raw_artifacts, list):
+        return projected, []
+
+    attachments: list[dict[str, Any]] = []
+    seen_paths: set[str] = set()
+    projected_artifacts: list[Any] = []
+
+    def string_values(raw: Any) -> list[str]:
+        values = [raw] if isinstance(raw, str) else raw
+        if not isinstance(values, (list, tuple, set)):
+            return []
+        return [str(value).strip() for value in values if str(value).strip()]
+
+    for raw_artifact in raw_artifacts:
+        if not isinstance(raw_artifact, dict):
+            projected_artifacts.append(raw_artifact)
+            continue
+
+        artifact = dict(raw_artifact)
+        kind = str(artifact.get("kind") or "").strip().lower()
+        asset_ids = set(string_values(artifact.get("asset_ids")))
+        task_ids = set(string_values(artifact.get("task_ids")))
+        paths = string_values(artifact.get("paths"))
+
+        for record in artifact_records:
+            record_kinds = {str(value).strip().lower() for value in record.asset_kinds}
+            if kind and kind not in record_kinds:
+                continue
+            if not (
+                asset_ids.intersection(record.asset_ids) or task_ids.intersection(record.task_ids)
+            ):
+                continue
+            registered = (
+                (*record.registered_video_paths, *record.registered_paths)
+                if kind == "video"
+                else record.registered_paths
+            )
+            paths.extend(str(value).strip() for value in registered if str(value).strip())
+
+        unique_paths: list[str] = []
+        artifact_seen: set[str] = set()
+        for file_path in paths:
+            key = file_path.lower().replace("\\", "/")
+            if key in artifact_seen:
+                continue
+            artifact_seen.add(key)
+            unique_paths.append(file_path)
+            if key in seen_paths:
+                continue
+            seen_paths.add(key)
+            path = Path(file_path)
+            try:
+                file_size = path.stat().st_size if path.is_file() else 0
+            except OSError:
+                file_size = 0
+            attachments.append(
+                {
+                    "filename": path.name or str(artifact.get("name") or "file"),
+                    "file_path": file_path,
+                    "file_size": file_size,
+                    "kind": kind or None,
+                    "name": artifact.get("name"),
+                }
+            )
+
+        artifact["paths"] = unique_paths
+        projected_artifacts.append(artifact)
+
+    projected["artifacts"] = projected_artifacts
+    return projected, attachments
 
 
 def _headline(text: str, limit: int) -> str:
@@ -2844,6 +2933,7 @@ class OrgCommandService:
         delivery_manifest = getattr(outcome, "delivery_manifest", None)
         if not isinstance(delivery_manifest, dict):
             delivery_manifest = None
+        artifact_records: tuple[Any, ...] = ()
         manifest_media_failures: list[dict[str, Any]] = []
         if delivery_manifest is not None:
             from ._runtime_artifact_flow import artifact_ledger
@@ -2856,6 +2946,7 @@ class OrgCommandService:
             command = self._commands.get(command_id, {})
             org_id = str(command.get("org_id") or "")
             root_node_id = str(command.get("root_node_id") or "")
+            artifact_records = artifact_ledger.get(org_id, command_id)
             try:
                 reflected_manifest = DeliveryManifest.from_mapping(
                     delivery_manifest,
@@ -2867,7 +2958,7 @@ class OrgCommandService:
                 )
                 manifest_media_failures = validate_manifest_media_delivery(
                     reflected_manifest,
-                    artifact_records=artifact_ledger.get(org_id, command_id),
+                    artifact_records=artifact_records,
                 )
             except DeliveryManifestError as exc:
                 manifest_media_failures = [
@@ -2877,6 +2968,11 @@ class OrgCommandService:
                         "reworkable": True,
                     }
                 ]
+
+        delivery_manifest, file_attachments = _project_manifest_file_attachments(
+            delivery_manifest,
+            artifact_records,
+        )
 
         # test16 semantic root-cause: OUT_OF_TURNS / REPLAN_BUDGET_EXHAUSTED /
         # FAILED (the hard-ceiling synthesises FAILED) are *limit* exits, not
@@ -2957,6 +3053,8 @@ class OrgCommandService:
             "outcome": result_outcome,
             "delivery_manifest": delivery_manifest,
         }
+        if file_attachments:
+            result_payload["file_attachments"] = file_attachments
         if manifest_media_failures:
             result_payload["media_quality_failures"] = manifest_media_failures
         # Traceability: keep the raw supervisor verdict alongside the honest

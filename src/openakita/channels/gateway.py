@@ -3974,7 +3974,13 @@ class MessageGateway:
                         error = item.get("error")
                         attachments: list[dict] = []
                         if isinstance(result, dict):
-                            final_text = str(result.get("result") or result.get("error") or result)
+                            final_text = str(
+                                result.get("result")
+                                or result.get("deliverable")
+                                or result.get("final_message")
+                                or result.get("error")
+                                or ""
+                            )
                             attachments = self._extract_org_result_attachments(result)
                         else:
                             final_text = str(error or result or "组织命令已完成")
@@ -5774,8 +5780,8 @@ class MessageGateway:
                             metadata=outgoing_meta,
                         )
 
+        all_files = list(media_result.files) + list(media_result.videos)
         if adapter.has_capability("send_file"):
-            all_files = list(media_result.files) + list(media_result.videos)
             for file in all_files:
                 if file.is_url:
                     continue
@@ -5795,6 +5801,16 @@ class MessageGateway:
                             reply_to=reply_to,
                             metadata=outgoing_meta,
                         )
+        elif all_files:
+            names = [Path(file.path).name or "file" for file in all_files if not file.is_url]
+            if names:
+                with contextlib.suppress(Exception):
+                    await adapter.send_text(
+                        original.chat_id,
+                        "附件已生成，但当前通道不支持文件发送：" + "、".join(names),
+                        reply_to=reply_to,
+                        metadata=outgoing_meta,
+                    )
 
         if adapter.has_capability("send_voice"):
             for audio in media_result.audios:

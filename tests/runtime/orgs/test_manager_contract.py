@@ -22,13 +22,12 @@ Case axes:
 * dir layout invariants -- 2 (12 org subdirs + README; per-node files)
 * concurrent ops -- 2 (4x25 thread storm; name-conflict serialisation)
 * malformed input -- 2 (path traversal; update missing)
-* 100-blob stress -- 1 (create + reload + list)
+* 100-blob round trip -- 1 (create + reload + list)
 """
 
 from __future__ import annotations
 
 import threading
-import time
 from pathlib import Path
 
 import pytest
@@ -260,25 +259,21 @@ def test_update_on_missing_org_raises(manager: OrgManager) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 100-blob stress smoke
+# 100-blob round trip
 # ---------------------------------------------------------------------------
 
 
-def test_100_blob_stress_smoke(manager: OrgManager, tmp_path: Path) -> None:
-    """100 sequential creates + list complete fast.
+def test_100_blob_round_trip(manager: OrgManager, tmp_path: Path) -> None:
+    """100 sequential creates survive a cache-bypass reload.
 
     Mirrors the parity 100-blob fixture but on a fresh manager
-    so we also exercise per-create _init_dirs cost. Wall-clock
-    target: < 5 s on commodity hardware (the v1 test_manager.py
-    parity expectations are looser; this is just a smoke).
+    so we also exercise per-create _init_dirs behavior. Performance
+    is covered separately by the opt-in perf suite.
     """
-    t0 = time.perf_counter()
     for i in range(100):
         manager.create({"name": f"blob_{i:03d}"})
     items = manager.list_orgs()
-    elapsed = time.perf_counter() - t0
     assert len(items) == 100
-    assert elapsed < 5.0, f"100-blob stress took {elapsed:.2f}s (> 5s budget)"
     # Reload via fresh OrgManager to exercise cache-bypass read
     fresh = OrgManager(tmp_path)
     items2 = fresh.list_orgs()

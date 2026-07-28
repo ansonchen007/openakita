@@ -342,7 +342,8 @@ class TestOrgCommandsDoNotStartTyping:
             {
                 "type": "org_command_done",
                 "result": {
-                    "result": "组织任务完成",
+                    "final_message": "supervisor finished",
+                    "deliverable": "组织任务完成",
                     "file_attachments": [{"file_path": image_path}],
                     "delivery_manifest": {
                         "artifacts": [
