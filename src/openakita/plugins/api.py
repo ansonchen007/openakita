@@ -1146,6 +1146,21 @@ class PluginAPI:
         except Exception as e:
             logger.debug("Plugin '%s' background task cancel error: %s", self._plugin_id, e)
 
+    async def stop_background_tasks(self) -> None:
+        """Stop framework-tracked tasks before plugin-owned resources are closed.
+
+        Plugin ``on_unload`` hooks commonly close SQLite connections and HTTP
+        clients used by tasks created through :meth:`spawn_task`.  Keeping this
+        phase separate from capability cleanup lets ``PluginManager`` establish
+        the required teardown order without removing routes or tools too early.
+        The operation is intentionally idempotent so :meth:`aclose` remains a
+        safe standalone cleanup entry point.
+        """
+        try:
+            await self._cancel_spawned_tasks()
+        except Exception as e:
+            logger.debug("Plugin '%s' task cancel error: %s", self._plugin_id, e)
+
     def list_spawned_tasks(self) -> list[dict[str, Any]]:
         """Diagnostics helper: snapshot of background tasks for this plugin."""
         out: list[dict[str, Any]] = []
@@ -1172,10 +1187,7 @@ class PluginAPI:
           2. Gracefully disconnect MCP subprocess (if any).
           3. Run the synchronous ``_cleanup`` for routes/tools/hooks/channels.
         """
-        try:
-            await self._cancel_spawned_tasks()
-        except Exception as e:
-            logger.debug("Plugin '%s' task cancel error: %s", self._plugin_id, e)
+        await self.stop_background_tasks()
         try:
             await self._aclose_mcp()
         except Exception as e:

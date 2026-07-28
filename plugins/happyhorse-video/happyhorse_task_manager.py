@@ -35,6 +35,7 @@ row; ``id`` / ``created_at`` are non-writable.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
@@ -309,6 +310,7 @@ class HappyhorseTaskManager:
     def __init__(self, db_path: Path) -> None:
         self._db_path = Path(db_path)
         self._db: aiosqlite.Connection | None = None
+        self._lifecycle_lock = asyncio.Lock()
 
     # ── Lifecycle ──────────────────────────────────────────────────────
 
@@ -325,24 +327,33 @@ class HappyhorseTaskManager:
         await self.close()
 
     async def init(self) -> None:
-        if self._db is not None:
-            return
-        self._db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._db = await aiosqlite.connect(str(self._db_path))
-        self._db.row_factory = aiosqlite.Row
-        await self._db.execute("PRAGMA journal_mode=WAL")
-        await self._db.execute("PRAGMA synchronous=NORMAL")
-        await self._db.execute("PRAGMA foreign_keys=ON")
-        await self._db.executescript(SCHEMA_SQL)
-        await self._init_default_config()
-        await self._db.commit()
+        async with self._lifecycle_lock:
+            if self._db is not None:
+                return
+            self._db_path.parent.mkdir(parents=True, exist_ok=True)
+            connection: aiosqlite.Connection | None = None
+            try:
+                connection = await aiosqlite.connect(str(self._db_path))
+                connection.row_factory = aiosqlite.Row
+                await connection.execute("PRAGMA journal_mode=WAL")
+                await connection.execute("PRAGMA synchronous=NORMAL")
+                await connection.execute("PRAGMA foreign_keys=ON")
+                await connection.executescript(SCHEMA_SQL)
+                await self._init_default_config(connection)
+                await connection.commit()
+            except BaseException:
+                if connection is not None:
+                    await asyncio.shield(connection.close())
+                raise
+            # Readers only ever observe a fully initialized connection.
+            self._db = connection
 
     async def close(self) -> None:
-        if self._db is not None:
-            try:
-                await self._db.close()
-            finally:
-                self._db = None
+        async with self._lifecycle_lock:
+            connection = self._db
+            self._db = None
+            if connection is not None:
+                await connection.close()
 
     @property
     def _conn(self) -> aiosqlite.Connection:
@@ -350,9 +361,9 @@ class HappyhorseTaskManager:
             raise RuntimeError("HappyhorseTaskManager.init() must be called first")
         return self._db
 
-    async def _init_default_config(self) -> None:
+    async def _init_default_config(self, connection: aiosqlite.Connection) -> None:
         for key, val in DEFAULT_CONFIG.items():
-            await self._conn.execute(
+            await connection.execute(
                 "INSERT OR IGNORE INTO config (key, value) VALUES (?, ?)",
                 (key, val),
             )

@@ -19,6 +19,7 @@ The two contracts that must remain stable across versions:
 
 from __future__ import annotations
 
+import asyncio
 import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -43,6 +44,10 @@ def test_image_and_video_tool_schemas_expose_segment_id():
 
 def test_org_readiness_reports_local_prerequisites(monkeypatch: pytest.MonkeyPatch):
     plugin = HappyhorsePlugin.__new__(HappyhorsePlugin)
+    plugin._ready_event = asyncio.Event()
+    plugin._ready_event.set()
+    plugin._init_error = None
+    plugin._stopping = False
     plugin._client = SimpleNamespace(has_api_key=lambda: False)
     plugin._oss = SimpleNamespace(is_configured=lambda: False)
     monkeypatch.setattr(_HH, "ffmpeg_available", lambda: False)
@@ -57,6 +62,10 @@ def test_org_readiness_passes_when_local_prerequisites_exist(
     monkeypatch: pytest.MonkeyPatch,
 ):
     plugin = HappyhorsePlugin.__new__(HappyhorsePlugin)
+    plugin._ready_event = asyncio.Event()
+    plugin._ready_event.set()
+    plugin._init_error = None
+    plugin._stopping = False
     plugin._client = SimpleNamespace(has_api_key=lambda: True)
     plugin._oss = SimpleNamespace(is_configured=lambda: True)
     monkeypatch.setattr(_HH, "ffmpeg_available", lambda: True)
