@@ -1509,7 +1509,9 @@ class PluginManager:
             self._save_state()
             if plugin_id not in self._loaded:
                 try:
-                    await self._reload_plugin_runtime(plugin_id)
+                    runtime_changed = await self._reload_plugin_runtime(plugin_id)
+                    if runtime_changed:
+                        self._invalidate_policy_classifier_cache(plugin_id)
                 except Exception as e:
                     logger.warning("Failed to auto-reload plugin '%s' on enable: %s", plugin_id, e)
 
@@ -1641,9 +1643,11 @@ class PluginManager:
     async def reload_plugin(self, plugin_id: str) -> None:
         """Unload then re-load a plugin (e.g. after granting new permissions)."""
         async with self._operation_lock(plugin_id):
-            await self._reload_plugin_runtime(plugin_id)
+            runtime_changed = await self._reload_plugin_runtime(plugin_id)
+            if runtime_changed:
+                self._invalidate_policy_classifier_cache(plugin_id)
 
-    async def _reload_plugin_runtime(self, plugin_id: str) -> None:
+    async def _reload_plugin_runtime(self, plugin_id: str) -> bool:
         """Reload one plugin while its per-plugin operation lock is held."""
         loaded = self._loaded.get(plugin_id)
         if loaded is not None:
@@ -1654,12 +1658,12 @@ class PluginManager:
             plugin_dir = self._find_plugin_dir(plugin_id)
             if plugin_dir is None:
                 logger.warning("Cannot reload '%s': plugin dir not found", plugin_id)
-                return
+                return False
             try:
                 manifest = parse_manifest(plugin_dir)
             except ManifestError as e:
                 logger.error("Cannot reload '%s': %s", plugin_id, e)
-                return
+                return False
 
         self._failed.pop(plugin_id, None)
         # 用户主动 reload 视作"想再试一次"，清除失败冷却时间戳。
@@ -1675,10 +1679,8 @@ class PluginManager:
             logger.error("Plugin '%s' reload failed: %s", plugin_id, msg)
             self._failed[plugin_id] = msg
             self._failed_at[plugin_id] = time.monotonic()
-        # One invalidation covers both removal of the old registrations and
-        # publication of the new ones, including a failed reload.
-        self._invalidate_policy_classifier_cache(plugin_id)
         self._save_state()
+        return True
 
     def _unmount_plugin_ui(self, plugin_id: str) -> None:
         """Remove the plugin UI static-file mount from the FastAPI app."""
