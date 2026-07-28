@@ -467,6 +467,41 @@ pub(crate) struct LocalFileReadProgress {
     total: u64,
 }
 
+struct ProgressReader<R, F> {
+    inner: R,
+    loaded: u64,
+    total: u64,
+    on_progress: F,
+}
+
+impl<R, F> ProgressReader<R, F> {
+    fn new(inner: R, total: u64, on_progress: F) -> Self {
+        Self {
+            inner,
+            loaded: 0,
+            total,
+            on_progress,
+        }
+    }
+}
+
+impl<R: Read, F: FnMut(u64, u64)> Read for ProgressReader<R, F> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let read = self.inner.read(buf)?;
+        if read > 0 {
+            self.loaded = self.loaded.saturating_add(read as u64);
+            (self.on_progress)(self.loaded, self.total);
+        }
+        Ok(read)
+    }
+}
+
+#[derive(Serialize)]
+pub(crate) struct LocalFileUploadResponse {
+    status: u16,
+    body: String,
+}
+
 /// Return local file metadata without reading the file contents.
 /// Used by drag/drop handling to reject or route large files before they can
 /// exhaust WebView memory.
@@ -479,6 +514,78 @@ pub(crate) fn get_local_file_info(path: String) -> Result<LocalFileInfo, String>
         is_file: meta.is_file(),
         is_directory: meta.is_dir(),
     })
+}
+
+/// Stream a Tauri-native dropped path to the regular upload endpoint.
+///
+/// Browser and mobile callers already receive a `File` and use multipart fetch
+/// directly. Native drag/drop only provides a filesystem path, so this adapter
+/// keeps bytes out of the WebView while preserving the same `/api/upload`
+/// response contract for the shared chat UI.
+#[tauri::command]
+pub(crate) async fn upload_local_file(
+    path: String,
+    url: String,
+    filename: String,
+    mime_type: Option<String>,
+    authorization: Option<String>,
+    on_progress: tauri::ipc::Channel<LocalFileReadProgress>,
+) -> Result<LocalFileUploadResponse, String> {
+    spawn_blocking_result(move || {
+        let parsed_url =
+            reqwest::Url::parse(&url).map_err(|e| format!("Invalid upload URL: {e}"))?;
+        if !matches!(parsed_url.scheme(), "http" | "https") {
+            return Err("Upload URL must use HTTP or HTTPS".to_string());
+        }
+
+        let file_path = PathBuf::from(&path);
+        let metadata = fs::metadata(&file_path)
+            .map_err(|e| format!("Failed to stat {}: {e}", file_path.display()))?;
+        if !metadata.is_file() {
+            return Err(format!("Not a file: {}", file_path.display()));
+        }
+        let total = metadata.len();
+        let file = fs::File::open(&file_path)
+            .map_err(|e| format!("Failed to open {}: {e}", file_path.display()))?;
+        let progress_channel = on_progress.clone();
+        let _ = on_progress.send(LocalFileReadProgress { loaded: 0, total });
+        let reader = ProgressReader::new(file, total, move |loaded, total| {
+            let _ = progress_channel.send(LocalFileReadProgress { loaded, total });
+        });
+
+        let mut part = reqwest::blocking::multipart::Part::reader_with_length(reader, total)
+            .file_name(filename);
+        if let Some(candidate) = mime_type.filter(|value| !value.trim().is_empty()) {
+            part = part
+                .mime_str(&candidate)
+                .map_err(|e| format!("Invalid attachment MIME type: {e}"))?;
+        }
+        let form = reqwest::blocking::multipart::Form::new().part("file", part);
+
+        let host = parsed_url.host_str().unwrap_or_default();
+        let mut client_builder = reqwest::blocking::Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .timeout(std::time::Duration::from_secs(15 * 60));
+        if matches!(host, "localhost" | "127.0.0.1" | "::1") {
+            client_builder = client_builder.no_proxy();
+        }
+        let client = client_builder
+            .build()
+            .map_err(|e| format!("HTTP client error: {e}"))?;
+        let mut request = client.post(parsed_url).multipart(form);
+        if let Some(token) = authorization.filter(|value| !value.trim().is_empty()) {
+            request = request.bearer_auth(token);
+        }
+        let response = request
+            .send()
+            .map_err(|e| format!("Local file upload failed: {e}"))?;
+        let status = response.status().as_u16();
+        let body = response
+            .text()
+            .map_err(|e| format!("Failed to read upload response: {e}"))?;
+        Ok(LocalFileUploadResponse { status, body })
+    })
+    .await
 }
 
 /// Read a file from disk and return its contents as a base64 data-URL.
@@ -834,5 +941,34 @@ mod tests {
         let mut buf = vec![0xE4, 0xBB];
         assert_eq!(take_valid_utf8_prefix(&mut buf), "");
         assert_eq!(String::from_utf8_lossy(&buf), "\u{FFFD}");
+    }
+
+    #[test]
+    fn progress_reader_streams_bytes_and_reports_cumulative_progress() {
+        let updates = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let captured = updates.clone();
+        let input = b"streamed attachment".to_vec();
+        let total = input.len() as u64;
+        let mut reader = ProgressReader::new(
+            std::io::Cursor::new(input.clone()),
+            total,
+            move |loaded, total| {
+                captured.lock().unwrap().push((loaded, total));
+            },
+        );
+        let mut output = Vec::new();
+        let mut chunk = [0_u8; 4];
+        loop {
+            let read = reader.read(&mut chunk).unwrap();
+            if read == 0 {
+                break;
+            }
+            output.extend_from_slice(&chunk[..read]);
+        }
+
+        assert_eq!(output, input);
+        let updates = updates.lock().unwrap();
+        assert!(updates.len() > 1);
+        assert_eq!(updates.last(), Some(&(total, total)));
     }
 }
