@@ -149,6 +149,34 @@ class TestExtractedMediaDelivery:
         assert adapter.sent_files == [("chat-1", str(video_path))]
         assert adapter.fallback_texts == []
 
+    @pytest.mark.asyncio
+    async def test_adapter_without_file_capability_receives_explicit_notice(self, tmp_path):
+        from openakita.channels.media_parser import parse_media_from_text
+
+        video_path = tmp_path / "preview.mp4"
+        video_path.write_bytes(b"video")
+
+        class TextOnlyAdapter:
+            def __init__(self):
+                self.sent_texts: list[str] = []
+
+            @staticmethod
+            def has_capability(_name: str) -> bool:
+                return False
+
+            async def send_text(self, chat_id: str, text: str, **_kwargs) -> str:
+                self.sent_texts.append(text)
+                return "notice-message-id"
+
+        gateway = MessageGateway(session_manager=MagicMock())
+        adapter = TextOnlyAdapter()
+        original = create_channel_message(channel="wework_bot:test", chat_id="chat-1")
+        media_result = parse_media_from_text(f"MEDIA: {video_path}")
+
+        await gateway._send_extracted_media(adapter, original, media_result, {})
+
+        assert adapter.sent_texts == ["附件已生成，但当前通道不支持文件发送：preview.mp4"]
+
 
 class TestMessageGatewayBroadcast:
     @pytest.mark.asyncio
