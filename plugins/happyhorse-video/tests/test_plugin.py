@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
 from types import SimpleNamespace
 
+import httpx
 import pytest
 from _plugin_loader import load_happyhorse_plugin
+from fastapi import APIRouter, Depends, FastAPI
 
 _HH = load_happyhorse_plugin()
 HappyhorsePlugin = _HH.Plugin
@@ -35,6 +39,62 @@ EXPECTED_TOOLS = {
     "hh_storyboard_decompose",
     "hh_video_concat",
 }
+
+
+def _plugin_with_lifecycle_state(*, ready: bool, error: str | None = None):
+    plugin = HappyhorsePlugin.__new__(HappyhorsePlugin)
+    plugin._ready_event = asyncio.Event()
+    if ready:
+        plugin._ready_event.set()
+    plugin._init_error = error
+    plugin._stopping = False
+    return plugin
+
+
+@pytest.mark.asyncio
+async def test_settings_route_returns_503_until_plugin_is_ready():
+    plugin = _plugin_with_lifecycle_state(ready=False)
+    plugin._tm = SimpleNamespace(
+        get_all_config=lambda: pytest.fail("route ran before readiness dependency")
+    )
+    router = APIRouter(dependencies=[Depends(plugin._require_ready)])
+    plugin._register_routes(router)
+    app = FastAPI()
+    app.include_router(router)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        response = await client.get("/settings")
+
+    assert response.status_code == 503
+    assert response.headers["retry-after"] == "1"
+    assert "initializing" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_initialization_failure_is_retained_for_routes_and_tools():
+    plugin = _plugin_with_lifecycle_state(ready=False)
+
+    async def fail_init():
+        raise RuntimeError("database unavailable")
+
+    plugin._async_init = fail_init
+    await plugin._run_initialization()
+
+    assert plugin._lifecycle_status() == (
+        "failed",
+        "RuntimeError: database unavailable",
+    )
+    with pytest.raises(_HH.HTTPException) as exc_info:
+        await plugin._require_ready()
+    assert exc_info.value.status_code == 503
+    assert "database unavailable" in str(exc_info.value.detail)
+
+    payload = json.loads(await plugin._handle_tool("hh_status", {}))
+    assert payload["error_kind"] == "plugin_not_ready"
+    assert "database unavailable" in payload["error_message"]
 
 
 def test_plugin_registers_video_and_image_tools():

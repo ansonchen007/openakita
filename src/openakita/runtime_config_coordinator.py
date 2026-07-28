@@ -84,12 +84,31 @@ class RuntimeConfigCoordinator:
     def __init__(self, app_state: Any):
         self._state = app_state
 
-    def _agent_pools(self) -> list[tuple[str, Any]]:
+    @staticmethod
+    def _supports_pool_invalidation(pool: Any, *, profile_id: str | None) -> bool:
+        if profile_id is not None and hasattr(pool, "invalidate_profile"):
+            return True
+        return hasattr(pool, "notify_runtime_config_changed") or hasattr(
+            pool, "notify_skills_changed"
+        )
+
+    def _agent_pools(self, *, profile_id: str | None = None) -> list[tuple[str, Any]]:
         pools: list[tuple[str, Any]] = []
         seen: set[int] = set()
         for name in ("agent_pool", "orchestrator"):
             owner = getattr(self._state, name, None)
-            pool = getattr(owner, "_pool", owner)
+            if owner is None:
+                continue
+
+            if self._supports_pool_invalidation(owner, profile_id=profile_id):
+                pool = owner
+            elif hasattr(owner, "_pool"):
+                pool = owner._pool
+                if pool is None:
+                    # Lazy pool owners have no cached agent instances before initialization.
+                    continue
+            else:
+                pool = owner
             if pool is None or id(pool) in seen:
                 continue
             seen.add(id(pool))
@@ -121,7 +140,7 @@ class RuntimeConfigCoordinator:
         names: set[str] | None = None,
     ) -> RuntimeApplyResult:
         result = RuntimeApplyResult(apply_mode=ConfigApplyMode.NEXT_TASK)
-        for name, pool in self._agent_pools():
+        for name, pool in self._agent_pools(profile_id=profile_id):
             if names is not None and name not in names:
                 continue
             try:

@@ -37,6 +37,48 @@ def test_invalidate_agent_pools_covers_desktop_and_orchestrator() -> None:
     assert orchestrator.reasons == ["identity"]
 
 
+def test_real_agent_pool_is_not_unwrapped_to_its_internal_entry_dict() -> None:
+    from openakita.agents.factory import AgentInstancePool
+    from openakita.runtime_config_coordinator import RuntimeConfigCoordinator
+
+    pool = AgentInstancePool()
+    assert isinstance(pool._pool, dict)
+
+    result = RuntimeConfigCoordinator(SimpleNamespace(agent_pool=pool)).plugin_changed(
+        "demo",
+        "installed",
+    )
+
+    assert result.warnings == []
+    assert result.invalidated == ["agent_pool"]
+    assert pool._runtime_config_version == 1
+
+
+def test_uninitialized_lazy_orchestrator_pool_is_skipped_without_warning() -> None:
+    from openakita.runtime_config_coordinator import RuntimeConfigCoordinator
+
+    state = SimpleNamespace(
+        agent_pool=_Pool(),
+        orchestrator=SimpleNamespace(_pool=None),
+    )
+
+    result = RuntimeConfigCoordinator(state).plugin_changed("demo", "installed")
+
+    assert result.warnings == []
+    assert result.invalidated == ["agent_pool"]
+
+
+def test_initialized_unsupported_orchestrator_pool_still_warns() -> None:
+    from openakita.runtime_config_coordinator import RuntimeConfigCoordinator
+
+    state = SimpleNamespace(orchestrator=SimpleNamespace(_pool=object()))
+
+    result = RuntimeConfigCoordinator(state).plugin_changed("demo", "installed")
+
+    assert result.warnings == ["orchestrator: pool invalidation is not supported"]
+    assert result.invalidated == []
+
+
 def test_pool_invalidation_runs_in_registered_engine_thread() -> None:
     from openakita.core import engine_bridge
     from openakita.runtime_config_coordinator import RuntimeConfigCoordinator

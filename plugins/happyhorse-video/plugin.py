@@ -59,7 +59,7 @@ from io import BytesIO
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel, Field, ValidationError
 
 PLUGIN_DIR = Path(__file__).resolve().parent
@@ -495,13 +495,19 @@ class Plugin(PluginBase):
         """Report local prerequisites required by organization workbench nodes."""
 
         missing: list[str] = []
+        lifecycle_status, lifecycle_error = self._lifecycle_status()
+        if lifecycle_status != "ready":
+            missing.append(f"plugin_{lifecycle_status}")
         if not self._client.has_api_key():
             missing.append("dashscope_api_key")
         if not self._oss.is_configured():
             missing.append("oss")
         if not ffmpeg_available():
             missing.append("ffmpeg")
-        return {"ready": not missing, "missing_requirements": missing}
+        result: dict[str, Any] = {"ready": not missing, "missing_requirements": missing}
+        if lifecycle_error:
+            result["initialization_error"] = lifecycle_error
+        return result
 
     def on_load(self, api: PluginAPI) -> None:
         self._api = api
@@ -518,6 +524,9 @@ class Plugin(PluginBase):
         self._storyboard_decompose_lock = asyncio.Lock()
         self._storyboard_decompose_running = False
         self._sse_subscribers: list[asyncio.Queue[dict[str, Any]]] = []
+        self._ready_event = asyncio.Event()
+        self._init_error: str | None = None
+        self._stopping = False
 
         # Lazy preinstall — non-fatal if it fails (install on first use).
         try:
@@ -537,21 +546,58 @@ class Plugin(PluginBase):
             )
 
         router = APIRouter()
-        add_upload_preview_route(router, base_dir=self._uploads_dir)
-        self._register_routes(router)
+        self._register_lifecycle_routes(router)
+        ready_router = APIRouter(dependencies=[Depends(self._require_ready)])
+        add_upload_preview_route(ready_router, base_dir=self._uploads_dir)
+        self._register_routes(ready_router)
+        router.include_router(ready_router)
         api.register_api_routes(router)
         api.register_tools(self._tool_definitions(), handler=self._handle_tool)
 
-        api.spawn_task(self._async_init(), name=f"{PLUGIN_ID}:init")
+        api.spawn_task(self._run_initialization(), name=f"{PLUGIN_ID}:init")
         registered_tools = len(self._tool_definitions())
         api.log(
             f"happyhorse-video loaded — Studio modes (video + image), "
             f"{registered_tools} tools, single DashScope backend",
         )
 
+    def _lifecycle_status(self) -> tuple[str, str | None]:
+        if self._stopping:
+            return "stopping", None
+        if not self._ready_event.is_set():
+            return "initializing", None
+        if self._init_error:
+            return "failed", self._init_error
+        return "ready", None
+
+    async def _require_ready(self) -> None:
+        status, error = self._lifecycle_status()
+        if status == "ready":
+            return
+        detail = f"happyhorse-video is {status}"
+        if error:
+            detail = f"{detail}: {error}"
+        raise HTTPException(
+            status_code=503,
+            detail=detail,
+            headers={"Retry-After": "1"},
+        )
+
+    async def _run_initialization(self) -> None:
+        try:
+            await self._async_init()
+        except asyncio.CancelledError:
+            self._stopping = True
+            raise
+        except Exception as exc:  # noqa: BLE001
+            self._init_error = f"{type(exc).__name__}: {exc}"
+            logger.exception("happyhorse-video initialization failed")
+        finally:
+            self._ready_event.set()
+
     async def _async_init(self) -> None:
         await self._tm.init()
-        await self._reload_settings_cache()
+        await self._reload_settings_cache(strict=True)
         try:
             stale = await self._tm.list_tasks(status="running", limit=200)
             for row in stale:
@@ -605,6 +651,8 @@ class Plugin(PluginBase):
             )
 
     async def on_unload(self) -> None:
+        self._stopping = True
+        self._ready_event.set()
         for tid, t in list(self._poll_tasks.items()):
             if not t.done():
                 t.cancel()
@@ -775,12 +823,14 @@ class Plugin(PluginBase):
             return str(spec.to_dict().get("dashscope_voice_id") or vid)
         return vid
 
-    async def _reload_settings_cache(self) -> None:
+    async def _reload_settings_cache(self, *, strict: bool = False) -> None:
         try:
             self._settings_cache = await self._tm.get_all_config()
         except Exception as exc:  # noqa: BLE001
             logger.warning("happyhorse-video: settings reload error: %s", exc)
             self._settings_cache = {}
+            if strict:
+                raise
 
     # ── Workbench protocol contract ────────────────────────────────────
 
@@ -2511,6 +2561,20 @@ class Plugin(PluginBase):
     # ── LLM tool dispatch ──────────────────────────────────────────────
 
     async def _handle_tool(self, tool_name: str, args: dict[str, Any]) -> str:
+        status, error = self._lifecycle_status()
+        if status != "ready":
+            return json.dumps(
+                {
+                    "ok": False,
+                    "terminal": False,
+                    "status": "unavailable",
+                    "error_kind": "plugin_not_ready",
+                    "error_message": (
+                        f"happyhorse-video is {status}" + (f": {error}" if error else "")
+                    ),
+                },
+                ensure_ascii=False,
+            )
         if tool_name == "hh_status":
             return await self._tool_status(args)
         if tool_name == "hh_list":
@@ -4224,17 +4288,7 @@ class Plugin(PluginBase):
             removed = await self._tm.cleanup_expired(retention_days=retention_days)
             return {"ok": True, "removed": removed}
 
-        # Health + python-deps ------------------------------------------
-        @router.get("/healthz")
-        async def healthz() -> dict:
-            return {
-                "ok": True,
-                "version": "1.0.0",
-                "has_api_key": self._client.has_api_key(),
-                "oss_configured": self._oss.is_configured(),
-                "ffmpeg_available": ffmpeg_available(),
-            }
-
+        # Python dependencies ------------------------------------------
         @router.get("/python-deps/status")
         async def deps_status() -> dict:
             try:
@@ -4486,6 +4540,24 @@ class Plugin(PluginBase):
                 return self._sysdeps.status(dep_id)
             except ValueError as exc:
                 raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    def _register_lifecycle_routes(self, router: APIRouter) -> None:
+        """Expose readiness independently from routes that require SQLite."""
+
+        @router.get("/healthz")
+        async def healthz() -> dict:
+            status, error = self._lifecycle_status()
+            result = {
+                "ok": status == "ready",
+                "status": status,
+                "version": "1.0.0",
+                "has_api_key": self._client.has_api_key(),
+                "oss_configured": self._oss.is_configured(),
+                "ffmpeg_available": ffmpeg_available(),
+            }
+            if error:
+                result["initialization_error"] = error
+            return result
 
     # ── /upload handler (factored out so tests can target it) ─────────
 

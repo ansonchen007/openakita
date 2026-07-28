@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import textwrap
 
@@ -239,6 +240,87 @@ class TestUnload:
         mgr = PluginManager(plugins_dir, state_path=tmp_path / "state.json")
         result = await mgr.unload_plugin("ghost")
         assert result is False
+
+    async def test_unload_stops_spawned_tasks_before_on_unload(self, tmp_path):
+        plugins_dir = tmp_path / "plugins"
+        plugins_dir.mkdir()
+        plugin_dir = _make_plugin_dir(plugins_dir, "ordered-unload")
+        (plugin_dir / "plugin.py").write_text(
+            textwrap.dedent("""\
+                import asyncio
+                from openakita.plugins.api import PluginAPI, PluginBase
+
+                class Plugin(PluginBase):
+                    def on_load(self, api: PluginAPI) -> None:
+                        self.worker_cancelled = False
+                        self.unload_saw_cancelled = False
+                        api.spawn_task(self._initialize(), name="ordered-unload:init")
+
+                    async def _initialize(self) -> None:
+                        try:
+                            await asyncio.sleep(60)
+                        except asyncio.CancelledError:
+                            self.worker_cancelled = True
+                            raise
+
+                    async def on_unload(self) -> None:
+                        self.unload_saw_cancelled = self.worker_cancelled
+            """),
+            encoding="utf-8",
+        )
+        mgr = PluginManager(plugins_dir, state_path=tmp_path / "state.json")
+        await mgr.load_all()
+        loaded = mgr.get_loaded("ordered-unload")
+        assert loaded is not None
+        await asyncio.sleep(0)
+
+        await mgr.unload_plugin("ordered-unload")
+
+        assert loaded.instance is not None
+        assert loaded.instance.unload_saw_cancelled is True
+
+
+class TestOperationSerialization:
+    async def test_concurrent_reloads_of_same_plugin_are_serialized(self, tmp_path, monkeypatch):
+        plugins_dir = tmp_path / "plugins"
+        plugins_dir.mkdir()
+        mgr = PluginManager(plugins_dir, state_path=tmp_path / "state.json")
+        active = 0
+        maximum = 0
+
+        async def fake_reload(plugin_id: str) -> None:
+            nonlocal active, maximum
+            assert plugin_id == "demo"
+            active += 1
+            maximum = max(maximum, active)
+            await asyncio.sleep(0.02)
+            active -= 1
+
+        monkeypatch.setattr(mgr, "_reload_plugin_runtime", fake_reload)
+
+        await asyncio.gather(mgr.reload_plugin("demo"), mgr.reload_plugin("demo"))
+
+        assert maximum == 1
+
+    async def test_different_plugins_do_not_share_lifecycle_lock(self, tmp_path, monkeypatch):
+        plugins_dir = tmp_path / "plugins"
+        plugins_dir.mkdir()
+        mgr = PluginManager(plugins_dir, state_path=tmp_path / "state.json")
+        both_running = asyncio.Event()
+        active: set[str] = set()
+
+        async def fake_reload(plugin_id: str) -> None:
+            active.add(plugin_id)
+            if len(active) == 2:
+                both_running.set()
+            await asyncio.wait_for(both_running.wait(), timeout=1)
+            active.remove(plugin_id)
+
+        monkeypatch.setattr(mgr, "_reload_plugin_runtime", fake_reload)
+
+        await asyncio.gather(mgr.reload_plugin("one"), mgr.reload_plugin("two"))
+
+        assert both_running.is_set()
 
 
 # ---------- disable ----------

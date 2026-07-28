@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 import pytest
@@ -136,3 +137,57 @@ async def test_count_tasks(tm: HappyhorseTaskManager):
     await tm.create_task(mode="t2v")
     await tm.create_task(mode="i2v")
     assert await tm.count_tasks() == 3
+
+
+@pytest.mark.asyncio
+async def test_close_waits_for_initialization_and_leaves_manager_reusable(tmp_path: Path):
+    mgr = HappyhorseTaskManager(tmp_path / "lifecycle.db")
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    original = mgr._init_default_config
+
+    async def paused_init(connection):
+        entered.set()
+        await release.wait()
+        await original(connection)
+
+    mgr._init_default_config = paused_init
+    init_task = asyncio.create_task(mgr.init())
+    await entered.wait()
+    close_task = asyncio.create_task(mgr.close())
+    await asyncio.sleep(0)
+    assert not close_task.done()
+
+    release.set()
+    await asyncio.gather(init_task, close_task)
+    assert mgr._db is None
+
+    mgr._init_default_config = original
+    await mgr.init()
+    await mgr.set_config("api_key", "sk-recovered")
+    assert (await mgr.get_all_config())["api_key"] == "sk-recovered"
+    await mgr.close()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_initialization_closes_private_connection_and_can_retry(tmp_path: Path):
+    mgr = HappyhorseTaskManager(tmp_path / "cancelled-init.db")
+    entered = asyncio.Event()
+    original = mgr._init_default_config
+
+    async def blocked_init(connection):
+        entered.set()
+        await asyncio.Event().wait()
+
+    mgr._init_default_config = blocked_init
+    init_task = asyncio.create_task(mgr.init())
+    await entered.wait()
+    init_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await init_task
+    assert mgr._db is None
+
+    mgr._init_default_config = original
+    await mgr.init()
+    assert await mgr.get_all_config()
+    await mgr.close()

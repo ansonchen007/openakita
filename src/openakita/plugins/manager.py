@@ -181,6 +181,16 @@ class PluginManager:
         # 问题崩溃，每次 load_all/auto-restart 都打一行长 traceback）。
         # 用户主动 ``reload_plugin`` 会重置该时间戳。
         self._failed_at: dict[str, float] = {}
+        # Lifecycle operations are serialized per plugin. Different plugins
+        # can still load/unload concurrently during startup and shutdown.
+        self._operation_locks: dict[str, asyncio.Lock] = {}
+
+    def _operation_lock(self, plugin_id: str) -> asyncio.Lock:
+        lock = self._operation_locks.get(plugin_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._operation_locks[plugin_id] = lock
+        return lock
 
     @staticmethod
     def _filter_host_refs(host_refs: dict[str, Any]) -> dict[str, Any]:
@@ -1306,12 +1316,13 @@ class PluginManager:
         collect_garbage: bool = True,
     ) -> bool:
         """Unload a plugin and invalidate policy classification when tools changed."""
-        changed, runtime_changed = await self._unload_plugin_runtime(
-            plugin_id,
-            collect_garbage=collect_garbage,
-        )
-        if runtime_changed:
-            self._invalidate_policy_classifier_cache(plugin_id)
+        async with self._operation_lock(plugin_id):
+            changed, runtime_changed = await self._unload_plugin_runtime(
+                plugin_id,
+                collect_garbage=collect_garbage,
+            )
+            if runtime_changed:
+                self._invalidate_policy_classifier_cache(plugin_id)
         return changed
 
     async def _unload_plugin_runtime(
@@ -1337,21 +1348,30 @@ class PluginManager:
             # let the caller know the operation actually changed state.
             return had_failure, False
 
-        # 1. Plugin's own on_unload — best effort, never blocks the rest.
+        # 1. Stop tracked tasks before the plugin closes their SQLite/HTTP
+        #    resources in on_unload. This ordering prevents an in-flight
+        #    initialization task from resuming against a closed connection.
+        try:
+            await loaded.api.stop_background_tasks()
+        except Exception as e:
+            logger.warning("Plugin '%s' background task stop error: %s", plugin_id, e)
+
+        # 2. Plugin's own on_unload — best effort, never blocks the rest.
         try:
             if loaded.instance:
                 await self._invoke_on_unload(loaded.instance, plugin_id)
         except (TimeoutError, Exception) as e:
             logger.warning("Plugin '%s' on_unload error: %s", plugin_id, e)
 
-        # 2. Cancel framework-tracked background tasks, then run async/sync
-        #    capability cleanup (routes, hooks, MCP, etc.) on the main loop.
+        # 3. Run remaining async/sync capability cleanup (routes, hooks, MCP,
+        #    etc.) on the main loop. Task stopping is idempotently repeated by
+        #    aclose for callers that use PluginAPI directly.
         try:
             await loaded.api.aclose()
         except Exception as e:
             logger.warning("Plugin '%s' aclose error: %s", plugin_id, e)
 
-        # 2b. Sweep up "stray" tasks the plugin scheduled itself — e.g.
+        # 4. Sweep up "stray" tasks the plugin scheduled itself — e.g.
         #     ``asyncio.get_event_loop().create_task(self._poll_loop())`` from
         #     on_load, which never went through ``api.spawn_task`` and is
         #     therefore invisible to ``_cancel_spawned_tasks``. We identify
@@ -1472,19 +1492,26 @@ class PluginManager:
             logger.debug("Plugin '%s' awaiting stray task cancellation: %s", plugin_id, e)
 
     async def disable_plugin(self, plugin_id: str, reason: str = "user") -> None:
-        self._state.disable(plugin_id, reason)
-        await self.unload_plugin(plugin_id)
-        self._save_state()
+        async with self._operation_lock(plugin_id):
+            self._state.disable(plugin_id, reason)
+            changed, runtime_changed = await self._unload_plugin_runtime(
+                plugin_id,
+                collect_garbage=True,
+            )
+            if changed and runtime_changed:
+                self._invalidate_policy_classifier_cache(plugin_id)
+            self._save_state()
 
     async def enable_plugin(self, plugin_id: str) -> None:
-        self._state.enable(plugin_id)
-        self._error_tracker.reset(plugin_id)
-        self._save_state()
-        if plugin_id not in self._loaded:
-            try:
-                await self.reload_plugin(plugin_id)
-            except Exception as e:
-                logger.warning("Failed to auto-reload plugin '%s' on enable: %s", plugin_id, e)
+        async with self._operation_lock(plugin_id):
+            self._state.enable(plugin_id)
+            self._error_tracker.reset(plugin_id)
+            self._save_state()
+            if plugin_id not in self._loaded:
+                try:
+                    await self._reload_plugin_runtime(plugin_id)
+                except Exception as e:
+                    logger.warning("Failed to auto-reload plugin '%s' on enable: %s", plugin_id, e)
 
     def _on_plugin_auto_disabled(self, plugin_id: str) -> None:
         """Callback when PluginErrorTracker auto-disables a plugin.
@@ -1613,6 +1640,11 @@ class PluginManager:
 
     async def reload_plugin(self, plugin_id: str) -> None:
         """Unload then re-load a plugin (e.g. after granting new permissions)."""
+        async with self._operation_lock(plugin_id):
+            await self._reload_plugin_runtime(plugin_id)
+
+    async def _reload_plugin_runtime(self, plugin_id: str) -> None:
+        """Reload one plugin while its per-plugin operation lock is held."""
         loaded = self._loaded.get(plugin_id)
         if loaded is not None:
             plugin_dir = loaded.plugin_dir
@@ -1788,9 +1820,7 @@ class PluginManager:
                     )
                     return False
                 except Exception as exc:  # noqa: BLE001 -- shutdown must never raise
-                    logger.warning(
-                        "[Shutdown] Plugin '%s' unload failed: %s", pid, exc
-                    )
+                    logger.warning("[Shutdown] Plugin '%s' unload failed: %s", pid, exc)
                     return False
 
         results = await asyncio.gather(*[_one(pid) for pid in plugin_ids])
@@ -1836,7 +1866,6 @@ class PluginManager:
         all_lines = log_file.read_text(encoding="utf-8", errors="replace").splitlines()
         tail = all_lines[-lines:]
         return "\n".join(tail)
-
 
     def _maybe_warn_on_source_drift(self) -> None:
         """Emit WARN logs if ``plugins/`` is newer than ``data/plugins/``.

@@ -379,7 +379,8 @@ async def list_plugins(request: Request) -> dict[str, Any]:
         # before install_source was tracked. Cheap (just a dir scan) and
         # idempotent — entries that already have install_source are skipped.
         _backfill_install_source_from_symlink(pm, plugins_dir)
-        await _sync_new_plugins(pm, plugins_dir)
+        async with _plugin_op_lock:
+            await _sync_new_plugins(pm, plugins_dir)
         plugins, failed = _build_plugin_list(pm, plugins_dir)
         return {"ok": True, "data": {"plugins": plugins, "failed": failed}}
     except Exception as e:
@@ -1239,10 +1240,11 @@ async def grant_permissions(
 ) -> dict[str, Any]:
     """Grant permissions to a plugin and optionally reload it."""
     _check_plugin_id(plugin_id)
-    pm = _require_manager(request)
-    pm.approve_permissions(plugin_id, body.permissions)
-    if body.reload:
-        await pm.reload_plugin(plugin_id)
+    async with _plugin_op_lock:
+        pm = _require_manager(request)
+        pm.approve_permissions(plugin_id, body.permissions)
+        if body.reload:
+            await pm.reload_plugin(plugin_id)
     from openakita.runtime_config_coordinator import get_runtime_config_coordinator
 
     runtime = get_runtime_config_coordinator(request).plugin_changed(
@@ -1263,10 +1265,11 @@ async def revoke_permissions(
 ) -> dict[str, Any]:
     """Revoke permissions from a plugin and optionally reload it."""
     _check_plugin_id(plugin_id)
-    pm = _require_manager(request)
-    pm.revoke_permissions(plugin_id, body.permissions)
-    if body.reload:
-        await pm.reload_plugin(plugin_id)
+    async with _plugin_op_lock:
+        pm = _require_manager(request)
+        pm.revoke_permissions(plugin_id, body.permissions)
+        if body.reload:
+            await pm.reload_plugin(plugin_id)
     from openakita.runtime_config_coordinator import get_runtime_config_coordinator
 
     runtime = get_runtime_config_coordinator(request).plugin_changed(
