@@ -2944,6 +2944,20 @@
     "llmEndpointsDesc": "模型端点状态与健康检查"
   },
   "org": {
+    "templatePicker": {
+      "trigger": "新建组织",
+      "title": "选择组织模板",
+      "description": "从内置模板创建一个新组织。选择模板并输入组织名称后即可继续。",
+      "loading": "加载模板中…",
+      "loadError": "无法加载组织模板：{{error}}",
+      "createError": "无法创建组织：{{error}}",
+      "empty": "暂无可用的组织模板。",
+      "selected": "已选中",
+      "nodeCount": "{{count}} 个节点",
+      "nameLabel": "新组织名称",
+      "namePlaceholder": "例如：Acme 编辑部",
+      "create": "创建组织"
+    },
     "taskStatus": {
       "todo": "待办",
       "inProgress": "进行中",
