@@ -220,13 +220,27 @@ pub(crate) fn install_bundled_python_sync(
         "安装包内置 Python 不可用。请重新安装 OpenAkita 以恢复 resources/bootstrap/python"
             .to_string()
     })?;
-    Ok(BundledPythonInstallResult {
-        python_command: vec![py.to_string_lossy().to_string()],
-        python_path: py.to_string_lossy().to_string(),
-        install_dir: bootstrap_resource_dir().to_string_lossy().to_string(),
+    Ok(bundled_python_install_result(
+        &py,
+        &bootstrap_resource_dir(),
+    ))
+}
+
+pub(crate) fn bundled_python_install_result(
+    python_path: &Path,
+    install_dir: &Path,
+) -> BundledPythonInstallResult {
+    BundledPythonInstallResult {
+        python_command: vec![python_path.to_string_lossy().to_string()],
+        python_path: python_path.to_string_lossy().to_string(),
+        install_dir: install_dir.to_string_lossy().to_string(),
         asset_name: "managed-python-seed".to_string(),
         tag: "bootstrap".to_string(),
-    })
+    }
+}
+
+pub(crate) fn effective_pip_install_index(index_url: Option<&str>) -> &str {
+    index_url.unwrap_or(DEFAULT_PIP_INDEX_URL)
 }
 
 #[tauri::command]
@@ -613,8 +627,7 @@ pub(crate) async fn pip_install(
         )?;
 
         // 国内镜像兜底：前端未传 index_url 时默认使用阿里云
-        let effective_index = index_url.as_deref()
-            .unwrap_or("https://mirrors.aliyun.com/pypi/simple/");
+        let effective_index = effective_pip_install_index(index_url.as_deref());
         let effective_host = effective_index
             .split("//").nth(1).unwrap_or("")
             .split('/').next().unwrap_or("");
@@ -861,6 +874,32 @@ mod tests {
         assert!(PIP_NETWORK_OPTIONS.contains(&"--retries"));
         assert!(PIP_NETWORK_OPTIONS.contains(&"--progress-bar"));
         assert!(!PIP_NETWORK_OPTIONS.contains(&"--resume-retries"));
+    }
+
+    #[test]
+    fn pip_install_defaults_to_the_domestic_index() {
+        assert_eq!(effective_pip_install_index(None), DEFAULT_PIP_INDEX_URL);
+        assert_eq!(
+            effective_pip_install_index(Some("https://pypi.org/simple/")),
+            "https://pypi.org/simple/"
+        );
+    }
+
+    #[test]
+    fn bundled_python_install_result_reports_the_managed_seed() {
+        let install_dir = Path::new("bootstrap");
+        let python = install_dir.join("python").join(if cfg!(windows) {
+            "python.exe"
+        } else {
+            "bin/python3"
+        });
+
+        let result = bundled_python_install_result(&python, install_dir);
+
+        assert_eq!(result.python_command, vec![result.python_path.clone()]);
+        assert_eq!(result.install_dir, install_dir.to_string_lossy());
+        assert_eq!(result.asset_name, "managed-python-seed");
+        assert_eq!(result.tag, "bootstrap");
     }
 
     #[test]

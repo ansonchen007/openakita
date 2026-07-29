@@ -5,8 +5,10 @@ Tests the helper functions in openakita.runtime_env that locate Python executabl
 and virtual environments across different directory layouts (Linux bin/, Windows Scripts/).
 """
 
+import os
 import sys
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -346,3 +348,91 @@ def test_mcp_command_resolution_returns_none_when_npx_missing(monkeypatch, tmp_p
 
 def test_runtime_manager_facade_exposes_runtime_report():
     assert callable(manager_runtime_report)
+
+
+class TestInjectModulePaths:
+    def test_inject_adds_existing_site_packages(self, tmp_path):
+        modules_dir = tmp_path / "modules"
+        expected = [
+            modules_dir / "vector-memory" / "site-packages",
+            modules_dir / "browser" / "site-packages",
+        ]
+        for path in expected:
+            path.mkdir(parents=True)
+
+        try:
+            with patch("openakita.runtime_env._get_openakita_root", return_value=tmp_path):
+                from openakita.runtime_env import inject_module_paths_runtime
+
+                count = inject_module_paths_runtime()
+
+            assert count == 2
+            assert all(str(path) in sys.path for path in expected)
+        finally:
+            sys.path = [path for path in sys.path if str(tmp_path) not in path]
+
+    def test_inject_skips_nonexistent_dirs(self, tmp_path):
+        with patch("openakita.runtime_env._get_openakita_root", return_value=tmp_path):
+            from openakita.runtime_env import inject_module_paths_runtime
+
+            assert inject_module_paths_runtime() == 0
+
+    def test_inject_is_idempotent(self, tmp_path):
+        site_packages = tmp_path / "modules" / "orchestration" / "site-packages"
+        site_packages.mkdir(parents=True)
+
+        try:
+            with patch("openakita.runtime_env._get_openakita_root", return_value=tmp_path):
+                from openakita.runtime_env import inject_module_paths_runtime
+
+                assert inject_module_paths_runtime() == 1
+                assert inject_module_paths_runtime() == 0
+
+            assert sys.path.count(str(site_packages)) == 1
+        finally:
+            sys.path = [path for path in sys.path if str(tmp_path) not in path]
+
+    def test_inject_appends_module_paths(self, tmp_path):
+        site_packages = tmp_path / "modules" / "whisper" / "site-packages"
+        site_packages.mkdir(parents=True)
+        original = list(sys.path)
+
+        try:
+            with patch("openakita.runtime_env._get_openakita_root", return_value=tmp_path):
+                from openakita.runtime_env import inject_module_paths_runtime
+
+                inject_module_paths_runtime()
+
+            assert sys.path[: len(original)] == original
+            assert sys.path[-1] == str(site_packages)
+        finally:
+            sys.path = [path for path in sys.path if str(tmp_path) not in path]
+
+
+class TestRegisterDllDirectories:
+    @pytest.mark.skipif(sys.platform != "win32", reason="Windows only")
+    def test_registers_torch_lib(self, tmp_path):
+        site_packages = tmp_path / "site-packages"
+        torch_lib = site_packages / "torch" / "lib"
+        torch_lib.mkdir(parents=True)
+        (torch_lib / "c10.dll").write_text("fake", encoding="utf-8")
+        sys.path.append(str(site_packages))
+
+        try:
+            os_mock = MagicMock()
+            os_mock.environ = dict(os.environ)
+
+            from openakita.runtime_env import _register_dll_directories
+
+            _register_dll_directories(os_mock)
+
+            registered = [call.args[0] for call in os_mock.add_dll_directory.call_args_list]
+            assert str(torch_lib) in registered
+        finally:
+            sys.path.remove(str(site_packages))
+
+    def test_module_injection_does_not_fail_without_module_directories(self, tmp_path):
+        from openakita.runtime_env import inject_module_paths_runtime
+
+        with patch("openakita.runtime_env._get_openakita_root", return_value=tmp_path):
+            inject_module_paths_runtime()

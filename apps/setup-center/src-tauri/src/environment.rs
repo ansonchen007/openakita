@@ -1,21 +1,62 @@
 use crate::prelude::*;
 
-pub(crate) fn module_definitions() -> Vec<(
-    &'static str,
-    &'static str,
-    &'static str,
-    &'static [&'static str],
-    u32,
-    &'static str,
-)> {
-    // (id, name, description, pip_packages, estimated_size_mb, category)
-    //
-    // 仅体积大(>50MB)或有特殊二进制依赖的包才需要模块化安装。
-    // 其余轻量包(文档处理/图像处理/桌面自动化/IM适配器等)随 core wheel 安装。
-    // browser (playwright + browser-use + langchain-openai) 已内置到 core 包，不再作为外置模块
-    vec![
-        ("vector-memory", "向量记忆增强", "让 Akita 拥有长期记忆，能根据语义搜索历史对话。体积较大（约 2.5GB，含 PyTorch），安装耗时较长", &["sentence-transformers", "chromadb", "regex>=2023.6.3"], 2500, "core"),
-    ]
+const OPTIONAL_MODULES_MANIFEST: &str =
+    include_str!("../../../../src/openakita/optional_modules.json");
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct OptionalModulesManifest {
+    pub(crate) modules: Vec<OptionalModuleDefinition>,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Deserialize)]
+pub(crate) struct OptionalModuleDefinition {
+    pub(crate) id: String,
+    pub(crate) name: String,
+    pub(crate) description: String,
+    pub(crate) packages: Vec<String>,
+    pub(crate) estimated_size_mb: u32,
+    pub(crate) category: String,
+}
+
+pub(crate) fn parse_optional_modules_manifest(
+    content: &str,
+) -> Result<OptionalModulesManifest, serde_json::Error> {
+    serde_json::from_str(content)
+}
+
+pub(crate) fn module_definitions() -> Vec<OptionalModuleDefinition> {
+    parse_optional_modules_manifest(OPTIONAL_MODULES_MANIFEST)
+        .expect("embedded optional modules manifest must be valid JSON")
+        .modules
+}
+
+#[cfg(test)]
+mod optional_modules_tests {
+    use super::*;
+    use std::collections::HashSet;
+
+    #[test]
+    fn embedded_optional_module_manifest_has_complete_unique_definitions() {
+        let definitions = module_definitions();
+        let mut ids = HashSet::new();
+
+        assert_eq!(definitions.len(), 3);
+        for definition in &definitions {
+            assert!(!definition.id.trim().is_empty());
+            assert!(ids.insert(definition.id.as_str()), "duplicate module id");
+            assert!(!definition.name.trim().is_empty());
+            assert!(!definition.description.trim().is_empty());
+            assert!(!definition.packages.is_empty());
+            assert!(definition.estimated_size_mb > 0);
+            assert!(!definition.category.trim().is_empty());
+        }
+
+        assert_eq!(
+            ids,
+            HashSet::from(["vector-memory", "whisper", "orchestration"])
+        );
+    }
 }
 
 #[derive(Debug, Serialize, Clone)]

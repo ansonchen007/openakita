@@ -661,9 +661,11 @@ async def test_cancel_event_set_when_cancel_token_fired() -> None:
     """
     from openakita.agent.supervisor_brain import PassThroughSupervisorBrain
 
+    entered = asyncio.Event()
     finished = asyncio.Event()
 
     async def _slow_deliver(speaker: str, instruction: str, progress: ProgressLedger) -> DelegationResult:
+        entered.set()
         try:
             await asyncio.sleep(10.0)
         except asyncio.CancelledError:
@@ -695,12 +697,10 @@ async def test_cancel_event_set_when_cancel_token_fired() -> None:
     res = await svc.submit(OrgCommandRequest(org_id="o1", content="cancel me"))
     cid = res["command_id"]
 
-    # Spin briefly so the background task built the supervisor and
-    # registered it in _active_supervisors.
-    for _ in range(50):
-        if cid in svc._active_supervisors:
-            break
-        await asyncio.sleep(0.02)
+    # Wait until the coroutine whose cancellation we assert has actually
+    # started. Merely observing the supervisor registry leaves a race where
+    # cancellation can land at an earlier checkpoint and skip deliver.
+    await asyncio.wait_for(entered.wait(), timeout=2.0)
     assert cid in svc._active_supervisors, "supervisor never registered"
 
     supervisor = captured["supervisor"]
