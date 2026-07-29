@@ -1,5 +1,26 @@
 use crate::prelude::*;
 
+pub(crate) fn pypi_json_urls(package: &str, index_url: Option<&str>) -> Vec<String> {
+    let mut urls = Vec::new();
+    if let Some(index_url) = index_url {
+        let root = index_url.trim_end_matches('/').trim_end_matches("/simple");
+        let json_root = if root.ends_with("/pypi") {
+            root.to_string()
+        } else {
+            format!("{root}/pypi")
+        };
+        urls.push(format!("{json_root}/{package}/json"));
+    }
+
+    for fallback_root in ["https://pypi.tuna.tsinghua.edu.cn", "https://pypi.org"] {
+        let fallback = format!("{fallback_root}/pypi/{package}/json");
+        if !urls.contains(&fallback) {
+            urls.push(fallback);
+        }
+    }
+    urls
+}
+
 /// Fetch available versions of a package from PyPI JSON API.
 /// Returns JSON array of version strings, newest first.
 #[tauri::command]
@@ -11,23 +32,7 @@ pub(crate) async fn fetch_pypi_versions(
         // 构建候选 URL 列表，多源回退
         // 注意：并非所有 PyPI 镜像都支持 /pypi/<pkg>/json API（阿里云不支持）
         // 因此即使用户指定了 index_url，也要带上已验证可用的回退源
-        let mut urls: Vec<String> = Vec::new();
-        if let Some(ref idx) = index_url {
-            let root = idx
-                .trim_end_matches('/')
-                .trim_end_matches("/simple")
-                .trim_end_matches("/simple/");
-            urls.push(format!("{}/pypi/{}/json", root, package));
-        }
-        // 清华（已验证支持 JSON API）和官方 PyPI 作为回退
-        let tuna_url = format!("https://pypi.tuna.tsinghua.edu.cn/pypi/{}/json", package);
-        let pypi_url = format!("https://pypi.org/pypi/{}/json", package);
-        if !urls.iter().any(|u| u.contains("tuna.tsinghua")) {
-            urls.push(tuna_url);
-        }
-        if !urls.iter().any(|u| u.contains("pypi.org")) {
-            urls.push(pypi_url);
-        }
+        let urls = pypi_json_urls(&package, index_url.as_deref());
 
         let client = reqwest::blocking::Client::builder()
             .timeout(std::time::Duration::from_secs(10))
@@ -786,6 +791,29 @@ pub(crate) fn export_env_backup(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pypi_json_urls_keep_requested_source_then_known_fallbacks() {
+        assert_eq!(
+            pypi_json_urls("openakita", Some("https://mirrors.aliyun.com/pypi/simple/")),
+            vec![
+                "https://mirrors.aliyun.com/pypi/openakita/json",
+                "https://pypi.tuna.tsinghua.edu.cn/pypi/openakita/json",
+                "https://pypi.org/pypi/openakita/json",
+            ]
+        );
+    }
+
+    #[test]
+    fn pypi_json_urls_do_not_duplicate_an_official_source() {
+        assert_eq!(
+            pypi_json_urls("openakita", Some("https://pypi.org/simple/")),
+            vec![
+                "https://pypi.org/pypi/openakita/json",
+                "https://pypi.tuna.tsinghua.edu.cn/pypi/openakita/json",
+            ]
+        );
+    }
 
     #[test]
     fn test_utf8_prefix_passes_through_complete_text() {

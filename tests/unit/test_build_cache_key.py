@@ -7,6 +7,7 @@ def test_cache_inputs_track_only_the_desktop_binary() -> None:
     assert set(INPUTS) == {"rust"}
     assert "apps/setup-center/src-tauri/src" in INPUTS["rust"]
     assert "src/openakita" not in INPUTS["rust"]
+    assert "src/openakita/optional_modules.json" in INPUTS["rust"]
 
 
 def test_rust_cache_tracks_frontend_assets_embedded_by_tauri() -> None:

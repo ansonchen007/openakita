@@ -29,10 +29,17 @@ export const STT_RECOMMENDED_MODELS: Record<string, { id: string; note: string }
   "siliconflow-intl":[{ id: "FunAudioLLM/SenseVoiceSmall", note: "推荐" }, { id: "TeleAI/TeleSpeechASR", note: "" }],
 };
 
-export const PIP_INDEX_PRESETS: { id: "official" | "tuna" | "ustc" | "aliyun" | "custom"; label: string; url: string }[] = [
+export type PipIndexPresetId = "official" | "tuna" | "ustc" | "aliyun" | "custom";
+
+export const PIP_INDEX_PRESETS: { id: PipIndexPresetId; label: string; url: string }[] = [
   { id: "aliyun", label: "阿里云（默认）", url: "https://mirrors.aliyun.com/pypi/simple/" },
   { id: "tuna", label: "清华 TUNA", url: "https://pypi.tuna.tsinghua.edu.cn/simple" },
   { id: "ustc", label: "中科大 USTC", url: "https://pypi.mirrors.ustc.edu.cn/simple/" },
   { id: "official", label: "官方 PyPI", url: "https://pypi.org/simple/" },
   { id: "custom", label: "自定义…", url: "" },
 ];
+
+export const DEFAULT_PIP_INDEX_PRESET_ID: PipIndexPresetId = "aliyun";
+export const DEFAULT_PIP_INDEX_URL = PIP_INDEX_PRESETS.find(
+  (preset) => preset.id === DEFAULT_PIP_INDEX_PRESET_ID,
+)!.url;

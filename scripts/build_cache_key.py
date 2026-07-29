@@ -28,6 +28,7 @@ INPUTS = {
         "apps/setup-center/src-tauri/icons",
         "apps/setup-center/src-tauri/tauri.conf.json",
         "apps/setup-center/src-tauri/Entitlements.plist",
+        "src/openakita/optional_modules.json",
         "identity",
         "data/llm_endpoints.json.example",
         "scripts/build_cache_key.py",
