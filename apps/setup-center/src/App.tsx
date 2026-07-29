@@ -414,6 +414,30 @@ function MainApp() {
     doDownloadAndInstall, doRelaunchAfterUpdate,
   } = useVersionCheck();
   const appUpdateCheckStartedRef = useRef(false);
+  const manualUpdateCheckRunningRef = useRef(false);
+  const [manualUpdateChecking, setManualUpdateChecking] = useState(false);
+
+  const handleManualUpdateCheck = useCallback(async () => {
+    if (manualUpdateCheckRunningRef.current) return;
+    manualUpdateCheckRunningRef.current = true;
+    setManualUpdateChecking(true);
+    const loadingId = notifyLoading(t("version.checking"));
+    try {
+      const result = await checkForAppUpdate({ manual: true });
+      dismissLoading(loadingId);
+      if (result.status === "up-to-date") {
+        notifySuccess(t("version.upToDate", { version: result.current }));
+      } else if (result.status === "error") {
+        notifyError(t("version.checkFailed", { error: result.error }));
+      }
+    } catch (error) {
+      notifyError(t("version.checkFailed", { error: String(error) }));
+    } finally {
+      dismissLoading(loadingId);
+      manualUpdateCheckRunningRef.current = false;
+      setManualUpdateChecking(false);
+    }
+  }, [checkForAppUpdate, t]);
 
   // ── 独立初始化 autostart 状态（不依赖 refreshStatus 的复杂前置条件，Web 跳过） ──
   useEffect(() => {
@@ -3228,6 +3252,8 @@ function MainApp() {
           setNewRelease={setNewRelease}
           setUpdateAvailable={setUpdateAvailable}
           setUpdateProgress={setUpdateProgress}
+          onCheckForUpdate={handleManualUpdateCheck}
+          updateCheckPending={manualUpdateChecking}
           shouldUseHttpApi={shouldUseHttpApi}
           httpApiBase={httpApiBase}
           startLocalServiceWithConflictCheck={startLocalServiceWithConflictCheck}
@@ -5007,6 +5033,8 @@ function MainApp() {
         httpApiBase={httpApiBase()}
         unreadFeedbackCount={unreadFeedbackCount}
         pendingApprovalsCount={pendingApprovalsCount}
+        onCheckForUpdate={IS_TAURI ? handleManualUpdateCheck : undefined}
+        updateCheckPending={manualUpdateChecking}
       />
 
       <main className="main">

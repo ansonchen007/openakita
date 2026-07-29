@@ -84,6 +84,8 @@ export interface StatusViewProps {
     percent?: number;
     error?: string;
   }>>;
+  onCheckForUpdate: () => Promise<void>;
+  updateCheckPending: boolean;
   shouldUseHttpApi: () => boolean;
   httpApiBase: () => string;
   startLocalServiceWithConflictCheck: (wsId: string) => Promise<boolean>;
@@ -106,6 +108,7 @@ export function StatusView(props: StatusViewProps) {
     skillSummary, serviceLog, serviceLogRef, logAtBottomRef,
     detectedProcesses, setDetectedProcesses,
     setNewRelease, setUpdateAvailable, setUpdateProgress,
+    onCheckForUpdate, updateCheckPending,
     shouldUseHttpApi, httpApiBase,
     startLocalServiceWithConflictCheck, refreshStatus,
     doStopService, restartService,
@@ -550,6 +553,16 @@ export function StatusView(props: StatusViewProps) {
             <div className="statusPanelDesc">{t("status.autoUpdateHint")}</div>
           </div>
           <div className="statusPanelActions">
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 px-2.5 text-xs"
+              onClick={() => { void onCheckForUpdate(); }}
+              disabled={updateCheckPending}
+            >
+              <RotateCcw size={12} className={updateCheckPending ? "spinIcon" : undefined} />
+              {updateCheckPending ? t("version.checkingShort") : t("version.checkNow")}
+            </Button>
             <Button size="sm" variant="outline" className={cn(
               "h-7 text-xs px-2.5",
               autoUpdateEnabled

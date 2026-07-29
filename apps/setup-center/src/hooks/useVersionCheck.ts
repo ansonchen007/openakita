@@ -13,6 +13,16 @@ export type UpdateProgressState = {
   error?: string;
 };
 
+export type AppUpdateCheckResult =
+  | { status: "update-available"; release: NewReleaseInfo }
+  | { status: "up-to-date"; current: string }
+  | { status: "suppressed"; release: NewReleaseInfo }
+  | { status: "error"; error: string };
+
+export type AppUpdateCheckOptions = {
+  manual?: boolean;
+};
+
 export function compareSemver(a: string, b: string): number {
   const parse = (v: string) => v.replace(/^v/, "").split(".").map((s) => parseInt(s, 10) || 0);
   const pa = parse(a);
@@ -85,40 +95,72 @@ export function useVersionCheck() {
     setVersionMismatch(normB !== normD ? { backend: normB, desktop: normD } : null);
   }, [desktopVersion]);
 
-  const checkForAppUpdate = useCallback(async () => {
+  const checkForAppUpdate = useCallback(async (
+    options: AppUpdateCheckOptions = {},
+  ): Promise<AppUpdateCheckResult> => {
+    const showRelease = (latest: string, url: string, update: UpdateInfo | null) => {
+      const release = {
+        latest,
+        current: desktopVersion,
+        url,
+      };
+      if (!options.manual && isReleaseSuppressed(latest)) {
+        return { status: "suppressed", release } as const;
+      }
+      setUpdateAvailable(update);
+      setNewRelease(release);
+      return { status: "update-available", release } as const;
+    };
+
     try {
       const update = await checkForUpdate({ apiBaseUrl: "http://127.0.0.1:18900" });
       if (update) {
         const latest = normalizeReleaseVersion(update.version);
-        if (!isReleaseSuppressed(latest)) {
-          setUpdateAvailable(update);
-          setNewRelease({
-            latest,
-            current: desktopVersion,
-            url: `https://github.com/${GITHUB_REPO}/releases/tag/v${latest}`,
-          });
-        }
+        return showRelease(
+          latest,
+          `https://github.com/${GITHUB_REPO}/releases/tag/v${latest}`,
+          update,
+        );
       }
-    } catch {
+      if (options.manual) {
+        setNewRelease(null);
+        setUpdateAvailable(null);
+      }
+      return { status: "up-to-date", current: desktopVersion };
+    } catch (updaterError) {
       try {
         const res = await fetch(`https://api.github.com/repos/${GITHUB_REPO}/releases/latest`, {
           signal: AbortSignal.timeout(4000),
           headers: { Accept: "application/vnd.github.v3+json" },
         });
-        if (!res.ok) return;
+        if (!res.ok) throw new Error(`GitHub HTTP ${res.status}`);
         const data = await res.json();
         const tagName = (data.tag_name || "").replace(/^v/, "");
         if (tagName && compareSemver(tagName, desktopVersion) > 0) {
           const latest = normalizeReleaseVersion(tagName);
-          if (!isReleaseSuppressed(latest)) {
-            setNewRelease({
-              latest,
-              current: desktopVersion,
-              url: data.html_url || `https://github.com/${GITHUB_REPO}/releases`,
-            });
-          }
+          return showRelease(
+            latest,
+            data.html_url || `https://github.com/${GITHUB_REPO}/releases`,
+            null,
+          );
         }
-      } catch { /* both methods failed */ }
+        if (options.manual) {
+          setNewRelease(null);
+          setUpdateAvailable(null);
+        }
+        return { status: "up-to-date", current: desktopVersion };
+      } catch (fallbackError) {
+        const updaterMessage = updaterError instanceof Error
+          ? updaterError.message
+          : String(updaterError);
+        const fallbackMessage = fallbackError instanceof Error
+          ? fallbackError.message
+          : String(fallbackError);
+        return {
+          status: "error",
+          error: fallbackMessage || updaterMessage,
+        };
+      }
     }
   }, [desktopVersion]);
 

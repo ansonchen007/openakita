@@ -7,7 +7,7 @@ import {
   IconZap, IconPlug, IconCalendar,
   IconBug, IconBrain, IconGitHub, IconGitee, IconUsers, IconBot,
   IconGear, IconBook, IconStorefront, IconPuzzle, IconFingerprint, IconLayoutGrid,
-  IconShield, IconRadar, IconBuilding, IconBarChart,
+  IconShield, IconRadar, IconBuilding, IconBarChart, IconRefresh,
 } from "../icons";
 import logoUrl from "../assets/logo.png";
 import { openExternalUrl } from "../platform";
@@ -34,6 +34,8 @@ export type SidebarProps = {
   httpApiBase?: string;
   unreadFeedbackCount?: number;
   pendingApprovalsCount?: number;
+  onCheckForUpdate?: () => Promise<void>;
+  updateCheckPending?: boolean;
 };
 
 const stepIcons: Partial<Record<StepId, React.ReactNode>> = {
@@ -96,6 +98,7 @@ export function Sidebar({
   desktopVersion, backendVersion, serviceRunning,
   onRefreshStatus, isWeb, mobileOpen, httpApiBase,
   unreadFeedbackCount, pendingApprovalsCount,
+  onCheckForUpdate, updateCheckPending = false,
 }: SidebarProps) {
   const { t, i18n } = useTranslation();
   const lang = i18n.language;
@@ -421,19 +424,32 @@ export function Sidebar({
           padding: "10px 16px",
           borderTop: "1px solid var(--line)",
           fontSize: 11,
-          opacity: 0.4,
           lineHeight: 1.6,
           flexShrink: 0,
         }}>
-          <div
-            onClick={() => setReleaseNotesOpen(true)}
-            title={t("version.releaseNotesButton")}
-            style={{ cursor: "pointer" }}
-          >
-            {isWeb ? "Web" : "Desktop"} v{desktopVersion}{import.meta.env.VITE_PREVIEW_BUILD === "true" && <span style={{ marginLeft: 6, color: "#e8a735", fontWeight: 600, opacity: 1 }}>预览版</span>}
+          <div className="sidebarVersionRow">
+            <div
+              onClick={() => setReleaseNotesOpen(true)}
+              title={t("version.releaseNotesButton")}
+              className="sidebarVersionText sidebarVersionLink"
+            >
+              {isWeb ? "Web" : "Desktop"} v{desktopVersion}{import.meta.env.VITE_PREVIEW_BUILD === "true" && <span style={{ marginLeft: 6, color: "#e8a735", fontWeight: 600, opacity: 1 }}>预览版</span>}
+            </div>
+            {onCheckForUpdate && (
+              <button
+                type="button"
+                className="sidebarUpdateButton"
+                onClick={() => { void onCheckForUpdate(); }}
+                disabled={updateCheckPending}
+                title={updateCheckPending ? t("version.checking") : t("version.checkNow")}
+              >
+                <IconRefresh size={11} className={updateCheckPending ? "spinIcon" : undefined} />
+                <span>{updateCheckPending ? t("version.checkingShort") : t("version.checkNow")}</span>
+              </button>
+            )}
           </div>
-          {backendVersion && <div>Backend v{backendVersion}</div>}
-          {!backendVersion && serviceRunning && <div>Backend: -</div>}
+          {backendVersion && <div className="sidebarVersionText">Backend v{backendVersion}</div>}
+          {!backendVersion && serviceRunning && <div className="sidebarVersionText">Backend: -</div>}
           <div style={{ marginTop: 4, display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
             <span
               onClick={() => openExternalUrl("https://openakita.ai")}
@@ -507,6 +523,18 @@ export function Sidebar({
           gap: 6,
         }}>
           <div style={{ display: "flex", justifyContent: "center", gap: 8 }}>
+            {onCheckForUpdate && (
+              <button
+                type="button"
+                className="sidebarCollapsedUpdateButton"
+                onClick={() => { void onCheckForUpdate(); }}
+                disabled={updateCheckPending}
+                title={updateCheckPending ? t("version.checking") : t("version.checkNow")}
+                aria-label={updateCheckPending ? t("version.checking") : t("version.checkNow")}
+              >
+                <IconRefresh size={14} className={updateCheckPending ? "spinIcon" : undefined} />
+              </button>
+            )}
             <span
               onClick={() => openExternalUrl("https://openakita.ai")}
               title="openakita.ai"

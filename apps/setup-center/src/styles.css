@@ -354,6 +354,71 @@ a:hover {
 .sidebarNav::-webkit-scrollbar-thumb { background: var(--line); border-radius: 2px; }
 .sidebarNav::-webkit-scrollbar-thumb:hover { background: var(--muted2); }
 
+.sidebarVersionRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.sidebarVersionText {
+  min-width: 0;
+  color: var(--muted);
+}
+
+.sidebarVersionLink {
+  cursor: pointer;
+}
+
+.sidebarUpdateButton {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 24px;
+  padding: 2px 7px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--panel2);
+  color: var(--text);
+  font: inherit;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.sidebarUpdateButton:hover:not(:disabled) {
+  background: var(--hover);
+  border-color: var(--accent);
+}
+
+.sidebarUpdateButton:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.sidebarCollapsedUpdateButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent, #5b8def);
+  opacity: 0.5;
+  cursor: pointer;
+}
+
+.sidebarCollapsedUpdateButton:hover:not(:disabled) {
+  opacity: 1;
+}
+
+.sidebarCollapsedUpdateButton:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
 .navItem {
   position: relative;
   display: flex;
@@ -2251,6 +2316,24 @@ button.btnPrimary:hover {
   flex-shrink: 0;
   display: flex;
   gap: 6px;
+}
+
+@media (max-width: 640px) {
+  .statusPanelRow {
+    display: grid;
+    grid-template-columns: 36px minmax(0, 1fr);
+    align-items: center;
+  }
+
+  .statusPanelActions {
+    grid-column: 1 / -1;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+  }
+
+  .statusPanelDesc {
+    white-space: normal;
+  }
 }
 .statusPanelAlert {
   display: flex;
