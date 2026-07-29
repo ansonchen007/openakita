@@ -442,9 +442,9 @@ export function Sidebar({
                 onClick={() => { void onCheckForUpdate(); }}
                 disabled={updateCheckPending}
                 title={updateCheckPending ? t("version.checking") : t("version.checkNow")}
+                aria-label={updateCheckPending ? t("version.checking") : t("version.checkNow")}
               >
-                <IconRefresh size={11} className={updateCheckPending ? "spinIcon" : undefined} />
-                <span>{updateCheckPending ? t("version.checkingShort") : t("version.checkNow")}</span>
+                <IconRefresh size={14} className={updateCheckPending ? "spinIcon" : undefined} />
               </button>
             )}
           </div>

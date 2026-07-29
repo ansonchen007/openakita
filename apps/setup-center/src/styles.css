@@ -373,28 +373,35 @@ a:hover {
 .sidebarUpdateButton {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  min-height: 24px;
-  padding: 2px 7px;
-  border: 1px solid var(--line);
-  border-radius: 5px;
-  background: var(--panel2);
-  color: var(--text);
-  font: inherit;
-  font-weight: 600;
-  line-height: 1;
-  white-space: nowrap;
+  justify-content: center;
+  flex: 0 0 24px;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted);
+  opacity: 0.5;
   cursor: pointer;
-  transition: background 0.15s ease, border-color 0.15s ease;
+  transition: color 0.15s ease, background 0.15s ease, opacity 0.15s ease;
 }
 
 .sidebarUpdateButton:hover:not(:disabled) {
+  color: var(--text);
   background: var(--hover);
-  border-color: var(--accent);
+  opacity: 1;
+}
+
+.sidebarUpdateButton:focus-visible {
+  color: var(--text);
+  opacity: 1;
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 .sidebarUpdateButton:disabled {
-  opacity: 0.55;
+  opacity: 0.3;
   cursor: not-allowed;
 }
 
