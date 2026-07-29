@@ -128,7 +128,11 @@ class TestClusterByContent:
             SemanticMemory(content="完全不相关的内容 XYZ ABC"),
         ]
         clusters = lifecycle._cluster_by_content(memories, threshold=0.5)
-        assert len(clusters) >= 0
+        assert len(clusters) == 1
+        assert [memory.content for memory in clusters[0]] == [
+            "用户喜欢 Python 编程",
+            "用户喜欢 Python 编程语言",
+        ]
 
     def test_pick_best(self, lifecycle):
         memories = [

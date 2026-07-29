@@ -415,12 +415,10 @@ class TestStep7Replay:
         # ALLOW with replay step in chain. If matching semantics differ
         # (e.g. needs operation= "destructive" not "delete"), test must FAIL
         # loud so we can fix the contract — not silently pass.
-        if decision.action != DecisionAction.ALLOW:
-            pytest.skip(
-                f"replay relax did not fire (action={decision.action}, "
-                f"chain={_step_names(decision)}); engine matcher may be stricter "
-                f"than documented — investigate before tightening this case"
-            )
+        assert decision.action == DecisionAction.ALLOW, (
+            f"replay relax did not fire (action={decision.action}, "
+            f"chain={_step_names(decision)})"
+        )
         assert "replay" in _step_names(decision), (
             f"ALLOW must come from replay relax; chain={_step_names(decision)}"
         )
