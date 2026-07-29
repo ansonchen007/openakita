@@ -22,6 +22,15 @@ import pytest
 # 添加项目路径
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
+TAURI_RUST_SRC = Path(__file__).parent.parent / "apps" / "setup-center" / "src-tauri" / "src"
+
+
+def _read_tauri_rust_source(relative_path: str) -> str:
+    source_path = TAURI_RUST_SRC / relative_path
+    if not source_path.exists():
+        pytest.skip(f"Tauri Rust source not found: {relative_path}")
+    return source_path.read_text(encoding="utf-8")
+
 
 # ─────────────────────────────────────────────
 # 1. runtime_env 模块路径注入
@@ -304,7 +313,7 @@ class TestPlaywrightBrowsersPath:
 
 
 class TestBundleModulesConsistency:
-    """确保 bundle_modules.py 的模块定义与 main.rs 一致"""
+    """确保 bundle_modules.py 的模块定义与 Tauri 模块配置一致"""
 
     def test_bundle_script_defines_all_modules(self):
         """bundle_modules.py 应包含所有四个可选模块"""
@@ -327,8 +336,8 @@ class TestBundleModulesConsistency:
             f"多余 {actual_modules - expected_modules}"
         )
 
-    def test_bundle_packages_match_main_rs(self):
-        """bundle_modules.py 的包列表应与 main.rs module_definitions 一致"""
+    def test_bundle_packages_match_tauri_modules(self):
+        """bundle_modules.py 的包列表应与 Tauri module_definitions 一致"""
         import importlib.util
 
         script_path = Path(__file__).parent.parent / "build" / "bundle_modules.py"
@@ -339,21 +348,21 @@ class TestBundleModulesConsistency:
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
 
-        # main.rs / bundle_modules.py 中的包定义（手动提取，保持同步）
-        main_rs_packages = {
+        # Tauri environment.rs / bundle_modules.py 中的包定义（手动提取，保持同步）
+        tauri_module_packages = {
             "vector-memory": ["sentence-transformers", "chromadb"],
             "whisper": ["openai-whisper", "static-ffmpeg"],
             "orchestration": ["pyzmq"],
         }
 
-        for module_id, expected_pkgs in main_rs_packages.items():
+        for module_id, expected_pkgs in tauri_module_packages.items():
             bundle_pkgs = mod.MODULE_DEFS[module_id]["packages"]
             # bundle_modules.py 的包名可能带版本约束，只比较基础名
             bundle_base_names = [p.split(">=")[0].split("==")[0].split("<")[0] for p in bundle_pkgs]
 
             for pkg in expected_pkgs:
                 assert pkg in bundle_base_names, (
-                    f"模块 {module_id}: main.rs 要求 {pkg} 但 bundle_modules.py 中缺失"
+                    f"模块 {module_id}: Tauri 配置要求 {pkg} 但 bundle_modules.py 中缺失"
                 )
 
     def test_bundle_default_mirror_is_domestic(self):
@@ -376,30 +385,30 @@ class TestBundleModulesConsistency:
 class TestMirrorConsistency:
     """验证所有 pip 源/下载源配置的一致性"""
 
-    def test_no_dead_mirrors_in_main_rs(self):
-        """main.rs 中不应包含已知失效的镜像"""
-        main_rs_path = (
-            Path(__file__).parent.parent / "apps" / "setup-center" / "src-tauri" / "src" / "main.rs"
-        )
-        if not main_rs_path.exists():
-            pytest.skip("main.rs not found")
-
-        content = main_rs_path.read_text(encoding="utf-8")
+    def test_no_dead_mirrors_in_tauri_sources(self):
+        """Tauri Rust 源码中不应包含已知失效的镜像"""
+        if not TAURI_RUST_SRC.exists():
+            pytest.skip("Tauri Rust source directory not found")
 
         dead_mirrors = [
             "mirror.ghproxy.com",  # 已被 GFW 封锁 (2024年末)
             "ghproxy.net",  # 已关停
         ]
 
-        for mirror in dead_mirrors:
-            # 允许在注释中提到，但不应在实际 URL 中使用
-            lines = content.split("\n")
-            for i, line in enumerate(lines, 1):
-                stripped = line.strip()
-                if stripped.startswith("//"):
-                    continue  # 跳过注释行
-                if mirror in stripped and "http" in stripped:
-                    pytest.fail(f"main.rs 第 {i} 行使用了已失效的镜像 {mirror}: {stripped[:100]}")
+        for source_path in sorted(TAURI_RUST_SRC.rglob("*.rs")):
+            content = source_path.read_text(encoding="utf-8")
+            for mirror in dead_mirrors:
+                # 允许在注释中提到，但不应在实际 URL 中使用
+                for i, line in enumerate(content.splitlines(), 1):
+                    stripped = line.strip()
+                    if stripped.startswith("//"):
+                        continue  # 跳过注释行
+                    if mirror in stripped and "http" in stripped:
+                        relative_path = source_path.relative_to(TAURI_RUST_SRC)
+                        pytest.fail(
+                            f"{relative_path} 第 {i} 行使用了已失效的镜像 "
+                            f"{mirror}: {stripped[:100]}"
+                        )
 
     def test_pip_presets_default_to_domestic(self):
         """前端 PIP_INDEX_PRESETS 默认应选中国内源"""
@@ -441,15 +450,14 @@ class TestMirrorConsistency:
                 break
         assert found, "未找到 official preset 数据行"
 
-    def test_managed_python_contract_in_main_rs(self):
+    def test_managed_python_contract_in_tauri_modules(self):
         """契约A：运行时应使用 bootstrap seed 创建持久化托管环境"""
-        main_rs_path = (
-            Path(__file__).parent.parent / "apps" / "setup-center" / "src-tauri" / "src" / "main.rs"
+        content = "\n".join(
+            (
+                _read_tauri_rust_source("python/pip.rs"),
+                _read_tauri_rust_source("runtime.rs"),
+            )
         )
-        if not main_rs_path.exists():
-            pytest.skip("main.rs not found")
-
-        content = main_rs_path.read_text(encoding="utf-8")
 
         assert "install_bundled_python_sync" in content, (
             "应存在 install_bundled_python_sync 作为内置 Python 校验入口"
@@ -459,15 +467,9 @@ class TestMirrorConsistency:
         assert 'bootstrap_resource_dir().join("python")' in content
         assert "ensure_app_venv" in content
 
-    def test_python_diagnostic_contract_model_in_main_rs(self):
+    def test_python_diagnostic_contract_model_in_tauri_module(self):
         """Python 诊断应使用契约化模型（生产级：可扩展/可导出/可修复）"""
-        main_rs_path = (
-            Path(__file__).parent.parent / "apps" / "setup-center" / "src-tauri" / "src" / "main.rs"
-        )
-        if not main_rs_path.exists():
-            pytest.skip("main.rs not found")
-
-        content = main_rs_path.read_text(encoding="utf-8")
+        content = _read_tauri_rust_source("python/diagnostics.rs")
 
         # 新模型核心字段
         assert "summary: String" in content
@@ -488,13 +490,7 @@ class TestMirrorConsistency:
 
     def test_fetch_pypi_versions_has_fallback(self):
         """fetch_pypi_versions 应有多源回退（阿里云不支持 JSON API）"""
-        main_rs_path = (
-            Path(__file__).parent.parent / "apps" / "setup-center" / "src-tauri" / "src" / "main.rs"
-        )
-        if not main_rs_path.exists():
-            pytest.skip("main.rs not found")
-
-        content = main_rs_path.read_text(encoding="utf-8")
+        content = _read_tauri_rust_source("network.rs")
 
         # 应包含清华 JSON API 回退
         assert "pypi.tuna.tsinghua.edu.cn/pypi" in content
@@ -503,13 +499,7 @@ class TestMirrorConsistency:
 
     def test_pip_install_has_default_mirror(self):
         """pip_install 无 index_url 时应有默认国内镜像"""
-        main_rs_path = (
-            Path(__file__).parent.parent / "apps" / "setup-center" / "src-tauri" / "src" / "main.rs"
-        )
-        if not main_rs_path.exists():
-            pytest.skip("main.rs not found")
-
-        content = main_rs_path.read_text(encoding="utf-8")
+        content = _read_tauri_rust_source("python/pip.rs")
 
         # pip_install 函数中应有 unwrap_or 默认值
         assert 'unwrap_or("https://mirrors.aliyun.com/pypi/simple/")' in content, (
@@ -527,13 +517,7 @@ class TestPostInstallHooks:
 
     def test_playwright_browsers_path_set_at_launch(self):
         """Tauri 启动后端时应设置 PLAYWRIGHT_BROWSERS_PATH"""
-        main_rs_path = (
-            Path(__file__).parent.parent / "apps" / "setup-center" / "src-tauri" / "src" / "main.rs"
-        )
-        if not main_rs_path.exists():
-            pytest.skip("main.rs not found")
-
-        content = main_rs_path.read_text(encoding="utf-8")
+        content = _read_tauri_rust_source("backend/service.rs")
 
         assert content.count('"PLAYWRIGHT_BROWSERS_PATH"') >= 1, (
             "PLAYWRIGHT_BROWSERS_PATH 应至少出现 1 次（启动后端时兜底设置）"
