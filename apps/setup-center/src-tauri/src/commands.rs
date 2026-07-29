@@ -73,6 +73,7 @@ pub(crate) fn invoke_handler() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> boo
         backend_fetch,
         backend_fetch_cancel,
         get_local_file_info,
+        upload_local_file,
         read_file_base64,
         download_file,
         copy_file_to_downloads,

@@ -342,6 +342,27 @@ def test_working_directory_attachment_rejects_escape_and_forged_local_path(tmp_p
     assert getattr(local_path.value, "status_code", None) == 403
 
 
+def test_uploaded_attachment_resolves_server_path_without_client_local_path(tmp_path, monkeypatch):
+    upload_dir = tmp_path / "uploads"
+    upload_dir.mkdir()
+    uploaded = upload_dir / "upload-1_report.pdf"
+    uploaded.write_bytes(b"pdf")
+    monkeypatch.setattr("openakita.api.routes.upload.UPLOAD_DIR", upload_dir)
+    session = Session.create(
+        "desktop", "attachments", "desktop_user", working_directory=str(tmp_path)
+    )
+    attachment = AttachmentInfo(
+        type="document",
+        name="report.pdf",
+        upload_id=uploaded.name,
+        url=f"/api/uploads/{uploaded.name}",
+    )
+
+    resolve_chat_attachments([attachment], session)
+
+    assert attachment.local_path == str(uploaded.resolve())
+
+
 @pytest.mark.asyncio
 async def test_contextvar_keeps_concurrent_working_directories_isolated(tmp_path):
     roots = [tmp_path / "one", tmp_path / "two"]

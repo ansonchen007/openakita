@@ -4,6 +4,7 @@
 // bundled into the web build and never evaluated when running in a browser.
 
 import { IS_TAURI, IS_WEB, IS_CAPACITOR, IS_LOCAL_WEB, IS_MOBILE_BROWSER } from "./detect";
+import { getAccessToken } from "./auth";
 export { IS_TAURI, IS_WEB, IS_CAPACITOR, IS_LOCAL_WEB, IS_MOBILE_BROWSER };
 
 // ---------------------------------------------------------------------------
@@ -187,6 +188,78 @@ export async function getLocalFileInfo(path: string): Promise<LocalFileInfo> {
     size: info.size,
     isFile: info.is_file,
     isDirectory: info.is_directory,
+  };
+}
+
+export type StagedAttachmentUpload = {
+  url: string;
+  localPath?: string;
+  uploadId: string;
+  size?: number;
+  mimeType?: string;
+};
+
+/**
+ * Stream a Tauri-native filesystem path to the normal backend upload route.
+ * Web and mobile callers already have File/Blob objects and should keep using
+ * multipart fetch directly.
+ */
+export async function uploadLocalFile(
+  path: string,
+  url: string,
+  filename: string,
+  mimeType?: string,
+  onProgress?: (loaded: number, total: number) => void,
+): Promise<StagedAttachmentUpload> {
+  if (!IS_TAURI)
+    throw new Error("uploadLocalFile is only available in Tauri");
+  const { Channel, invoke: tauriInvoke } = await import("@tauri-apps/api/core");
+  const progress = new Channel<{
+    loaded: number;
+    total: number;
+  }>();
+  progress.onmessage = onProgress
+    ? (payload) => onProgress(payload.loaded, payload.total)
+    : () => {};
+  const response = await tauriInvoke<{ status: number; body: string }>("upload_local_file", {
+    path,
+    url,
+    filename,
+    mimeType,
+    authorization: getAccessToken(),
+    onProgress: progress,
+  });
+
+  let payload: Record<string, unknown> | null = null;
+  try {
+    payload = JSON.parse(response.body) as Record<string, unknown>;
+  } catch {
+    // Preserve the response text below when the backend did not return JSON.
+  }
+  if (response.status < 200 || response.status >= 300) {
+    const detail = payload?.detail;
+    const message = typeof detail === "string"
+      ? detail
+      : typeof payload?.message === "string"
+        ? payload.message
+        : typeof payload?.error === "string"
+          ? payload.error
+          : response.body.slice(0, 200) || `Upload failed: ${response.status}`;
+    throw new Error(message);
+  }
+  if (!payload || typeof payload.url !== "string" || typeof payload.upload_id !== "string") {
+    throw new Error("Upload response is missing url or upload_id");
+  }
+  return {
+    url: payload.url,
+    localPath: typeof payload.local_path === "string" ? payload.local_path : undefined,
+    uploadId: payload.upload_id,
+    size: typeof payload.size === "number" ? payload.size : undefined,
+    mimeType: typeof payload.mime_type === "string"
+      ? payload.mime_type
+      : typeof payload.content_type === "string"
+        ? payload.content_type
+        : undefined,
   };
 }
 
