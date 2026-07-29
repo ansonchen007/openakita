@@ -89,6 +89,10 @@ import {
   isAttachmentStillPreparing,
   toChatAttachmentRequest,
 } from "./chat/utils/attachmentStaging";
+import {
+  restoreSessionsUntilReady,
+  type SessionRestoreEvent,
+} from "./chat/utils/sessionRestore";
 import { useMdModules } from "./chat/hooks/useMdModules";
 import { useMessageReducer, useConversationReducer } from "./chat/hooks/useMessages";
 import { useQueryGuard } from "./chat/hooks/useQueryGuard";
@@ -2364,43 +2368,73 @@ export function ChatView({
     return () => document.removeEventListener("mousedown", handler);
   }, [agentMenuOpen]);
 
-  // 启动后后台对账会话列表：本地先展示，后端异步增量合并，避免"今天新会话缺失"
-  // 同时检测 data_epoch 是否变化（factory reset / 数据重置）
-  const sessionRestoreAttempted = useRef(false);
+  // 启动后后台对账会话列表：本地先展示，后端异步增量合并，避免"今天新会话缺失"。
+  // 只有 SessionManager 明确 ready 后才标记完成；进程存活或 HTTP 可达都不够。
+  const sessionRestoreCompletedScope = useRef<string | null>(null);
+  const sessionRestoreScope = `${apiBaseUrl}|${wsTag}`;
 
-  // 后端断开时重置对账标志，使重连后能重新对账 + 检测 epoch 变化
-  // （覆盖 factory reset 后不刷新页面的场景）
   useEffect(() => {
     if (!serviceRunning) {
-      sessionRestoreAttempted.current = false;
+      sessionRestoreCompletedScope.current = null;
+      return;
     }
-  }, [serviceRunning]);
+    if (sessionRestoreCompletedScope.current === sessionRestoreScope) return;
 
-  const sessionRetryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const controller = new AbortController();
 
-  useEffect(() => {
-    if (!serviceRunning || sessionRestoreAttempted.current) return;
-    sessionRestoreAttempted.current = true;
+    const logRestoreEvent = (event: SessionRestoreEvent) => {
+      const base = {
+        scope: sessionRestoreScope,
+        workspace: wsTag,
+        attempt: event.attempt,
+      };
+      if (event.type === "attempt") {
+        logger.info("Chat.SessionRestore", "attempt", base);
+      } else if (event.type === "not_ready") {
+        logger.info("Chat.SessionRestore", "session manager not ready; retrying", {
+          ...base,
+          delayMs: event.delayMs,
+        });
+      } else if (event.type === "error") {
+        logger.warn("Chat.SessionRestore", "request failed; retrying", {
+          ...base,
+          delayMs: event.delayMs,
+          error: String(event.error),
+        });
+      } else if (event.type === "cancelled") {
+        logger.info("Chat.SessionRestore", "cancelled", base);
+      }
+    };
 
-    let cancelled = false;
-    let attempt = 0;
-
-    const reconcile = async () => {
-      attempt++;
-      try {
-        const res = await safeFetch(`${apiBaseUrl}/api/sessions?channel=desktop`);
-        if (cancelled) return;
-        const data = await res.json();
-        if (cancelled) return;
-
-        // Backend still loading sessions — retry with backoff (max ~20s total)
-        if (data.ready === false && attempt < 6) {
-          const delay = Math.min(1000 * Math.pow(1.5, attempt - 1), 5000);
-          sessionRetryTimer.current = setTimeout(reconcile, delay);
-          return;
+    void restoreSessionsUntilReady<Record<string, unknown>>({
+      signal: controller.signal,
+      request: async (attempt) => {
+        const res = await safeFetchResponse(`${apiBaseUrl}/api/sessions?channel=desktop`, {
+          signal: controller.signal,
+        });
+        const data = await res.json() as Record<string, unknown>;
+        const responseDetails = {
+          scope: sessionRestoreScope,
+          workspace: wsTag,
+          attempt,
+          httpStatus: res.status,
+          ready: data.ready === true,
+          sessionCount: Array.isArray(data.sessions) ? data.sessions.length : 0,
+          epochPresent: typeof data.data_epoch === "string" && data.data_epoch.length > 0,
+        };
+        if (res.ok) {
+          logger.info("Chat.SessionRestore", "response", responseDetails);
+        } else {
+          logger.warn("Chat.SessionRestore", "response rejected", responseDetails);
+          throw new Error(`HTTP ${res.status}`);
         }
-
-        const backendSessions: ChatConversation[] = data.sessions || [];
+        return data;
+      },
+      isReady: (data) => data.ready === true,
+      reconcile: async (data) => {
+        const backendSessions = Array.isArray(data.sessions)
+          ? data.sessions as ChatConversation[]
+          : [];
 
         // ── Factory reset detection (epoch-based only) ──
         // Only clear local data when data_epoch actually changes, which signals
@@ -2429,6 +2463,10 @@ export function ChatView({
             });
             activateConversation(null);
             setMessages([]);
+            logger.warn("Chat.SessionRestore", "data epoch changed; cleared local conversations", {
+              scope: sessionRestoreScope,
+              workspace: wsTag,
+            });
             return;
           }
         }
@@ -2456,24 +2494,35 @@ export function ChatView({
         });
 
         // 没有活跃会话时，默认打开后端最新会话
-        if (!activeConvId) {
+        if (!activeConvIdRef.current) {
           activateConversation(restoredConvs[0].id);
         }
-      } catch {
-        // Network error — retry if backend might still be starting
-        if (!cancelled && attempt < 6) {
-          const delay = Math.min(1000 * Math.pow(1.5, attempt - 1), 5000);
-          sessionRetryTimer.current = setTimeout(reconcile, delay);
-        }
-      }
-    };
+      },
+      onEvent: logRestoreEvent,
+    }).then((result) => {
+      if (result.status !== "restored" || controller.signal.aborted) return;
+      sessionRestoreCompletedScope.current = sessionRestoreScope;
+      logger.info("Chat.SessionRestore", "completed", {
+        scope: sessionRestoreScope,
+        workspace: wsTag,
+        attempts: result.attempts,
+      });
+    });
 
-    reconcile();
     return () => {
-      cancelled = true;
-      if (sessionRetryTimer.current) clearTimeout(sessionRetryTimer.current);
+      controller.abort();
     };
-  }, [serviceRunning, apiBaseUrl, activeConvId, activateConversation]);
+  }, [
+    serviceRunning,
+    apiBaseUrl,
+    wsTag,
+    sessionRestoreScope,
+    STORAGE_KEY_DATA_EPOCH,
+    STORAGE_KEY_MSGS_PREFIX,
+    activateConversation,
+    setConversations,
+    setMessages,
+  ]);
 
   // ── Multi-device busy state: poll + WS events ──
   useEffect(() => {

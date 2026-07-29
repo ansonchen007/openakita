@@ -208,9 +208,19 @@ pub(crate) fn diagnose_python_env(venv_dir: String) -> PythonDiagnostic {
     }
 
     // --- Strategy 2: backend not reachable — managed seed check ---
+    let seed = managed_python_seed_path();
+    make_backend_offline_diagnostic(trace_id, port, seed.as_deref(), &bootstrap_resource_dir())
+}
+
+pub(crate) fn make_backend_offline_diagnostic(
+    trace_id: String,
+    port: u16,
+    managed_seed: Option<&Path>,
+    bootstrap_dir: &Path,
+) -> PythonDiagnostic {
     let mut contracts: Vec<PythonContractResult> = vec![];
 
-    if let Some(seed) = managed_python_seed_path() {
+    if let Some(seed) = managed_seed {
         contracts.push(PythonContractResult {
             id: "C1_MANAGED_RUNTIME".into(),
             title: "内置运行时".into(),
@@ -228,7 +238,7 @@ pub(crate) fn diagnose_python_env(venv_dir: String) -> PythonDiagnostic {
             code: "RUNTIME_MISSING".into(),
             evidence: vec![format!(
                 "missing: {}",
-                bootstrap_resource_dir().join("python").display()
+                bootstrap_dir.join("python").display()
             )],
             auto_fix: false,
             fix_hint: Some("请重装 OpenAkita 以恢复内置运行时".into()),
@@ -259,7 +269,7 @@ pub(crate) fn diagnose_python_env(venv_dir: String) -> PythonDiagnostic {
         contracts,
         environment: PythonEnvironmentSnapshot {
             platform: format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH),
-            bundled_python_path: None,
+            bundled_python_path: managed_seed.map(|seed| seed.to_string_lossy().to_string()),
             openakita_version: None,
         },
         trace_id,
@@ -450,4 +460,51 @@ pub(crate) fn export_python_diagnostic_report(venv_dir: String) -> Result<String
     let text = serde_json::to_string_pretty(&diag).map_err(|e| format!("序列化报告失败: {e}"))?;
     fs::write(&report_path, text).map_err(|e| format!("写入报告失败: {e}"))?;
     Ok(report_path.to_string_lossy().to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn offline_diagnostic_serializes_the_managed_runtime_contract() {
+        let bootstrap = Path::new("bootstrap");
+        let seed = bootstrap.join("python").join(if cfg!(windows) {
+            "python.exe"
+        } else {
+            "bin/python3"
+        });
+
+        let diagnostic =
+            make_backend_offline_diagnostic("trace-test".into(), 18900, Some(&seed), bootstrap);
+        let value = serde_json::to_value(diagnostic).unwrap();
+
+        assert_eq!(value["summary"], "healthy");
+        assert_eq!(value["traceId"], "trace-test");
+        assert!(value["generatedAt"].is_string());
+        assert_eq!(
+            value["environment"]["bundledPythonPath"],
+            seed.to_string_lossy().as_ref()
+        );
+        assert_eq!(value["contracts"][0]["id"], "C1_MANAGED_RUNTIME");
+        assert_eq!(value["contracts"][0]["code"], "RUNTIME_OK");
+        assert_eq!(value["contracts"][1]["id"], "C0_BACKEND_OFFLINE");
+        assert!(value.get("systemPythonOk").is_none());
+        assert!(value.get("systemPythonPath").is_none());
+    }
+
+    #[test]
+    fn offline_diagnostic_marks_a_missing_managed_runtime_as_broken() {
+        let diagnostic = make_backend_offline_diagnostic(
+            "trace-missing".into(),
+            18900,
+            None,
+            Path::new("bootstrap"),
+        );
+        let value = serde_json::to_value(diagnostic).unwrap();
+
+        assert_eq!(value["summary"], "broken");
+        assert_eq!(value["contracts"][0]["status"], "fail");
+        assert_eq!(value["contracts"][0]["code"], "RUNTIME_MISSING");
+    }
 }

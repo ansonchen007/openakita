@@ -274,6 +274,13 @@ pub(crate) fn strip_harmful_toolchain_env(cmd: &mut Command) {
     }
 }
 
+pub(crate) fn apply_playwright_browser_env(cmd: &mut Command, modules_root: &Path) {
+    let browsers_dir = modules_root.join("browser").join("browsers");
+    if browsers_dir.is_dir() {
+        cmd.env("PLAYWRIGHT_BROWSERS_PATH", browsers_dir);
+    }
+}
+
 pub(crate) async fn spawn_blocking_result<R: Send + 'static>(
     f: impl FnOnce() -> Result<R, String> + Send + 'static,
 ) -> Result<R, String> {
@@ -576,10 +583,7 @@ pub(crate) fn openakita_service_start_impl(
 
     // Playwright 浏览器二进制路径
     // browser 模块已包含在 core wheel 中；这里兼容旧版外置浏览器安装路径。
-    let browsers_dir = modules_dir().join("browser").join("browsers");
-    if browsers_dir.exists() {
-        cmd.env("PLAYWRIGHT_BROWSERS_PATH", &browsers_dir);
-    }
+    apply_playwright_browser_env(&mut cmd, &modules_dir());
 
     // detach + redirect io
     cmd.stdin(std::process::Stdio::null())
@@ -1339,4 +1343,40 @@ pub(crate) fn setup_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error:
         .build(app)?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ffi::OsStr;
+
+    fn command_env<'a>(cmd: &'a Command, key: &str) -> Option<&'a OsStr> {
+        cmd.get_envs()
+            .find(|(name, _)| *name == OsStr::new(key))
+            .and_then(|(_, value)| value)
+    }
+
+    #[test]
+    fn playwright_browser_env_is_applied_only_for_an_installed_browser() {
+        let modules_root = std::env::temp_dir().join(format!(
+            "openakita-playwright-env-test-{}-{}",
+            std::process::id(),
+            now_ms()
+        ));
+        let browsers_dir = modules_root.join("browser").join("browsers");
+
+        let mut missing = Command::new("openakita-test");
+        apply_playwright_browser_env(&mut missing, &modules_root);
+        assert_eq!(command_env(&missing, "PLAYWRIGHT_BROWSERS_PATH"), None);
+
+        fs::create_dir_all(&browsers_dir).unwrap();
+        let mut installed = Command::new("openakita-test");
+        apply_playwright_browser_env(&mut installed, &modules_root);
+        assert_eq!(
+            command_env(&installed, "PLAYWRIGHT_BROWSERS_PATH"),
+            Some(browsers_dir.as_os_str())
+        );
+
+        let _ = fs::remove_dir_all(modules_root);
+    }
 }

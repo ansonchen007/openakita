@@ -13,6 +13,10 @@ export default defineConfig({
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
+      "@shared/providers.json": path.resolve(
+        __dirname,
+        "../../src/openakita/llm/registries/providers.json",
+      ),
     },
   },
   test: {

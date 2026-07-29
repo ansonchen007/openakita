@@ -70,6 +70,8 @@ pub(crate) fn default_python_version() -> String {
     "3.12".to_string()
 }
 
+pub(crate) const DEFAULT_PIP_INDEX_URL: &str = "https://mirrors.aliyun.com/pypi/simple/";
+
 pub(crate) fn runtime_root_dir() -> PathBuf {
     openakita_root_dir().join("runtime")
 }
@@ -250,7 +252,7 @@ pub(crate) fn ensure_runtime_layout() -> Result<(), String> {
 pub(crate) fn default_pip_index() -> RuntimePipIndex {
     RuntimePipIndex {
         id: "aliyun".into(),
-        url: "https://mirrors.aliyun.com/pypi/simple/".into(),
+        url: DEFAULT_PIP_INDEX_URL.into(),
         trusted_host: "mirrors.aliyun.com".into(),
     }
 }
@@ -418,7 +420,10 @@ pub(crate) fn wheelhouse_has_locked_deps(wheel_path: &Path) -> bool {
 }
 
 pub(crate) fn managed_python_seed_path() -> Option<PathBuf> {
-    let bootstrap = bootstrap_resource_dir();
+    managed_python_seed_path_from(&bootstrap_resource_dir())
+}
+
+pub(crate) fn managed_python_seed_path_from(bootstrap: &Path) -> Option<PathBuf> {
     let base = bootstrap.join("python");
     if !base.exists() {
         return None;
@@ -1580,8 +1585,8 @@ pub(crate) fn build_modules_pythonpath() -> Option<String> {
         return None;
     }
     let mut paths = Vec::new();
-    for (module_id, _, _, _, _, _) in module_definitions() {
-        let sp = base.join(module_id).join("site-packages");
+    for module in module_definitions() {
+        let sp = base.join(module.id).join("site-packages");
         if sp.exists() {
             paths.push(sp.to_string_lossy().to_string());
         }
@@ -1767,6 +1772,26 @@ mod tests {
                 .and_then(|name| name.to_str()),
             Some("wheelhouse")
         );
+    }
+
+    #[test]
+    fn managed_python_seed_path_uses_the_bundled_bootstrap_layout() {
+        let temp = std::env::temp_dir().join(format!(
+            "openakita-python-seed-test-{}-{}",
+            std::process::id(),
+            now_ms()
+        ));
+        let expected = if cfg!(windows) {
+            temp.join("python").join("python.exe")
+        } else {
+            temp.join("python").join("bin").join("python3")
+        };
+        fs::create_dir_all(expected.parent().unwrap()).unwrap();
+        fs::write(&expected, []).unwrap();
+
+        assert_eq!(managed_python_seed_path_from(&temp), Some(expected));
+
+        let _ = fs::remove_dir_all(temp);
     }
 
     #[test]

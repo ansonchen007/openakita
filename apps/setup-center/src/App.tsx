@@ -62,7 +62,14 @@ import "highlight.js/styles/github.css";
 import { getThemePref, setThemePref, THEME_CHANGE_EVENT, type Theme } from "./theme";
 import { resolveOnboardingCompletionStep } from "./utils/onboardingOutcome";
 import { copyToClipboard } from "./utils/clipboard";
-import { BUILTIN_PROVIDERS, PIP_INDEX_PRESETS, WEB_SEARCH_ENV_KEYS } from "./constants";
+import {
+  BUILTIN_PROVIDERS,
+  DEFAULT_PIP_INDEX_PRESET_ID,
+  DEFAULT_PIP_INDEX_URL,
+  PIP_INDEX_PRESETS,
+  WEB_SEARCH_ENV_KEYS,
+  type PipIndexPresetId,
+} from "./constants";
 import { safeFetch } from "./providers";
 import {
   joinPath,
@@ -758,8 +765,8 @@ function MainApp() {
   const [installProgress, setInstallProgress] = useState<{ stage: string; percent: number } | null>(null);
   const [pipInstallPolling, setPipInstallPolling] = useState(false);
   const [pipInstallId, setPipInstallId] = useState("default");
-  const [indexUrl, setIndexUrl] = useState<string>("https://mirrors.aliyun.com/pypi/simple/");
-  const [pipIndexPresetId] = useState<"official" | "tuna" | "ustc" | "aliyun" | "custom">("aliyun");
+  const [indexUrl, setIndexUrl] = useState<string>(DEFAULT_PIP_INDEX_URL);
+  const [pipIndexPresetId] = useState<PipIndexPresetId>(DEFAULT_PIP_INDEX_PRESET_ID);
   const [customIndexUrl, setCustomIndexUrl] = useState<string>("");
   const [, setVenvReady] = useState(false);
   const [openakitaInstalled, setOpenakitaInstalled] = useState(false);
