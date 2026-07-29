@@ -15,8 +15,8 @@ import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip
 import { toast } from "sonner";
 import { setThemePref } from "../theme";
 import type { Theme } from "../theme";
-import { downloadFile, showInFolder, readFileBase64, getLocalFileInfo, onDragDrop, openFileDialog, IS_TAURI, IS_WEB, IS_MOBILE_BROWSER, onWsEvent, logger } from "../platform";
-import { safeFetch } from "../providers";
+import { downloadFile, showInFolder, getLocalFileInfo, uploadLocalFile, onDragDrop, openFileDialog, IS_TAURI, IS_WEB, IS_MOBILE_BROWSER, onWsEvent, logger } from "../platform";
+import { safeFetch, safeFetchResponse } from "../providers";
 import type {
   ChatMessage,
   ChatErrorInfo,
@@ -85,6 +85,10 @@ import {
   messageHistoryRichness,
   shouldRenderConversationMessages,
 } from "./chat/utils/chatHelpers";
+import {
+  isAttachmentStillPreparing,
+  toChatAttachmentRequest,
+} from "./chat/utils/attachmentStaging";
 import { useMdModules } from "./chat/hooks/useMdModules";
 import { useMessageReducer, useConversationReducer } from "./chat/hooks/useMessages";
 import { useQueryGuard } from "./chat/hooks/useQueryGuard";
@@ -936,12 +940,6 @@ function formatAttachmentSize(bytes: number | null | undefined): string {
   if (n >= 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)}MB`;
   if (n >= 1024) return `${(n / 1024).toFixed(1)}KB`;
   return `${Math.round(n)}B`;
-}
-
-function isAttachmentStillPreparing(att: ChatAttachment): boolean {
-  if (att.source === "working_directory" && att.relativePath) return false;
-  if (att.uploadStatus === "uploading") return true;
-  return !att.url && !att.localPath;
 }
 
 function workingDirectoryName(path?: string): string {
@@ -3843,17 +3841,7 @@ export function ChatView({
 
       // 附件信息
       if (attachmentsToSend.length > 0) {
-        body.attachments = attachmentsToSend.map((a) => ({
-          type: a.type,
-          source: a.source || "upload",
-          relativePath: a.relativePath,
-          name: a.name,
-          url: a.url,
-          local_path: a.localPath,
-          upload_id: a.uploadId,
-          size: a.size,
-          mime_type: a.mimeType,
-        }));
+        body.attachments = attachmentsToSend.map(toChatAttachmentRequest);
       }
 
       resetIdleTimer(); // Start idle timer before fetch
@@ -3910,7 +3898,7 @@ export function ChatView({
             method: "GET",
             signal: abort.signal,
           })
-        : await safeFetch(`${apiBase}/api/chat`, {
+        : await safeFetchResponse(`${apiBase}/api/chat`, {
             method: "POST",
             headers: _headers,
             body: requestBody,
@@ -3940,7 +3928,7 @@ export function ChatView({
           const sinceSeq = thisConvId ? (lastSeqByConv.current.get(thisConvId) ?? 0) : 0;
           const resumeUrl =
             `${apiBase}/api/chat/resume?conversation_id=${encodeURIComponent(thisConvId)}&since_seq=${sinceSeq}`;
-          response = await safeFetch(resumeUrl, { method: "GET", signal: abort.signal });
+          response = await safeFetchResponse(resumeUrl, { method: "GET", signal: abort.signal });
           if (!response.ok) {
             // 后端没有可恢复的流。两种情况，必须区分，否则会话状态会卡住：
             //   1) 任务仍在跑，只是没有可挂载的 SSE writer（少见）→ 保持 running。
@@ -3975,7 +3963,7 @@ export function ChatView({
           // response 现在是 resume 的 SSE 流 → 落入下方 reader 循环正常处理续写。
         } else {
           // steer_failed：作为全新消息重发一次（此时旧任务已结束，应能正常开流）。
-           response = await safeFetch(`${apiBase}/api/chat`, {
+           response = await safeFetchResponse(`${apiBase}/api/chat`, {
              method: "POST",
              headers: _headers,
              body: requestBody,
@@ -6393,64 +6381,76 @@ export function ChatView({
           return;
         }
 
-        const uploadId = genId();
-        setPendingAttachments((prev) => [...prev, {
-          type: isImage ? "image" : "video",
+      }
+
+      const uploadId = genId();
+      const attachmentType: ChatAttachment["type"] = isImage
+        ? "image"
+        : isVideo
+          ? "video"
+          : isAudio
+            ? "voice"
+            : isPdf
+              ? "document"
+              : "file";
+      const att: ChatAttachment = {
+        type: attachmentType,
+        name,
+        localPath: filePath,
+        size: info.size,
+        mimeType,
+        uploadStatus: "uploading",
+        uploadProgress: 0,
+        _uploadId: uploadId,
+      };
+      setPendingAttachments((prev) => [...prev, att]);
+      try {
+        const uploadBase = apiBaseRef.current.replace(/\/+$/, "");
+        const uploaded = await uploadLocalFile(
+          filePath,
+          `${uploadBase}/api/upload`,
           name,
-          localPath: filePath,
-          size: info.size,
           mimeType,
-          uploadStatus: "uploading",
-          uploadProgress: 0,
-          _uploadId: uploadId,
-        }]);
-        try {
-          const dataUrl = await readFileBase64(filePath, (loaded, total) => {
+          (loaded, total) => {
             if (total <= 0) return;
             const progress = Math.max(0, Math.min(0.98, loaded / total));
             setPendingAttachments((prev) => prev.map((a) =>
               a._uploadId === uploadId ? { ...a, uploadProgress: progress } : a
             ));
-          });
-          if (cancelled) return;
-          setPendingAttachments((prev) => prev.map((a) =>
-            a._uploadId === uploadId
-              ? {
-                ...a,
-                previewUrl: isImage ? dataUrl : undefined,
-                url: dataUrl,
-                uploadStatus: "uploaded",
-                uploadProgress: undefined,
-                uploadError: undefined,
-              }
-              : a
-          ));
-        } catch (err) {
-          if (!cancelled) notifyError(`文件读取失败: ${name}`);
-          logger.error("Chat", "DragDrop read_file_base64 failed", { name, error: String(err) });
-          setPendingAttachments((prev) => prev.map((a) =>
-            a._uploadId === uploadId
-              ? { ...a, uploadStatus: "failed", uploadProgress: undefined, uploadError: "文件读取失败" }
-              : a
-          ));
-        }
-        return;
+          },
+        );
+        if (cancelled) return;
+        const uploadedUrl = uploaded.url.startsWith("http")
+          ? uploaded.url
+          : `${uploadBase}${uploaded.url}`;
+        setPendingAttachments((prev) => prev.map((a) =>
+          a._uploadId === uploadId
+            ? {
+              ...a,
+              url: uploadedUrl,
+              localPath: uploaded.localPath,
+              uploadId: uploaded.uploadId,
+              size: uploaded.size ?? a.size,
+              mimeType: uploaded.mimeType ?? a.mimeType,
+              uploadStatus: "uploaded",
+              uploadProgress: undefined,
+              uploadError: undefined,
+            }
+            : a
+        ));
+        logger.info("Chat.Upload", "DragDrop native upload completed", {
+          name,
+          size: uploaded.size ?? info.size,
+        });
+      } catch (err) {
+        if (!cancelled) notifyError(`文件上传失败: ${name}`);
+        logger.error("Chat", "DragDrop native upload failed", { name, error: String(err) });
+        setPendingAttachments((prev) => prev.map((a) =>
+          a._uploadId === uploadId
+            ? { ...a, uploadStatus: "failed", uploadProgress: undefined, uploadError: String(err) }
+            : a
+        ));
       }
-
-      const att: ChatAttachment = {
-        type: isAudio ? "voice" : isPdf ? "document" : "file",
-        name,
-        localPath: filePath,
-        size: info.size,
-        mimeType,
-        uploadStatus: "uploaded",
-      };
-      setPendingAttachments((prev) => [...prev, att]);
-      logger.info("Chat.Upload", "DragDrop staged local file attachment", {
-        name,
-        size: info.size,
-        localOnly: true,
-      });
     };
 
     const handleDroppedPaths = (paths: string[]) => {
