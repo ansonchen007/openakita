@@ -40,7 +40,7 @@ pub(crate) mod prelude {
     pub(crate) use std::sync::Mutex;
     pub(crate) use std::thread;
     pub(crate) use std::time::{Duration, Instant};
-    pub(crate) use tauri::{Emitter, Manager};
+    pub(crate) use tauri::Manager;
     #[cfg(desktop)]
     pub(crate) use tauri_plugin_autostart::MacosLauncher;
     #[cfg(desktop)]

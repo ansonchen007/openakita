@@ -463,7 +463,7 @@ pub fn run() {
     };
 
     app.run(|_app_handle, event| {
-        if matches!(UI_LIFECYCLE.load(Ordering::SeqCst), x if x == UiLifecycle::Starting as u8) {
+        if ui_lifecycle() == UiLifecycle::Starting {
             set_ui_lifecycle(UiLifecycle::Running);
         }
         #[cfg(target_os = "macos")]
