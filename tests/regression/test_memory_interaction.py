@@ -9,7 +9,7 @@
 5. 端到端交互测试
 
 运行方式:
-    python tests/test_memory_interaction.py
+    uv run pytest tests/regression/test_memory_interaction.py
 """
 
 import sys
