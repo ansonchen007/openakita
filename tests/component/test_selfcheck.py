@@ -6,7 +6,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from openakita.evolution.log_analyzer import ErrorPattern, LogEntry
-from openakita.evolution.self_check import SelfChecker
+from openakita.evolution.self_check import SelfChecker, SelfCheckPromptUnavailableError
 
 
 @pytest.fixture
@@ -52,6 +52,54 @@ class TestReportManagement:
 
 
 class TestSelfCheckResilience:
+    def test_workspace_prompt_takes_precedence(self, mock_brain, tmp_path, monkeypatch):
+        prompt_path = tmp_path / "prompts" / "selfcheck_system.md"
+        prompt_path.parent.mkdir()
+        prompt_path.write_text("workspace selfcheck policy", encoding="utf-8")
+        monkeypatch.setattr("openakita.config.settings.project_root", tmp_path)
+
+        checker = SelfChecker(brain=mock_brain)
+
+        assert checker._load_selfcheck_system_prompt() == "workspace selfcheck policy"
+
+    def test_bundled_prompt_is_used_without_workspace_override(
+        self,
+        mock_brain,
+        tmp_path,
+        monkeypatch,
+    ):
+        workspace_root = tmp_path / "workspace"
+        package_root = tmp_path / "package" / "openakita"
+        bundled_prompt = package_root / "prompts" / "selfcheck" / "system.md"
+        workspace_root.mkdir()
+        bundled_prompt.parent.mkdir(parents=True)
+        bundled_prompt.write_text("bundled selfcheck policy", encoding="utf-8")
+        monkeypatch.setattr("openakita.config.settings.project_root", workspace_root)
+        monkeypatch.setattr(
+            "openakita.evolution.self_check.resources.files",
+            lambda package: package_root,
+        )
+
+        checker = SelfChecker(brain=mock_brain)
+
+        assert checker._load_selfcheck_system_prompt() == "bundled selfcheck policy"
+
+    def test_missing_prompts_fail_closed(self, mock_brain, tmp_path, monkeypatch):
+        workspace_root = tmp_path / "workspace"
+        package_root = tmp_path / "package" / "openakita"
+        workspace_root.mkdir()
+        package_root.mkdir(parents=True)
+        monkeypatch.setattr("openakita.config.settings.project_root", workspace_root)
+        monkeypatch.setattr(
+            "openakita.evolution.self_check.resources.files",
+            lambda package: package_root,
+        )
+
+        checker = SelfChecker(brain=mock_brain)
+
+        with pytest.raises(SelfCheckPromptUnavailableError, match="prompt is unavailable"):
+            checker._load_selfcheck_system_prompt()
+
     def test_parse_llm_analysis_preserves_unstructured_string_items(self, mock_brain):
         checker = SelfChecker(brain=mock_brain)
 
@@ -131,4 +179,39 @@ class TestSelfCheckResilience:
 
         assert report.partial is True
         assert "时间预算" in report.status_note
+        assert (tmp_path / "data" / "selfcheck" / f"{report.date}_report.json").exists()
+
+    @pytest.mark.asyncio
+    async def test_run_daily_check_skips_llm_and_fix_when_prompt_is_unavailable(
+        self,
+        mock_brain,
+        tmp_path,
+        monkeypatch,
+    ):
+        log_dir = tmp_path / "logs"
+        log_dir.mkdir()
+        (log_dir / "error.log").write_text(
+            "2026-03-31 00:00:00,000 - openakita.tools.browser - ERROR - Browser failed\n",
+            encoding="utf-8",
+        )
+        package_root = tmp_path / "empty-package" / "openakita"
+        package_root.mkdir(parents=True)
+        monkeypatch.setattr("openakita.config.settings.project_root", tmp_path)
+        monkeypatch.setattr(
+            "openakita.evolution.self_check.resources.files",
+            lambda package: package_root,
+        )
+        checker = SelfChecker(brain=mock_brain)
+
+        async def no_memory_insights():
+            return {}
+
+        monkeypatch.setattr(checker, "_extract_memory_insights", no_memory_insights)
+
+        report = await checker.run_daily_check()
+
+        assert report.partial is True
+        assert "提示词不可用" in report.status_note
+        assert report.fix_attempted == 0
+        mock_brain.think.assert_not_called()
         assert (tmp_path / "data" / "selfcheck" / f"{report.date}_report.json").exists()
