@@ -5,10 +5,10 @@
 
 import json
 import sqlite3
-import time
 import sys
-import uuid
+import time
 import urllib.request
+import uuid
 from datetime import datetime
 from pathlib import Path
 
@@ -18,9 +18,10 @@ sys.stderr.reconfigure(line_buffering=True)
 API_BASE = "http://127.0.0.1:18900"
 DELAY = 2
 TIMEOUT = 120
-DB_PATH = Path(__file__).resolve().parent.parent / "data" / "memory" / "openakita.db"
-REPORT_TXT = Path(__file__).resolve().parent.parent / "data" / "temp" / "e2e_v3_report.txt"
-REPORT_JSON = Path(__file__).resolve().parent.parent / "data" / "temp" / "e2e_v3_report.json"
+REPO_ROOT = Path(__file__).resolve().parents[2]
+DB_PATH = REPO_ROOT / "data" / "memory" / "openakita.db"
+REPORT_TXT = REPO_ROOT / "data" / "temp" / "e2e_v3_report.txt"
+REPORT_JSON = REPO_ROOT / "data" / "temp" / "e2e_v3_report.json"
 
 # 预分配会话 ID，确保相关测试共享 conversation
 CONV_NICKNAME = f"conv_nick_{uuid.uuid4().hex[:8]}"
@@ -496,7 +497,7 @@ def check_sqlite() -> list[str]:
 
 def main():
     REPORT_TXT.parent.mkdir(parents=True, exist_ok=True)
-    out = open(REPORT_TXT, "w", encoding="utf-8")
+    out = REPORT_TXT.open("w", encoding="utf-8")  # noqa: SIM115 - closed after full harness
 
     def log(s=""):
         print(s)
