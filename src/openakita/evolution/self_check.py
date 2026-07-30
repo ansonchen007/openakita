@@ -16,6 +16,7 @@ import tempfile
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+from importlib import resources
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +27,10 @@ from ..tools.shell import ShellTool
 from .log_analyzer import ErrorPattern, LogAnalyzer
 
 logger = logging.getLogger(__name__)
+
+
+class SelfCheckPromptUnavailableError(RuntimeError):
+    """Raised when neither a workspace override nor the bundled prompt is available."""
 
 
 @dataclass
@@ -574,33 +579,6 @@ ID: {result.test_id}
 
     # ==================== 日志分析与自动修复 ====================
 
-    # 默认的自检提示词（当文件不存在时使用）
-    DEFAULT_SELFCHECK_PROMPT = """你是系统自检 Agent，负责分析错误日志并决定修复策略。
-
-针对每个错误，输出 JSON 数组：
-[
-  {
-    "error_id": "模块名_消息前缀",
-    "module": "模块名",
-    "error_type": "core|tool|channel|config|network|skill|task",
-    "analysis": "错误原因分析",
-    "severity": "critical|high|medium|low",
-    "can_fix": true|false,
-    "fix_instruction": "具体的修复指令（给修复 Agent 的任务描述）",
-    "fix_reason": "选择策略的原因",
-    "requires_restart": false,
-    "note_to_user": "给用户的提示（如需人工处理）"
-  }
-]
-
-规则：
-- 核心组件（Brain/Agent/Memory/Scheduler/LLM/Database）错误：can_fix=false
-- 工具/通道/配置错误：可以尝试修复，在 fix_instruction 中写清楚具体操作
-- Skill 相关错误：排查 skill 本身的问题（文件、格式、依赖），不要纠结于任务
-- 任务持续失败：建议用户优化任务配置，可能是任务设计不合理
-- fix_instruction 要写清楚使用什么工具（shell/file），执行什么命令
-- 只输出 JSON 数组"""
-
     async def run_daily_check(
         self,
         since: datetime | None = None,
@@ -863,6 +841,9 @@ ID: {result.test_id}
                 f"fixed={report.fix_success}, failed={report.fix_failed}"
             )
 
+        except SelfCheckPromptUnavailableError as e:
+            logger.error("Daily check stopped before LLM analysis: %s", e)
+            mark_partial("系统自检提示词不可用，已跳过本轮 LLM 分析和自动修复。")
         except Exception as e:
             logger.error(f"Daily check failed: {e}", exc_info=True)
 
@@ -1145,13 +1126,7 @@ ID: {result.test_id}
         Returns:
             分析结果列表
         """
-        # 加载专用提示词
-        prompt_path = settings.project_root / "prompts" / "selfcheck_system.md"
-        if prompt_path.exists():
-            system_prompt = prompt_path.read_text(encoding="utf-8")
-        else:
-            system_prompt = self.DEFAULT_SELFCHECK_PROMPT
-            logger.warning("Using default selfcheck prompt")
+        system_prompt = self._load_selfcheck_system_prompt()
 
         # 追加环境标识，让 LLM 知道当前环境类型
         env_hint = (
@@ -1231,6 +1206,45 @@ ID: {result.test_id}
                 continue
 
         return all_results
+
+    @staticmethod
+    def _load_selfcheck_system_prompt() -> str:
+        """Load the workspace override, then the prompt bundled in the package.
+
+        The prompt controls whether unattended repairs may be attempted. If both
+        sources are unavailable, fail closed instead of silently substituting a
+        second, potentially divergent policy.
+        """
+        override_path = settings.project_root / "prompts" / "selfcheck_system.md"
+        if override_path.is_file():
+            try:
+                prompt = override_path.read_text(encoding="utf-8").strip()
+                if prompt:
+                    logger.debug("Using workspace selfcheck prompt: %s", override_path)
+                    return prompt
+                logger.warning("Ignoring empty workspace selfcheck prompt: %s", override_path)
+            except (OSError, UnicodeError) as e:
+                logger.warning("Failed to read workspace selfcheck prompt %s: %s", override_path, e)
+
+        try:
+            bundled_path = resources.files("openakita").joinpath(
+                "prompts", "selfcheck", "system.md"
+            )
+            if bundled_path.is_file():
+                prompt = bundled_path.read_text(encoding="utf-8").strip()
+                if prompt:
+                    logger.debug("Using bundled selfcheck prompt: %s", bundled_path)
+                    return prompt
+                logger.error("Bundled selfcheck prompt is empty: %s", bundled_path)
+        except (ModuleNotFoundError, OSError, TypeError, UnicodeError) as e:
+            logger.error("Failed to read bundled selfcheck prompt: %s", e)
+
+        message = (
+            "Self-check system prompt is unavailable; checked workspace path "
+            f"{override_path} and bundled resource openakita/prompts/selfcheck/system.md"
+        )
+        logger.error(message)
+        raise SelfCheckPromptUnavailableError(message)
 
     async def _analyze_single_batch(self, error_summary: str, system_prompt: str) -> list[dict]:
         """
@@ -1385,11 +1399,13 @@ ID: {result.test_id}
                     fix_instruction = None
                     can_fix = False
                 elif "not found" in message_lower or "no such file" in message_lower:
-                    fix_instruction = "使用 file 工具创建缺失的目录：确保 data/、data/cache/、data/sessions/、logs/ 目录存在"
-                    can_fix = True
+                    # 缺失路径不一定属于自动修复白名单，降级分析不得猜测创建位置。
+                    fix_instruction = None
+                    can_fix = False
                 elif "cache" in message_lower or "corrupt" in message_lower:
-                    fix_instruction = "使用 shell 工具清理缓存目录：删除 data/cache/ 下的所有文件，然后重新创建目录"
-                    can_fix = True
+                    # 清理缓存是破坏性操作；没有 LLM 确认范围时仅报告。
+                    fix_instruction = None
+                    can_fix = False
                 elif "timeout" in message_lower:
                     # 进程清理通常涉及系统层面操作，报告给用户即可
                     fix_instruction = None
@@ -1529,7 +1545,7 @@ ID: {result.test_id}
 {fix_instruction}
 
 ## 要求
-1. 你需要 **直接修复** 工具层问题（内置工具/skills/MCP/channels 等），可以使用工具（shell、file、skills、call_mcp_tool 等）
+1. 你需要 **直接修复** 工具层问题（内置工具/skills/MCP/channels 等），只能使用当前实际暴露的 `glob`、`grep`、`read_file`、`write_file`、`edit_file`、`list_directory`、`run_shell`、`list_skills`、`get_skill_info`、`list_mcp_servers` 等工具
 2. **禁止** 修改 Akita 核心系统代码（`src/openakita/core/`、`src/openakita/llm/`、`src/openakita/memory/`、`src/openakita/scheduler/`、`src/openakita/storage/`、`src/openakita/agents/` 等）
 3. **禁止** 进行 Windows/系统层面优化与命令操作（注册表、计划任务、权限修复、服务/进程管理等）；如果需要这些操作，请写入“需人工处理”的结论
 4. 修复后验证结果是否正确（能用轻量验证就做，如 list_skills、list_mcp_servers、读取文件等）
