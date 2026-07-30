@@ -58,7 +58,7 @@ tests/
 │   └── test_setup_wizard.py       # 安装向导 (目录/配置生成)
 ├── e2e/                           # L4: 录制回放/真实 LLM, <15min
 │   ├── test_multiturn.py          # 多轮对话上下文
-│   ├── test_memory_e2e.py         # 记忆跨会话持久化
+│   ├── test_memory_e2e_v3.py      # 记忆跨会话持久化（手工真实后端测试）
 │   ├── test_tool_orchestration.py # 多步工具编排
 │   ├── test_interrupt_e2e.py      # 中断/取消/跳过全链路
 │   ├── test_cli.py                # CLI 命令
@@ -185,6 +185,9 @@ LLM_TEST_MODE=replay pytest tests/e2e/ -v
 
 # 录制模式 (本地手动)
 LLM_TEST_MODE=record pytest tests/e2e/ -v
+
+# 记忆系统真实后端测试（先在另一个终端启动 openakita serve）
+uv run python tests/e2e/test_memory_e2e_v3.py
 ```
 
 ---
