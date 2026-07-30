@@ -1,6 +1,7 @@
 #[cfg(windows)]
 use crate::backend::win;
 use crate::prelude::*;
+use tauri::Emitter;
 
 pub(crate) struct ManagedProcess {
     pub(crate) child: std::process::Child,
@@ -30,7 +31,40 @@ pub(crate) enum UiLifecycle {
     Exited = 3,
 }
 
-pub(crate) static UI_LIFECYCLE: AtomicU8 = AtomicU8::new(UiLifecycle::Starting as u8);
+pub(crate) struct UiLifecycleGate {
+    state: AtomicU8,
+}
+
+impl UiLifecycleGate {
+    pub(crate) const fn new(state: UiLifecycle) -> Self {
+        Self {
+            state: AtomicU8::new(state as u8),
+        }
+    }
+
+    pub(crate) fn state(&self) -> UiLifecycle {
+        match self.state.load(Ordering::SeqCst) {
+            value if value == UiLifecycle::Starting as u8 => UiLifecycle::Starting,
+            value if value == UiLifecycle::Running as u8 => UiLifecycle::Running,
+            value if value == UiLifecycle::Quiescing as u8 => UiLifecycle::Quiescing,
+            _ => UiLifecycle::Exited,
+        }
+    }
+
+    pub(crate) fn set(&self, state: UiLifecycle) {
+        self.state.store(state as u8, Ordering::SeqCst);
+    }
+
+    pub(crate) fn accepts_tauri_ops(&self) -> bool {
+        matches!(self.state(), UiLifecycle::Starting | UiLifecycle::Running)
+    }
+
+    fn run_if_live<T>(&self, operation: impl FnOnce() -> T) -> Option<T> {
+        self.accepts_tauri_ops().then(operation)
+    }
+}
+
+static UI_LIFECYCLE: UiLifecycleGate = UiLifecycleGate::new(UiLifecycle::Starting);
 pub(crate) static SHUTDOWN: AtomicBool = AtomicBool::new(false);
 
 pub(crate) const EXIT_CLEANUP_IDLE: u8 = 0;
@@ -39,27 +73,47 @@ pub(crate) const EXIT_CLEANUP_COMPLETE: u8 = 2;
 pub(crate) static EXIT_CLEANUP_STATE: AtomicU8 = AtomicU8::new(EXIT_CLEANUP_IDLE);
 
 pub(crate) fn set_ui_lifecycle(state: UiLifecycle) {
-    UI_LIFECYCLE.store(state as u8, Ordering::SeqCst);
+    UI_LIFECYCLE.set(state);
+}
+
+pub(crate) fn ui_lifecycle() -> UiLifecycle {
+    UI_LIFECYCLE.state()
 }
 
 pub(crate) fn ui_accepts_tauri_ops() -> bool {
-    matches!(
-        UI_LIFECYCLE.load(Ordering::SeqCst),
-        x if x == UiLifecycle::Starting as u8 || x == UiLifecycle::Running as u8
-    )
+    UI_LIFECYCLE.accepts_tauri_ops()
 }
 
-pub(crate) fn emit_if_ui_live<S: Serialize + Clone>(
-    app: &tauri::AppHandle,
+trait UiEventEmitter {
+    fn emit_event<S: Serialize + Clone>(&self, event: &str, payload: S) -> Result<(), String>;
+}
+
+impl<R: tauri::Runtime> UiEventEmitter for tauri::AppHandle<R> {
+    fn emit_event<S: Serialize + Clone>(&self, event: &str, payload: S) -> Result<(), String> {
+        self.emit(event, payload).map_err(|error| error.to_string())
+    }
+}
+
+fn emit_if_ui_live_with_gate<E: UiEventEmitter, S: Serialize + Clone>(
+    gate: &UiLifecycleGate,
+    emitter: &E,
     event: &str,
     payload: S,
 ) {
-    if !ui_accepts_tauri_ops() {
+    let Some(result) = gate.run_if_live(|| emitter.emit_event(event, payload)) else {
         return;
-    }
-    if let Err(e) = app.emit(event, payload) {
+    };
+    if let Err(e) = result {
         log_to_file(&format!("[ui] emit {event} failed: {e}"));
     }
+}
+
+pub(crate) fn emit_if_ui_live<R: tauri::Runtime, S: Serialize + Clone>(
+    app: &tauri::AppHandle<R>,
+    event: &str,
+    payload: S,
+) {
+    emit_if_ui_live_with_gate(&UI_LIFECYCLE, app, event, payload);
 }
 
 /// AUTO_START_IN_PROGRESS 置 true 时记录的 wall-clock 毫秒。
@@ -520,6 +574,95 @@ pub(crate) fn panic_payload_to_string(payload: &(dyn std::any::Any + Send)) -> S
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Arc, Barrier};
+
+    #[derive(Default)]
+    struct CountingEmitter {
+        emitted: AtomicU64,
+    }
+
+    impl UiEventEmitter for CountingEmitter {
+        fn emit_event<S: Serialize + Clone>(
+            &self,
+            _event: &str,
+            _payload: S,
+        ) -> Result<(), String> {
+            self.emitted.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn lifecycle_gate_accepts_operations_only_while_ui_is_live() {
+        let gate = UiLifecycleGate::new(UiLifecycle::Starting);
+        assert!(gate.accepts_tauri_ops());
+
+        gate.set(UiLifecycle::Running);
+        assert!(gate.accepts_tauri_ops());
+
+        gate.set(UiLifecycle::Quiescing);
+        assert!(!gate.accepts_tauri_ops());
+
+        gate.set(UiLifecycle::Exited);
+        assert!(!gate.accepts_tauri_ops());
+    }
+
+    #[test]
+    fn background_operation_is_suppressed_after_quiescing_begins() {
+        let gate = Arc::new(UiLifecycleGate::new(UiLifecycle::Running));
+        let worker_ready = Arc::new(Barrier::new(2));
+        let worker_continue = Arc::new(Barrier::new(2));
+        let operation_ran = Arc::new(AtomicBool::new(false));
+
+        let worker = {
+            let gate = Arc::clone(&gate);
+            let worker_ready = Arc::clone(&worker_ready);
+            let worker_continue = Arc::clone(&worker_continue);
+            let operation_ran = Arc::clone(&operation_ran);
+            thread::spawn(move || {
+                worker_ready.wait();
+                worker_continue.wait();
+                gate.run_if_live(|| operation_ran.store(true, Ordering::SeqCst));
+            })
+        };
+
+        worker_ready.wait();
+        gate.set(UiLifecycle::Quiescing);
+        worker_continue.wait();
+        worker.join().expect("background worker should finish");
+
+        assert!(!operation_ran.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn tauri_events_are_not_emitted_after_ui_starts_quiescing() {
+        let gate = UiLifecycleGate::new(UiLifecycle::Running);
+        let emitter = CountingEmitter::default();
+        emit_if_ui_live_with_gate(
+            &gate,
+            &emitter,
+            "lifecycle-test-event",
+            serde_json::json!({ "state": "running" }),
+        );
+        assert_eq!(emitter.emitted.load(Ordering::SeqCst), 1);
+
+        gate.set(UiLifecycle::Quiescing);
+        emit_if_ui_live_with_gate(
+            &gate,
+            &emitter,
+            "lifecycle-test-event",
+            serde_json::json!({ "state": "quiescing" }),
+        );
+
+        gate.set(UiLifecycle::Exited);
+        emit_if_ui_live_with_gate(
+            &gate,
+            &emitter,
+            "lifecycle-test-event",
+            serde_json::json!({ "state": "exited" }),
+        );
+        assert_eq!(emitter.emitted.load(Ordering::SeqCst), 1);
+    }
 
     #[test]
     fn test_panic_payload_to_string_handles_standard_payloads() {
