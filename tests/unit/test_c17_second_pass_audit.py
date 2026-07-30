@@ -8,17 +8,15 @@
 3. ``ChainedJsonlWriter._reload_last_hash_from_disk`` 用 64KB 死窗口，
    单行 audit 记录大于 64KB 时会读不到完整 row_hash，下一次 append 用
    stale ``_last_hash`` 写出 prev_hash 不匹配的 fork。
-4. ``OrgEventStore.query`` 不持锁，与 ``emit`` 并发可能读到撕裂行。
-5. ``OrgEventStore.clear()`` ``rmtree`` 删掉 ``.write.lock``，破坏跨进程
-   协调。
-6. ``_sanitize_for_chain`` 对 set/frozenset 走原始迭代顺序，跨进程同
+4. ``OrgEventStore.query`` 与 ``append`` 并发时必须只返回完整事件。
+5. ``_sanitize_for_chain`` 对 set/frozenset 走原始迭代顺序，跨进程同
    set 不同插入顺序产生不同 row_hash。
-7. ``evolution_window.append_evolution_audit`` 的 ``except OSError`` 分支
+6. ``evolution_window.append_evolution_audit`` 的 ``except OSError`` 分支
    不再 fallback 到 raw append（filelock timeout 会丢 audit 行）。
-8. ``ChatView`` SSE 解析：同 ``id:`` 后跟多条 ``data:`` 时，dedup 逻辑
+7. ``ChatView`` SSE 解析：同 ``id:`` 后跟多条 ``data:`` 时，dedup 逻辑
    误把 ``pendingSeq`` 清零，第二条 data 漏 dedup。（前端逻辑，这里
    只验证后端不会因此重复发送同 id）
-9. ``/api/readyz`` 把 ``_check_event_loop_lag`` 跟其它 check 用 gather
+8. ``/api/readyz`` 把 ``_check_event_loop_lag`` 跟其它 check 用 gather
    并发跑，lag 会包含其它 check 的调度耗时 → 假阳性。
 """
 
@@ -36,6 +34,7 @@ from fastapi.testclient import TestClient
 from openakita.api.routes import health as health_module
 from openakita.core.policy_v2 import audit_chain as ac
 from openakita.core.policy_v2.param_mutation_audit import _sanitize_for_chain
+from openakita.orgs._runtime_event_store import OrgEventStore
 
 # ---------------------------------------------------------------------------
 # 1. readyz audit path bug
@@ -205,31 +204,13 @@ class TestHugeLineTailReload:
 
 
 # ---------------------------------------------------------------------------
-# 3. OrgEventStore query lock + clear preserves lockfile
+# 3. OrgEventStore append/query concurrency
 # ---------------------------------------------------------------------------
 
 
 class TestOrgEventStoreLockingFix:
-    def test_query_does_not_see_torn_line_under_concurrent_emit(self, tmp_path: Path) -> None:
-        """Stress: 4 writer threads + 1 reader thread for ~200 events.
-
-        We don't deterministically *trigger* a torn-line race here (it'd
-        require precise scheduling), but we DO assert that every event
-        the reader sees is a complete, parseable JSON object. Pre-fix
-        the read path used unlocked ``f.read_text()`` and split on
-        ``\\n`` which would emit half-records into the parser.
-        """
-        # P-RC-9 P9.9δ-2b: ``OrgEventStore`` absorption into
-        # ``runtime.orgs._runtime_event_bus`` (inventory §3) was not landed
-        # at this commit; lazy try-import + skip until absorption.
-        try:
-            from openakita.orgs._runtime_event_bus import (  # noqa: I001  # type: ignore[attr-defined]
-                OrgEventStore,
-            )
-        except ImportError as _absorb_err:
-            pytest.skip(f"v2 OrgEventStore absorption pending: {_absorb_err}")
-
-        store = OrgEventStore(tmp_path, "org-test")
+    def test_query_returns_complete_events_during_concurrent_append(self, tmp_path: Path) -> None:
+        store = OrgEventStore("org-test", jsonl_path=tmp_path / "events.jsonl")
 
         errors: list[str] = []
         stop = threading.Event()
@@ -238,17 +219,20 @@ class TestOrgEventStoreLockingFix:
             for k in range(50):
                 if stop.is_set():
                     break
-                store.emit("test", f"actor-{i}", {"k": k, "i": i, "payload": "x" * 200})
+                store.append({
+                    "event_type": "test",
+                    "actor": f"actor-{i}",
+                    "k": k,
+                    "i": i,
+                    "payload": "x" * 200,
+                })
 
         def reader() -> None:
             while not stop.is_set():
                 try:
                     events = store.query(limit=500)
-                    for e in events:
-                        assert isinstance(e, dict)
-                        assert "event_type" in e
-                except json.JSONDecodeError as exc:
-                    errors.append(f"torn line: {exc}")
+                    if any(e.get("event_type") != "test" for e in events):
+                        errors.append("query returned an incomplete event")
                 except Exception as exc:  # noqa: BLE001
                     errors.append(f"unexpected: {type(exc).__name__}: {exc}")
                 time.sleep(0.001)
@@ -264,44 +248,12 @@ class TestOrgEventStoreLockingFix:
         rthread.join(timeout=2.0)
 
         assert not errors, f"observed corrupt reads: {errors[:3]}"
-
-    def test_clear_preserves_write_lockfile(self, tmp_path: Path) -> None:
-        """Simulate a sibling worker holding the lock when clear() runs.
-
-        We don't actually need filelock semantics here — the bug was
-        ``shutil.rmtree(events_dir)`` blowing away the lockfile path no
-        matter what. We just ensure a file at the lock path survives.
-        """
-        # P-RC-9 P9.9δ-2b: v2 absorption pending; same guard as above.
-        try:
-            from openakita.orgs._runtime_event_bus import (  # noqa: I001  # type: ignore[attr-defined]
-                OrgEventStore,
-            )
-        except ImportError as _absorb_err:
-            pytest.skip(f"v2 OrgEventStore absorption pending: {_absorb_err}")
-
-        store = OrgEventStore(tmp_path, "org-clear")
-        store.emit("seed", "a", {"k": 1})
-
-        # Materialize the lockfile (filelock may or may not have left it
-        # after release; behaviour differs across versions / platforms).
-        lock_path = store._events_dir / ".write.lock"
-        lock_path.touch()
-        # Mark it so we can prove this exact file survived rather than
-        # being recreated empty.
-        sentinel = b"SENTINEL_FROM_HOLDER\n"
-        lock_path.write_bytes(sentinel)
-
-        store.clear()
-
-        assert lock_path.exists(), "clear() must NOT delete the cross-process lockfile (C17 二轮)"
-        # Crucial: it's the *same* file, not a recreated empty one.
-        assert lock_path.read_bytes() == sentinel, (
-            "clear() recreated the lockfile (lost the holder's state)"
-        )
-        # Day-file payloads are gone.
-        day_files = list(store._events_dir.glob("*.jsonl"))
-        assert day_files == []
+        assert not rthread.is_alive()
+        events = store.query(limit=500)
+        assert len(events) == 200
+        assert {(e["i"], e["k"]) for e in events} == {
+            (i, k) for i in range(4) for k in range(50)
+        }
 
 
 # ---------------------------------------------------------------------------

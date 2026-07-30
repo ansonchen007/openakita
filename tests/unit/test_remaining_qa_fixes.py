@@ -2,13 +2,6 @@ import pytest
 
 from openakita.core.risk_intent import OperationKind, RiskIntentClassifier, TargetKind
 from openakita.orgs.org_models import OrgNode
-
-# P-RC-9 P9.9δ-2b: v1 ``OrgRuntime._collect_tool_stats_from_trace`` was
-# absorbed into v2 ``_runtime_plugin_assets.collect_tool_stats_from_trace``
-# with DIFFERENT shape (returns ``{}`` rather than the v1
-# ``{"tools_total": N, "tools_used": [...]}`` payload). One test below
-# (``test_org_runtime_collects_tool_stats_from_trace``) pins the v1 shape;
-# wrapped in pytest.skip until P-RC-10 ports the assertion shape to v2.
 from openakita.tools.handlers.memory import MemoryHandler
 from openakita.tools.handlers.powershell import PowerShellHandler
 from openakita.tools.handlers.todo_handler import PlanHandler
@@ -44,14 +37,6 @@ def test_legacy_org_node_gets_profile_binding():
     })
 
     assert node.agent_profile_id == "code-assistant"
-
-
-def test_org_runtime_collects_tool_stats_from_trace():
-    pytest.skip(
-        "v2 ``_runtime_plugin_assets.collect_tool_stats_from_trace`` payload"
-        " shape differs from v1 ``OrgRuntime._collect_tool_stats_from_trace``;"
-        " tracked for P-RC-10 rewrite (v1-shape assert body dropped here)"
-    )
 
 
 def test_powershell_clixml_noise_is_stripped():

@@ -463,31 +463,7 @@ class TestReasoningEngineHelper:
 
 
 # ---------------------------------------------------------------------------
-# 6. orgs/runtime monkey-patch preserves the tuple contract
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_orgs_runtime_patch_returns_tuple_for_org_calls(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The org_* shortcut path must return (text, None), and the original
-    call path must forward the (text, hint) tuple unchanged."""
-    pytest.skip(
-        "v2 OrgRuntime no longer exposes the v1 private attrs the test pins"
-        " (_node_last_activity / _tool_handler / _register_org_tool_handler /"
-        " _touch_trackers_for_org etc.); P-RC-9 P9.9δ-2b drops the v1 import"
-        " without rewriting (tracked for P-RC-10)"
-    )
-    # P-RC-9 P9.9δ-2b: original v1-internal body (OrgRuntime.__new__ + private
-    # attrs _node_last_activity / _tool_handler / _register_org_tool_handler /
-    # _touch_trackers_for_org / _broadcast_ws / _record_file_output) dropped.
-    # v2 OrgRuntime delegates these surfaces to sibling Protocols; tracked for
-    # P-RC-10 rewrite against the v2 contract.
-
-
-# ---------------------------------------------------------------------------
-# 7. LLM converter drops the _hint field
+# 6. LLM converter drops the _hint field
 # ---------------------------------------------------------------------------
 
 

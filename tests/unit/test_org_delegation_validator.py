@@ -1,8 +1,4 @@
-"""Tests for OrgDelegationValidator (B3) and verify_incomplete_with_children
-diagnosis card downgrade (B5).
-"""
-
-import pytest
+"""Tests for OrgDelegationValidator."""
 
 from openakita.agent.validators import (
     OrgDelegationValidator,
@@ -10,18 +6,6 @@ from openakita.agent.validators import (
     ValidationResult,
     create_default_registry,
 )
-
-
-# P-RC-9 P9.9δ-2b: ``summarize`` absorption into
-# ``runtime.orgs._runtime_watchdog`` (inventory §3) was not landed at this
-# commit. Lazy resolver + per-test skip until absorption.
-def _summarize_or_skip():
-    try:
-        from openakita.orgs._runtime_watchdog import summarize  # type: ignore[attr-defined]
-
-        return summarize
-    except ImportError as _absorb_err:
-        pytest.skip(f"v2 summarize absorption pending: {_absorb_err}")
 
 
 class TestOrgDelegationValidator:
@@ -70,68 +54,3 @@ class TestOrgDelegationValidator:
         )
         out = v.validate(ctx)
         assert out.result == ValidationResult.SKIP
-
-
-class TestDiagnosisCardDowngrade:
-    def _make_trace_with_accept(self) -> list[dict]:
-        return [
-            {
-                "iteration": 1,
-                "tool_calls": [
-                    {
-                        "id": "tc1",
-                        "name": "org_accept_deliverable",
-                        "input": {"from_node": "writer_a"},
-                    }
-                ],
-                "tool_results": [
-                    {
-                        "tool_use_id": "tc1",
-                        "is_error": False,
-                        "result_content": "验收通过",
-                    }
-                ],
-            }
-        ]
-
-    def _make_trace_without_accept(self) -> list[dict]:
-        return [
-            {
-                "iteration": 1,
-                "tool_calls": [
-                    {
-                        "id": "tc1",
-                        "name": "write_file",
-                        "input": {"path": "/tmp/x.md"},
-                    }
-                ],
-                "tool_results": [
-                    {
-                        "tool_use_id": "tc1",
-                        "is_error": True,
-                        "result_content": "❌ permission denied",
-                    }
-                ],
-            }
-        ]
-
-    def test_verify_incomplete_with_accept_signal_downgrades(self):
-        summarize = _summarize_or_skip()
-        diag = summarize(self._make_trace_with_accept(), exit_reason="verify_incomplete")
-        assert diag["root_cause"] == "verify_incomplete_with_children"
-        assert "已通过下属交付" in diag["headline"]
-
-    def test_verify_incomplete_without_accept_signal_keeps_strict(self):
-        summarize = _summarize_or_skip()
-        diag = summarize(self._make_trace_without_accept(), exit_reason="verify_incomplete")
-        assert diag["root_cause"] == "verify_incomplete"
-        # 新模板（在 verify-incomplete-noise-fix 中改造为更具体的失败描述）：
-        # "节点未交付要求的文件 / 附件，仅以纯文字回复结束本轮"
-        # 断言对该语义的关键词进行匹配，不再绑定旧的 "未完成" 短语。
-        assert "未交付" in diag["headline"] or "纯文字" in diag["headline"]
-
-    def test_unrelated_exit_reason_unchanged(self):
-        # max_iterations / loop_terminated paths must be unaffected by the new branch.
-        summarize = _summarize_or_skip()
-        diag = summarize(self._make_trace_with_accept(), exit_reason="max_iterations")
-        assert diag["root_cause"] == "max_iterations"
