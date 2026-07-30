@@ -425,21 +425,17 @@ export async function checkForUpdate(options?: {
   channel?: string;
 }): Promise<UpdateInfo | null> {
   if (!IS_TAURI) return null;
-  try {
-    const { check } = await import("@tauri-apps/plugin-updater");
-    const headers = await buildUpdaterHeaders(options?.apiBaseUrl);
-    if (options?.channel) headers.set("X-OpenAkita-Channel", options.channel);
-    const hasHeaders = Array.from(headers.keys()).length > 0;
-    const update = await check(hasHeaders ? { headers } : undefined);
-    if (!update) return null;
-    return {
-      version: update.version,
-      downloadAndInstall: (onProgress) =>
-        update.downloadAndInstall(onProgress),
-    };
-  } catch {
-    return null;
-  }
+  const { check } = await import("@tauri-apps/plugin-updater");
+  const headers = await buildUpdaterHeaders(options?.apiBaseUrl);
+  if (options?.channel) headers.set("X-OpenAkita-Channel", options.channel);
+  const hasHeaders = Array.from(headers.keys()).length > 0;
+  const update = await check(hasHeaders ? { headers } : undefined);
+  if (!update) return null;
+  return {
+    version: update.version,
+    downloadAndInstall: (onProgress) =>
+      update.downloadAndInstall(onProgress),
+  };
 }
 
 async function buildUpdaterHeaders(apiBaseUrl?: string): Promise<Headers> {
