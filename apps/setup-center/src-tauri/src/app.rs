@@ -22,6 +22,7 @@ pub fn run() {
     if std::env::var_os("RUST_BACKTRACE").is_none() {
         std::env::set_var("RUST_BACKTRACE", "1");
     }
+    crate::graphics::configure_webview_environment();
     spawn_machine_info_collector();
 
     // Native crash handler: capture SEH exceptions (access violation /
@@ -90,15 +91,6 @@ pub fn run() {
                 };
                 std::env::set_var(key, &val);
             }
-        }
-    }
-
-    // Workaround: NVIDIA drivers on Linux can cause a blank WebKitGTK window
-    // due to DMA-BUF renderer incompatibility. Disable it preemptively.
-    #[cfg(target_os = "linux")]
-    {
-        if std::env::var("WEBKIT_DISABLE_DMABUF_RENDERER").is_err() {
-            std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
         }
     }
 

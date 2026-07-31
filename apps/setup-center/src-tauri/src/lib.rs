@@ -6,6 +6,7 @@ pub(crate) mod crash_handler;
 mod environment;
 mod feedback;
 pub(crate) mod finance;
+mod graphics;
 mod lifecycle;
 pub(crate) mod migrations;
 mod network;
