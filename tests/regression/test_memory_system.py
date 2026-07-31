@@ -4,8 +4,8 @@
 覆盖所有记忆系统改动的功能测试，共 50+ 个测试用例
 
 运行方式:
-    pytest tests/test_memory_system.py -v
-    pytest tests/test_memory_system.py -v -k "vector"  # 只运行向量相关测试
+    uv run pytest tests/regression/test_memory_system.py -v
+    uv run pytest tests/regression/test_memory_system.py -v -k "vector"  # 只运行向量相关测试
 """
 
 import pytest

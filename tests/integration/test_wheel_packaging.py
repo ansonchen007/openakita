@@ -1,9 +1,9 @@
 """
-L3 Integration Tests: pyproject.toml wheel-packaging configuration.
+L3 Integration Tests: pyproject.toml package-resource configuration.
 
-These tests assert that the identity templates the setup wizard expects
-to find under the installed ``openakita`` package directory are actually
-shipped into the wheel via ``[tool.hatch.build.targets.wheel.force-include]``.
+These tests assert that identity templates and canonical prompts are shipped
+under the installed ``openakita`` package directory. Identity templates use
+``force-include``; prompts live directly in the configured package tree.
 
 Why this matters
 ================
@@ -44,6 +44,24 @@ def force_include() -> dict[str, str]:
     targets = data["tool"]["hatch"]["build"]["targets"]["wheel"]["force-include"]
     assert isinstance(targets, dict)
     return targets
+
+
+@pytest.fixture(scope="module")
+def sdist_include() -> list[str]:
+    """Load the source-distribution include list once per module."""
+    data = tomllib.loads(PYPROJECT_PATH.read_text(encoding="utf-8"))
+    includes = data["tool"]["hatch"]["build"]["targets"]["sdist"]["include"]
+    assert isinstance(includes, list)
+    return includes
+
+
+@pytest.fixture(scope="module")
+def wheel_packages() -> list[str]:
+    """Load the source package roots included in the wheel."""
+    data = tomllib.loads(PYPROJECT_PATH.read_text(encoding="utf-8"))
+    packages = data["tool"]["hatch"]["build"]["targets"]["wheel"]["packages"]
+    assert isinstance(packages, list)
+    return packages
 
 
 REQUIRED_IDENTITY_SOURCES = [
@@ -133,6 +151,39 @@ class TestIdentityTemplatesAreShipped:
         assert target == f"openakita/identity/{relative}", (
             f"{source_path!r} → {target!r}: target should mirror the "
             f"source layout exactly (expected 'openakita/identity/{relative}')."
+        )
+
+
+class TestPackagedPromptsAreShipped:
+    SOURCE_DIR = "src/openakita/prompts"
+    REQUIRED_ASSETS = [
+        "core/always_on.md",
+        "core/extended.md",
+        "core/safety.md",
+        "core/source_honesty.md",
+        "memory/guide.md",
+        "memory/guide_compact.md",
+        "modes/agent.md",
+        "modes/ask.md",
+        "modes/plan.md",
+        "selfcheck/system.md",
+        "tools/guide.md",
+    ]
+
+    def test_prompt_directory_is_inside_wheel_package(self, wheel_packages: list[str]) -> None:
+        package_root = "src/openakita"
+        assert package_root in wheel_packages
+        assert Path(self.SOURCE_DIR).is_relative_to(package_root)
+
+    @pytest.mark.parametrize("relative_path", REQUIRED_ASSETS)
+    def test_required_prompt_source_exists_and_is_nonempty(self, relative_path: str) -> None:
+        source = REPO_ROOT / self.SOURCE_DIR / relative_path
+        assert source.is_file(), f"Required prompt asset is missing: {source}"
+        assert source.read_text(encoding="utf-8").strip(), f"Prompt asset is empty: {source}"
+
+    def test_prompt_is_in_source_distribution(self, sdist_include: list[str]) -> None:
+        assert "src/openakita" in sdist_include, (
+            "Building a wheel from the sdist would omit the package-local self-check prompt."
         )
 
 

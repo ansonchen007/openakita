@@ -1,9 +1,9 @@
 """L1 Unit Tests: UnifiedStore CRUD."""
 
-import pytest
-from datetime import datetime
 
-from openakita.memory.types import Episode, Scratchpad, SemanticMemory, MemoryType
+import pytest
+
+from openakita.memory.types import Episode, MemoryType, Scratchpad, SemanticMemory
 from openakita.memory.unified_store import UnifiedStore
 
 
@@ -48,8 +48,7 @@ class TestSemanticMemoryCRUD:
         store.save_semantic(SemanticMemory(content="Java 编程"))
 
         results = store.search_semantic("Python")
-        found_ids = [m.id for m in results]
-        assert len(results) >= 0  # FTS5 may or may not find depending on tokenizer
+        assert any(memory.content == "Python 编程" for memory in results)
 
     def test_query(self, store):
         store.save_semantic(

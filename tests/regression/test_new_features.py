@@ -6,8 +6,7 @@
 2. Channels IM 多平台集成 (重点测试 Telegram)
 3. Sessions 统一会话管理
 
-运行方式: pytest tests/test_new_features.py -v
-或直接运行: python tests/test_new_features.py
+运行方式: uv run pytest tests/regression/test_new_features.py -v
 """
 
 import asyncio

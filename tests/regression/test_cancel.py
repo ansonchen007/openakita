@@ -16,7 +16,7 @@
 import asyncio
 import sys
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch, PropertyMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -149,7 +149,6 @@ class TestCancellableLlmCall:
     @pytest.mark.asyncio
     async def test_normal_completion(self):
         """LLM 正常返回时 _cancellable_llm_call 返回结果"""
-        from openakita.agent.errors import UserCancelledError
 
         mock_response = MagicMock()
         mock_response.content = [MagicMock(type="text", text="回复内容")]
@@ -378,15 +377,12 @@ class TestStreamCancelFarewell:
     """_stream_cancel_farewell 流式收尾测试"""
 
     @pytest.mark.asyncio
-    async def test_farewell_yields_text_deltas(self):
-        """流式收尾产出 text_delta 事件"""
-        from openakita.core.agent_state import TaskState, TaskStatus
+    async def test_farewell_yields_default_text_immediately(self):
+        """流式收尾立即产出默认文本，并在后台启动 LLM 收尾。"""
         from openakita.agent.reasoning import ReasoningEngine
-
-        mock_brain = MagicMock()
+        from openakita.core.agent_state import TaskState, TaskStatus
 
         engine = MagicMock()
-        engine._brain = mock_brain
         engine._background_cancel_farewell = AsyncMock()
         engine._stream_cancel_farewell = ReasoningEngine._stream_cancel_farewell.__get__(
             engine, ReasoningEngine
@@ -399,36 +395,32 @@ class TestStreamCancelFarewell:
         async for ev in engine._stream_cancel_farewell([], "", "test-model", state):
             events.append(ev)
 
-        assert len(events) > 0
-        text_events = [e for e in events if e["type"] == "text_delta"]
-        assert len(text_events) > 0
-        full_text = "".join(e["content"] for e in text_events)
-        assert "已停止" in full_text
+        assert events == [{"type": "text_delta", "content": "✅ 好的，已停止当前任务。"}]
+        await asyncio.sleep(0)
+        engine._background_cancel_farewell.assert_awaited_once_with(
+            [], "", "test-model", "停止"
+        )
 
     @pytest.mark.asyncio
-    async def test_farewell_timeout_yields_default(self):
-        """流式收尾产出默认文本"""
-        from openakita.core.agent_state import TaskState, TaskStatus
+    async def test_background_farewell_timeout_is_swallowed(self):
+        """后台 LLM 收尾超时不泄漏到调用方。"""
         from openakita.agent.reasoning import ReasoningEngine
 
         mock_brain = MagicMock()
+        mock_brain.messages_create_async = AsyncMock(side_effect=TimeoutError)
 
         engine = MagicMock()
         engine._brain = mock_brain
-        engine._background_cancel_farewell = AsyncMock()
-        engine._stream_cancel_farewell = ReasoningEngine._stream_cancel_farewell.__get__(
+        engine._yield_missing_tool_results = MagicMock()
+        engine._sanitize_messages_for_farewell = MagicMock(return_value=[])
+        engine._background_cancel_farewell = ReasoningEngine._background_cancel_farewell.__get__(
             engine, ReasoningEngine
         )
 
-        state = TaskState(task_id="test", status=TaskStatus.CANCELLED)
-        state.cancel("停止")
+        result = await engine._background_cancel_farewell([], "", "test-model", "停止")
 
-        events = []
-        async for ev in engine._stream_cancel_farewell([], "", "test-model", state):
-            events.append(ev)
-
-        full_text = "".join(e["content"] for e in events if e["type"] == "text_delta")
-        assert "已停止" in full_text
+        assert result is None
+        mock_brain.messages_create_async.assert_awaited_once()
 
 
 # ─────────────────────────────────────────────

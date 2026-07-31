@@ -656,7 +656,7 @@ create_systemd_service() {
     fi
     
     local service_content="[Unit]
-Description=OpenAkita Telegram Bot
+Description=OpenAkita Service
 After=network.target
 
 [Service]
@@ -664,7 +664,7 @@ Type=simple
 User=$USER
 WorkingDirectory=$(pwd)
 Environment=\"PATH=$(pwd)/venv/bin\"
-ExecStart=$(pwd)/venv/bin/python scripts/run_telegram_bot.py
+ExecStart=$(pwd)/venv/bin/openakita serve
 Restart=always
 RestartSec=10
 
