@@ -2,7 +2,7 @@
 
 After SDK 0.7.0 retired ``openakita_plugin_sdk.contrib.DependencyGate`` and
 the host-mounted ``/api/plugins/_sdk/deps/*`` SSE endpoint, plugins that
-need a system binary (here: FFmpeg) must own their installer end-to-end.
+need a system/runtime component must own their installer end-to-end.
 
 Design rules
 ------------
@@ -31,9 +31,11 @@ import platform
 import re
 import shutil
 import subprocess
+import sys
 import time
 from collections import deque
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Literal
 
 logger = logging.getLogger(__name__)
@@ -56,6 +58,99 @@ def _is_root() -> bool:
         return os.geteuid() == 0  # type: ignore[attr-defined]
     except AttributeError:
         return False
+
+
+def _resolve_python_executable() -> str:
+    """Return a Python executable that can run the installed Playwright module."""
+    if not getattr(sys, "frozen", False):
+        return sys.executable
+    exe_dir = Path(sys.executable).parent
+    internal = exe_dir if exe_dir.name == "_internal" else exe_dir / "_internal"
+    candidates = (
+        [internal / "python.exe", internal / "python3.exe"]
+        if sys.platform == "win32"
+        else [internal / "python3", internal / "python"]
+    )
+    for candidate in candidates:
+        if candidate.exists():
+            return str(candidate)
+    return sys.executable
+
+
+def _system_chromium_probes() -> tuple[str, ...]:
+    command_names = (
+        "chromium",
+        "chromium-browser",
+        "google-chrome",
+        "google-chrome-stable",
+        "chromium.exe",
+        "chrome.exe",
+    )
+    if os.name == "nt":
+        return command_names + (
+            r"%PROGRAMFILES%\Chromium\Application\chrome.exe",
+            r"%PROGRAMFILES%\Google\Chrome\Application\chrome.exe",
+            r"%LOCALAPPDATA%\Chromium\Application\chrome.exe",
+            r"%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe",
+        )
+    if sys.platform == "darwin":
+        return command_names + (
+            "/Applications/Chromium.app/Contents/MacOS/Chromium",
+            "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+        )
+    return command_names
+
+
+def _playwright_browser_roots() -> list[Path]:
+    roots: list[Path] = []
+    configured = os.environ.get("PLAYWRIGHT_BROWSERS_PATH", "").strip()
+    if configured and configured != "0":
+        roots.append(Path(configured).expanduser())
+    elif configured == "0":
+        try:
+            import importlib.util
+
+            spec = importlib.util.find_spec("playwright")
+            if spec and spec.origin:
+                roots.append(Path(spec.origin).parent / "driver" / "package" / ".local-browsers")
+        except Exception:
+            pass
+
+    roots.extend(
+        [
+            Path.home() / "AppData" / "Local" / "ms-playwright",
+            Path.home() / ".cache" / "ms-playwright",
+            Path.home() / "Library" / "Caches" / "ms-playwright",
+        ]
+    )
+    unique: list[Path] = []
+    for root in roots:
+        if root not in unique:
+            unique.append(root)
+    return unique
+
+
+def _find_playwright_chromium() -> str:
+    executable_names = {
+        "headless_shell",
+        "headless_shell.exe",
+        "chrome-headless-shell",
+        "chrome-headless-shell.exe",
+        "chrome",
+        "chrome.exe",
+        "Chromium",
+    }
+    for root in _playwright_browser_roots():
+        if not root.is_dir():
+            continue
+        for bundle_pattern in ("chromium_headless_shell-*", "chromium-*"):
+            for bundle in sorted(root.glob(bundle_pattern), reverse=True):
+                if not bundle.is_dir():
+                    continue
+                for executable in bundle.rglob("*"):
+                    if executable.name in executable_names and executable.is_file():
+                        return str(executable)
+    return ""
 
 
 # ── Windows PATH refresh ──────────────────────────────────────────────────
@@ -214,7 +309,7 @@ class DepSpec:
     uninstall_methods: tuple[InstallMethod, ...] = ()
 
 
-# ── Catalog (keep tiny; only what seedance-video itself needs) ────────────
+# ── Catalog (keep tiny; only what subtitle-craft itself needs) ────────────
 
 _FFMPEG = DepSpec(
     id="ffmpeg",
@@ -313,7 +408,55 @@ _FFMPEG = DepSpec(
 )
 
 
-_SPECS: dict[str, DepSpec] = {_FFMPEG.id: _FFMPEG}
+_SYSTEM_CHROMIUM = DepSpec(
+    id="system-chromium",
+    display_name="System Chromium / Chrome",
+    description="System browser detected for environment diagnostics.",
+    homepage="https://www.chromium.org/",
+    probes=_system_chromium_probes(),
+    version_argv=("chromium", "--version"),
+    version_regex=r"(?:Chromium|Google Chrome|Chrome)\s+([^\s]+)",
+    install_methods=(),
+)
+
+
+def _playwright_install_methods() -> tuple[InstallMethod, ...]:
+    command = (
+        _resolve_python_executable(),
+        "-m",
+        "playwright",
+        "install",
+        "chromium",
+    )
+    return tuple(
+        InstallMethod(
+            platform=target,
+            strategy="playwright",
+            command=command,
+            description="Install the Chromium browser managed by Playwright.",
+            estimated_seconds=180,
+        )
+        for target in ("windows", "macos", "linux")
+    )
+
+
+_PLAYWRIGHT_CHROMIUM = DepSpec(
+    id="playwright-chromium",
+    display_name="Playwright Chromium",
+    description="Playwright-managed browser used by the HTML subtitle renderer.",
+    homepage="https://playwright.dev/python/docs/browsers",
+    probes=(),
+    version_argv=(),
+    version_regex="",
+    install_methods=_playwright_install_methods(),
+)
+
+
+_SPECS: dict[str, DepSpec] = {
+    _FFMPEG.id: _FFMPEG,
+    _SYSTEM_CHROMIUM.id: _SYSTEM_CHROMIUM,
+    _PLAYWRIGHT_CHROMIUM.id: _PLAYWRIGHT_CHROMIUM,
+}
 
 
 @dataclass
@@ -372,7 +515,11 @@ class SystemDepsManager:
             return self._detect_dict(spec, st)
 
         st.detect_error = ""
-        location = self._probe_locations(spec)
+        location = (
+            _find_playwright_chromium()
+            if dep_id == "playwright-chromium"
+            else self._probe_locations(spec)
+        )
 
         if not location and self._platform == "windows":
             # Likely just installed via winget — registry got the new PATH
@@ -415,6 +562,9 @@ class SystemDepsManager:
 
     def _probe_locations(self, spec: DepSpec) -> str:
         for probe in spec.probes:
+            expanded = os.path.expandvars(probe)
+            if os.path.isabs(expanded) and os.path.isfile(expanded):
+                return expanded
             found_path = shutil.which(probe)
             if found_path:
                 return found_path

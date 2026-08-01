@@ -1,11 +1,11 @@
-"""Phase 4 plugin entry tests — 25 routes, 4 tools, healthz, no-handoff guards.
+"""Plugin entry tests — routes, tools, healthz, and no-handoff guards.
 
 These tests cover the Phase 4 DoD checklist from
 ``docs/subtitle-craft-plan.md`` §11 + Gate 4:
 
 - ``provides.tools`` is exactly 4 (no ``*_handoff_*``).
 - 25 routes are wired and answer per their contract (21 business + 4 system/*).
-- ``/healthz`` returns the 4-field shape and never echoes the API key.
+- ``/healthz`` returns boolean runtime readiness and never echoes the API key.
 - ``on_unload`` invokes ``_PlaywrightSingleton.close()`` (mocked).
 - All Pydantic request bodies declare ``ConfigDict(extra="forbid")``
   so typos surface as 422.
@@ -284,12 +284,12 @@ async def test_no_handoff_routes_registered(loaded_plugin):
 
 
 # ---------------------------------------------------------------------------
-# /healthz contract — 4 fields, no leak of api key
+# /healthz contract — boolean fields, no leak of api key
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_healthz_returns_four_canonical_fields(loaded_plugin):
+async def test_healthz_returns_canonical_boolean_fields(loaded_plugin):
     _, _, client = loaded_plugin
     resp = client.get("/healthz")
     assert resp.status_code == 200
@@ -298,10 +298,46 @@ async def test_healthz_returns_four_canonical_fields(loaded_plugin):
         "ffmpeg_ok",
         "playwright_ok",
         "playwright_browser_ready",
+        "system_chromium_ok",
         "dashscope_api_key_present",
     }
     for v in body.values():
         assert isinstance(v, bool)
+
+
+@pytest.mark.asyncio
+async def test_system_components_include_browser_detection_and_installer(loaded_plugin):
+    _, _, client = loaded_plugin
+    resp = client.get("/system/components")
+    assert resp.status_code == 200
+    by_id = {item["id"]: item for item in resp.json()["items"]}
+    assert "system-chromium" in by_id
+    assert by_id["system-chromium"]["methods"] == []
+    assert "playwright-chromium" in by_id
+    methods = by_id["playwright-chromium"]["methods"]
+    assert len(methods) == 1
+    assert methods[0]["strategy"] == "playwright"
+    assert methods[0]["command_hint"].endswith("-m playwright install chromium")
+
+
+@pytest.mark.asyncio
+async def test_playwright_browser_install_route_dispatches_whitelisted_component(loaded_plugin):
+    plugin, _, client = loaded_plugin
+    plugin._sysdeps.start_install = AsyncMock(
+        return_value={"ok": True, "busy": True, "method_strategy": "playwright"}
+    )
+
+    resp = client.post(
+        "/system/playwright-chromium/install",
+        json={"method_index": 0},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["method_strategy"] == "playwright"
+    plugin._sysdeps.start_install.assert_awaited_once_with(
+        "playwright-chromium",
+        method_index=0,
+    )
 
 
 @pytest.mark.asyncio

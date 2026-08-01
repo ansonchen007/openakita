@@ -28,10 +28,9 @@ Architectural rules baked in (red-line guardrails):
   the host.
 - **All Pydantic request bodies** declare ``model_config =
   ConfigDict(extra="forbid")`` (red-line C6 reverse-example).
-- **``/healthz``** returns the **4-field** contract per §8.4 + Phase 4
-  DoD: ``{ffmpeg_ok, playwright_ok, playwright_browser_ready,
-  dashscope_api_key_present}``. The API key is **never** echoed back —
-  only its presence as a boolean.
+- **``/healthz``** reports FFmpeg, Playwright, Playwright-managed Chromium,
+  system Chromium, and DashScope API-key readiness. The API key is **never**
+  echoed back — only its presence as a boolean.
 - **``provides.tools``** is **4 tools** (not 7); v1 had 7 including
   ``subtitle_craft_handoff_*`` which v2 deferred to v1.1+.
 - **SSE event name** is hard-coded ``task_update`` (red line #21); the
@@ -799,19 +798,25 @@ class Plugin(PluginBase):
                 raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     # ------------------------------------------------------------------
-    # /healthz — 4-field contract (Phase 4 DoD + §8.4)
+    # /healthz — runtime readiness without secret values
     # ------------------------------------------------------------------
 
     async def _compute_health(self) -> dict[str, Any]:
         ffmpeg_ok = self._detect_ffmpeg()
         playwright_ok = await asyncio.to_thread(self._detect_playwright_pkg)
-        playwright_browser_ready = await asyncio.to_thread(self._detect_playwright_browser)
+        playwright_browser = await asyncio.to_thread(
+            self._sysdeps.detect, "playwright-chromium", force=True
+        )
+        system_chromium = await asyncio.to_thread(
+            self._sysdeps.detect, "system-chromium", force=True
+        )
         api_key = await self._tm.get_config("dashscope_api_key") or ""
         dashscope_api_key_present = bool(api_key.strip())
         return {
             "ffmpeg_ok": ffmpeg_ok,
             "playwright_ok": playwright_ok,
-            "playwright_browser_ready": playwright_browser_ready,
+            "playwright_browser_ready": bool(playwright_browser.get("found")),
+            "system_chromium_ok": bool(system_chromium.get("found")),
             "dashscope_api_key_present": dashscope_api_key_present,
         }
 
@@ -841,21 +846,6 @@ class Plugin(PluginBase):
         import importlib.util
 
         return importlib.util.find_spec("playwright") is not None
-
-    @staticmethod
-    def _detect_playwright_browser() -> bool:
-        # The browser is "ready" iff the Chromium binary is present in the
-        # default ms-playwright cache. We do not launch it here (P0-13 lazy
-        # import contract). Cheap filesystem probe only.
-        candidates = [
-            Path.home() / "AppData" / "Local" / "ms-playwright",  # Windows
-            Path.home() / ".cache" / "ms-playwright",  # Linux
-            Path.home() / "Library" / "Caches" / "ms-playwright",  # macOS
-        ]
-        for cache_dir in candidates:
-            if cache_dir.exists() and any(cache_dir.glob("chromium-*")):
-                return True
-        return False
 
     # ------------------------------------------------------------------
     # Custom style storage (single JSON blob in config)
