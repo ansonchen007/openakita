@@ -132,7 +132,7 @@
       }
       var state = {
         tab: location.hash ? location.hash.slice(1) : "create",
-        health: null, settings: null, projects: [], selected: null, notice: "", error: "",
+        health: null, settings: null, projects: [], selected: null, notice: "", error: "", depsChecking: false,
         draft: JSON.parse(localStorage.getItem("word-maker-draft") || '{"doc_type":"research_report"}')
       };
       function esc(v) { return String(v == null ? "" : v).replace(/[&<>"]/g, function (ch) { return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[ch]; }); }
@@ -176,9 +176,21 @@
         }).catch(function (e) { toast("模板检测失败：" + (e.message || e), true); });
       }
       function checkDeps() {
+        if (state.depsChecking) return;
+        state.depsChecking = true;
+        render();
         api("POST", "/deps/check", {}).then(function (r) {
-          state.settings = state.settings || {};
-          state.settings.deps = r.deps || {};
+          state.settings = Object.assign({}, state.settings || {}, {
+            deps: r.deps || {},
+            brain_status: r.brain_status || {},
+            brain_available: Boolean(r.brain_status && r.brain_status.available),
+            dependency_report: r.dependency_report || {}
+          });
+          toast("依赖检测完成");
+        }).catch(function (e) {
+          toast("依赖检测失败：" + (e.message || e), true);
+        }).finally(function () {
+          state.depsChecking = false;
           render();
         });
       }
@@ -354,7 +366,7 @@
       function renderSettings() {
         var settings = state.settings || {};
         var storage = state.storage || {};
-        return '<div class="settings-grid"><div class="settings-panel content-scroll"><div class="card"><div class="card-title">' + svgIcon("settings-option") + '系统组件与依赖</div><div class="settings-help"><strong>Word Maker 会按能力检测 Python 依赖。</strong><div>当前版本只做白名单检测，不在 UI 里安装任意 pip 包。核心 DOCX 生成缺失时，创建项目仍可用，但模板渲染会受影响。</div></div><div class="row" style="margin-bottom:12px"><button class="btn primary" onclick="window.__wmDeps()">检测可选依赖</button><span class="pill">Brain：' + (settings.brain_available ? "可用" : "不可用") + '</span></div>' + renderDeps(settings.deps || {}) + '</div><div class="card"><div class="card-title">' + svgIcon("document") + '存储空间</div><div class="settings-help"><strong>统计插件工作区内的上传、项目和导出文件。</strong><div>刷新空间只读取文件数量和大小，不会删除或移动任何文件。</div></div><div class="folder-row"><input class="input" readonly value="' + esc(settings.data_dir_active || "") + '"><button class="btn" onclick="window.__wmFolder()">浏览</button><button class="btn" onclick="window.__wmStorage()">刷新空间</button></div>' + (storage.total_files != null ? renderStorageStats(storage) : "") + '</div><div class="card" id="folder-picker" style="display:none"><div class="card-title">文件夹浏览</div><div id="folder-list" class="row"></div></div></div><div class="settings-panel content-scroll"><div class="card"><div class="card-title">' + svgIcon("form-edit") + '默认生成参数</div><div class="settings-help"><strong>这些配置会作为后续 Word 项目的默认值。</strong><div>自定义数据目录保存后，需要重新加载插件才会切换实际工作区；语言、语气和保留天数会立即保存到插件配置。</div></div><div class="form-row"><div class="label">自定义数据目录</div><input id="settings-custom-dir" class="input" placeholder="留空使用插件默认数据目录" value="' + esc(settings.custom_data_dir || "") + '"></div><div class="grid-2"><div class="form-row"><div class="label">默认语言</div><select id="settings-language" class="input select"><option value="zh-CN" ' + ((settings.default_language || "zh-CN") === "zh-CN" ? "selected" : "") + '>中文</option><option value="en-US" ' + (settings.default_language === "en-US" ? "selected" : "") + '>English</option></select></div><div class="form-row"><div class="label">默认语气</div><select id="settings-tone" class="input select"><option value="professional" ' + ((settings.default_tone || "professional") === "professional" ? "selected" : "") + '>专业正式</option><option value="concise" ' + (settings.default_tone === "concise" ? "selected" : "") + '>简洁直接</option><option value="friendly" ' + (settings.default_tone === "friendly" ? "selected" : "") + '>友好易读</option></select></div></div><div class="form-row"><div class="label">项目保留天数</div><input id="settings-retention" class="input" type="number" min="1" max="365" value="' + esc(settings.retention_days || 30) + '"></div><button class="btn primary" onclick="window.__wmSaveSettings({custom_data_dir:document.getElementById(\'settings-custom-dir\').value,default_language:document.getElementById(\'settings-language\').value,default_tone:document.getElementById(\'settings-tone\').value,retention_days:document.getElementById(\'settings-retention\').value})">保存设置</button></div></div></div>';
+        return '<div class="settings-grid"><div class="settings-panel content-scroll"><div class="card"><div class="card-title">' + svgIcon("settings-option") + '系统组件与依赖</div><div class="settings-help"><strong>Word Maker 会按能力检测 Python 依赖。</strong><div>当前版本只做白名单检测，不在 UI 里安装任意 pip 包。核心 DOCX 生成缺失时，创建项目仍可用，但模板渲染会受影响。</div></div><div class="row" style="margin-bottom:12px"><button class="btn primary" onclick="window.__wmDeps()" ' + (state.depsChecking ? "disabled" : "") + '>' + (state.depsChecking ? "检测中..." : "检测可选依赖") + '</button><span class="pill">Brain：' + (settings.brain_available ? "可用" : "不可用") + '</span></div>' + renderDeps(settings.deps || {}) + '</div><div class="card"><div class="card-title">' + svgIcon("document") + '存储空间</div><div class="settings-help"><strong>统计插件工作区内的上传、项目和导出文件。</strong><div>刷新空间只读取文件数量和大小，不会删除或移动任何文件。</div></div><div class="folder-row"><input class="input" readonly value="' + esc(settings.data_dir_active || "") + '"><button class="btn" onclick="window.__wmFolder()">浏览</button><button class="btn" onclick="window.__wmStorage()">刷新空间</button></div>' + (storage.total_files != null ? renderStorageStats(storage) : "") + '</div><div class="card" id="folder-picker" style="display:none"><div class="card-title">文件夹浏览</div><div id="folder-list" class="row"></div></div></div><div class="settings-panel content-scroll"><div class="card"><div class="card-title">' + svgIcon("form-edit") + '默认生成参数</div><div class="settings-help"><strong>这些配置会作为后续 Word 项目的默认值。</strong><div>自定义数据目录保存后，需要重新加载插件才会切换实际工作区；语言、语气和保留天数会立即保存到插件配置。</div></div><div class="form-row"><div class="label">自定义数据目录</div><input id="settings-custom-dir" class="input" placeholder="留空使用插件默认数据目录" value="' + esc(settings.custom_data_dir || "") + '"></div><div class="grid-2"><div class="form-row"><div class="label">默认语言</div><select id="settings-language" class="input select"><option value="zh-CN" ' + ((settings.default_language || "zh-CN") === "zh-CN" ? "selected" : "") + '>中文</option><option value="en-US" ' + (settings.default_language === "en-US" ? "selected" : "") + '>English</option></select></div><div class="form-row"><div class="label">默认语气</div><select id="settings-tone" class="input select"><option value="professional" ' + ((settings.default_tone || "professional") === "professional" ? "selected" : "") + '>专业正式</option><option value="concise" ' + (settings.default_tone === "concise" ? "selected" : "") + '>简洁直接</option><option value="friendly" ' + (settings.default_tone === "friendly" ? "selected" : "") + '>友好易读</option></select></div></div><div class="form-row"><div class="label">项目保留天数</div><input id="settings-retention" class="input" type="number" min="1" max="365" value="' + esc(settings.retention_days || 30) + '"></div><button class="btn primary" onclick="window.__wmSaveSettings({custom_data_dir:document.getElementById(\'settings-custom-dir\').value,default_language:document.getElementById(\'settings-language\').value,default_tone:document.getElementById(\'settings-tone\').value,retention_days:document.getElementById(\'settings-retention\').value})">保存设置</button></div></div></div>';
       }
       function renderGuide() {
         return '<div class="split"><div class="split-left content-scroll"><div class="card"><div class="card-title">5 分钟烟测</div><ol style="padding-left:18px"><li>打开本页并确认顶部显示服务就绪。</li><li>Create 里输入标题和需求，创建项目。</li><li>上传资料和 DOCX 模板。</li><li>Templates 提取变量并确认缺失字段。</li><li>Draft 填写字段 JSON 并渲染 DOCX。</li><li>Projects 下载 document.docx。</li></ol></div><div class="card"><div class="card-title">模板变量示例</div><pre>{{ title }}\n{{ company_name }}\n{{ summary }}</pre></div></div><div class="split-right oa-preview-area oa-preview-area--centered"><span class="oa-preview-empty__icon">' + svgIcon("status-good") + '</span><div class="oa-preview-empty__title">验收目标</div><div class="oa-preview-empty__hint">用户能从需求、资料、模板出发，在 UI 中生成真实可下载 DOCX，并保留后续给 PPT Maker 的结构化出口。</div></div></div>';
@@ -366,8 +378,13 @@
         document.getElementById("app").innerHTML = '<div class="app">' + renderHeader() + renderTabs() + renderBanner() + (state.notice ? '<div class="oa-config-banner" style="border-color:' + (state.error ? "rgba(239,68,68,.35)" : "rgba(34,197,94,.35)") + ';background:' + (state.error ? "rgba(239,68,68,.08)" : "rgba(34,197,94,.08)") + '"><span class="oa-config-banner__icon">' + svgIcon(state.error ? "status-warning" : "status-good") + '</span><div class="oa-config-banner__text">' + esc(state.notice) + '</div></div>' : "") + '<div class="content">' + renderContent() + '</div></div>';
       }
       window.__wmTab = setTab; window.__wmDraft = draft; window.__wmCreate = createProject; window.__wmInspectTemplate = inspectTemplate; window.__wmDeps = checkDeps; window.__wmFolder = openFolderPicker; window.__wmStorage = loadStorageStats; window.__wmSaveSettings = saveSettings; window.__wmRender = render; window.__wmUpload = apiUpload; window.__wmOutline = generateOutline; window.__wmRenderProject = renderProject; window.__wmDownload = downloadProject; window.__wmCancel = cancelProject; window.__wmProjectId = currentProjectId; window.oaConfirm = oaConfirm;
-      window.addEventListener("openakita:ready", function (event) { if (event.detail && event.detail.theme) document.documentElement.setAttribute("data-theme", event.detail.theme); });
-      refresh(); render();
+      window.addEventListener("openakita:ready", function (event) {
+        if (event.detail && event.detail.theme) document.documentElement.setAttribute("data-theme", event.detail.theme);
+        refresh();
+      });
+      if (!window.OpenAkita || window.OpenAkita.__ready) refresh();
+      render();
+      if (window.OpenAkita && window.OpenAkita.ready) window.OpenAkita.ready();
     })();
   </script>
 </body>
