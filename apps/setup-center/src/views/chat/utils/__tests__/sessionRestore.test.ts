@@ -31,6 +31,7 @@ describe("restoreSessionsUntilReady", () => {
 
   it("retries request failures and only reconciles a ready response", async () => {
     const controller = new AbortController();
+    const events: SessionRestoreEvent[] = [];
     const request = vi
       .fn<() => Promise<{ ready: boolean }>>()
       .mockRejectedValueOnce(new Error("connection refused"))
@@ -43,12 +44,14 @@ describe("restoreSessionsUntilReady", () => {
       request,
       isReady: (payload) => payload.ready,
       reconcile,
+      onEvent: (event) => events.push(event),
       retryDelay: () => 0,
       wait: async () => true,
     });
 
     expect(result).toEqual({ status: "restored", attempts: 3 });
     expect(reconcile).toHaveBeenCalledWith({ ready: true });
+    expect(events[1]).toMatchObject({ type: "request_error", attempt: 1 });
   });
 
   it("does not complete until reconciliation succeeds", async () => {
@@ -69,6 +72,33 @@ describe("restoreSessionsUntilReady", () => {
 
     expect(result).toEqual({ status: "restored", attempts: 2 });
     expect(reconcile).toHaveBeenCalledTimes(2);
+  });
+
+  it("stops deterministic reconciliation failures without treating them as request errors", async () => {
+    const controller = new AbortController();
+    const quotaError = { name: "QuotaExceededError" };
+    const events: SessionRestoreEvent[] = [];
+    const request = vi.fn(async () => ({ ready: true }));
+
+    const result = await restoreSessionsUntilReady({
+      signal: controller.signal,
+      request,
+      isReady: (payload) => payload.ready,
+      reconcile: async () => { throw quotaError; },
+      shouldRetryReconcileError: () => false,
+      onEvent: (event) => events.push(event),
+      wait: async () => true,
+    });
+
+    expect(result).toEqual({ status: "failed", attempts: 1, error: quotaError });
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(events.at(-1)).toEqual({
+      type: "reconcile_error",
+      attempt: 1,
+      retry: false,
+      delayMs: undefined,
+      error: quotaError,
+    });
   });
 
   it("stops retrying when cancelled", async () => {
