@@ -93,6 +93,11 @@ import {
   restoreSessionsUntilReady,
   type SessionRestoreEvent,
 } from "./chat/utils/sessionRestore";
+import {
+  isStorageQuotaExceededError,
+  persistStorageValueWithMessageEviction,
+  retryStorageWriteAfterMessageEviction,
+} from "./chat/utils/storageRecovery";
 import { useMdModules } from "./chat/hooks/useMdModules";
 import { useMessageReducer, useConversationReducer } from "./chat/hooks/useMessages";
 import { useQueryGuard } from "./chat/hooks/useQueryGuard";
@@ -1544,14 +1549,59 @@ export function ChatView({
   }, []);
 
   // ── 持久化会话列表 & 当前对话 ID ──
+  const recoverChatStorageWrite = useCallback((
+    operation: string,
+    tryWrite: () => boolean,
+  ): boolean => {
+    const result = retryStorageWriteAfterMessageEviction({
+      storage: localStorage,
+      messageKeyPrefix: STORAGE_KEY_MSGS_PREFIX,
+      conversations: latestConversationsRef.current,
+      activeConversationId: activeConvIdRef.current,
+      tryWrite,
+    });
+    if (result.evictedKeys.length > 0) {
+      logger.warn("Chat.Storage", "evicted cached messages after storage quota exhaustion", {
+        workspace: wsTag,
+        operation,
+        evictedCount: result.evictedKeys.length,
+        recovered: result.succeeded,
+      });
+    }
+    return result.succeeded;
+  }, [STORAGE_KEY_MSGS_PREFIX, latestConversationsRef, wsTag]);
+
+  const persistChatStorageValue = useCallback((
+    operation: string,
+    key: string,
+    value: string,
+  ) => {
+    const result = persistStorageValueWithMessageEviction({
+      storage: localStorage,
+      key,
+      value,
+      messageKeyPrefix: STORAGE_KEY_MSGS_PREFIX,
+      conversations: latestConversationsRef.current,
+      activeConversationId: activeConvIdRef.current,
+    });
+    if (result.evictedKeys.length > 0) {
+      logger.warn("Chat.Storage", "evicted cached messages after storage quota exhaustion", {
+        workspace: wsTag,
+        operation,
+        evictedCount: result.evictedKeys.length,
+        recovered: result.succeeded,
+      });
+    }
+    return result;
+  }, [STORAGE_KEY_MSGS_PREFIX, latestConversationsRef, wsTag]);
+
   // STORAGE_KEY_* intentionally excluded from deps: when only the key changes
   // (workspace switch), the workspace-change effect handles loading new data; if
   // we included the key here, old workspace data would be written to the new key
   // before the workspace-change effect has a chance to run.
   useEffect(() => {
-    try {
-      localStorage.setItem(STORAGE_KEY_CONVS, JSON.stringify(conversations));
-    } catch { /* quota exceeded or private mode */ }
+    const serialized = JSON.stringify(conversations);
+    persistChatStorageValue("conversation_list", STORAGE_KEY_CONVS, serialized);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [conversations]);
 
@@ -1595,14 +1645,10 @@ export function ChatView({
 
     const doSave = () => {
       if (!saveMessagesToStorage(STORAGE_KEY_MSGS_PREFIX + activeConvId, messages)) {
-        try {
-          const convs: ChatConversation[] = JSON.parse(localStorage.getItem(STORAGE_KEY_CONVS) || "[]");
-          const toEvict = [...convs].reverse().find(c => c.id !== activeConvId);
-          if (toEvict) {
-            localStorage.removeItem(STORAGE_KEY_MSGS_PREFIX + toEvict.id);
-            saveMessagesToStorage(STORAGE_KEY_MSGS_PREFIX + activeConvId, messages);
-          }
-        } catch { /* give up */ }
+        recoverChatStorageWrite(
+          "active_conversation_messages",
+          () => saveMessagesToStorage(STORAGE_KEY_MSGS_PREFIX + activeConvId, messages),
+        );
       }
     };
 
@@ -1615,8 +1661,9 @@ export function ChatView({
       saveMessagesTimerRef.current = setTimeout(doSave, 300) as unknown as number;
     }
     return () => { if (saveMessagesTimerRef.current) clearTimeout(saveMessagesTimerRef.current); };
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- STORAGE_KEY_* excluded
-  // to avoid writing stale data to a new workspace key during workspace transition.
+  // STORAGE_KEY_* and the recovery callback are excluded to avoid writing stale
+  // data to a new workspace key during workspace transition.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [messages, activeConvId, streamingTick]);
 
   // (messagesSnapshotRef / liveMessagesCache removed — StreamContext manages live messages)
@@ -2395,12 +2442,23 @@ export function ChatView({
           ...base,
           delayMs: event.delayMs,
         });
-      } else if (event.type === "error") {
+      } else if (event.type === "request_error") {
         logger.warn("Chat.SessionRestore", "request failed; retrying", {
           ...base,
           delayMs: event.delayMs,
           error: String(event.error),
         });
+      } else if (event.type === "reconcile_error") {
+        logger.warn(
+          "Chat.SessionRestore",
+          event.retry ? "reconciliation failed; retrying" : "reconciliation failed; stopping",
+          {
+            ...base,
+            retry: event.retry,
+            ...(event.delayMs !== undefined ? { delayMs: event.delayMs } : {}),
+            error: String(event.error),
+          },
+        );
       } else if (event.type === "cancelled") {
         logger.info("Chat.SessionRestore", "cancelled", base);
       }
@@ -2452,17 +2510,43 @@ export function ChatView({
         try { localStorage.removeItem("openakita_data_epoch"); } catch { /* ignore */ }
 
         if (epoch) {
-          const cached = localStorage.getItem(STORAGE_KEY_DATA_EPOCH);
-          localStorage.setItem(STORAGE_KEY_DATA_EPOCH, epoch);
-          if (cached && cached !== epoch) {
-            setConversations((prev) => {
-              for (const c of prev) {
-                try { localStorage.removeItem(STORAGE_KEY_MSGS_PREFIX + c.id); } catch {}
-              }
-              return [];
+          let cached: string | null = null;
+          try {
+            cached = localStorage.getItem(STORAGE_KEY_DATA_EPOCH);
+          } catch (error) {
+            logger.warn("Chat.SessionRestore", "data epoch cache read failed; continuing", {
+              scope: sessionRestoreScope,
+              workspace: wsTag,
+              error: String(error),
             });
+          }
+          const epochChanged = Boolean(cached && cached !== epoch);
+          if (epochChanged) {
+            for (const conversation of latestConversationsRef.current) {
+              try {
+                localStorage.removeItem(STORAGE_KEY_MSGS_PREFIX + conversation.id);
+              } catch { /* best effort */ }
+            }
+            setConversations([]);
             activateConversation(null);
             setMessages([]);
+          }
+
+          const epochPersistence = persistChatStorageValue(
+            "data_epoch",
+            STORAGE_KEY_DATA_EPOCH,
+            epoch,
+          );
+          if (!epochPersistence.succeeded) {
+            logger.warn("Chat.SessionRestore", "data epoch cache write failed; continuing", {
+              scope: sessionRestoreScope,
+              workspace: wsTag,
+              quotaExceeded: epochPersistence.quotaExceeded,
+              error: String(epochPersistence.error),
+            });
+          }
+
+          if (epochChanged) {
             logger.warn("Chat.SessionRestore", "data epoch changed; cleared local conversations", {
               scope: sessionRestoreScope,
               workspace: wsTag,
@@ -2498,6 +2582,7 @@ export function ChatView({
           activateConversation(restoredConvs[0].id);
         }
       },
+      shouldRetryReconcileError: (error) => !isStorageQuotaExceededError(error),
       onEvent: logRestoreEvent,
     }).then((result) => {
       if (result.status !== "restored" || controller.signal.aborted) return;
@@ -2520,6 +2605,9 @@ export function ChatView({
     STORAGE_KEY_DATA_EPOCH,
     STORAGE_KEY_MSGS_PREFIX,
     activateConversation,
+    latestConversationsRef,
+    persistChatStorageValue,
+    recoverChatStorageWrite,
     setConversations,
     setMessages,
   ]);
