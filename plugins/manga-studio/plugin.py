@@ -270,7 +270,7 @@ PYTHON_DEPS: dict[str, dict[str, str]] = {
         "display_name": "ComfyKit",
         "description": "调用 RunningHub 云端工作流和本地 ComfyUI 的官方客户端。",
         "import_name": "comfykit",
-        "pip_spec": "comfykit>=0.3.0",
+        "pip_spec": "comfykit>=0.1.12",
     },
 }
 
