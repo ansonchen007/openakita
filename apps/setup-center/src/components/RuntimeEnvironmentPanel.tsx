@@ -89,13 +89,13 @@ export function RuntimeEnvironmentPanel({
   const backendReady = serviceStatus?.running && backendBootPhase === "running" && serviceStatus?.heartbeatReady !== false;
   const heartbeatPhase = serviceStatus?.heartbeatPhase || "";
   const stage = installProgress?.stage
-    || (heartbeatPhase === "starting_im" ? "HTTP API 已就绪，正在启动 IM 通道和后台连接"
-      : heartbeatPhase === "http_ready" ? "HTTP API 已就绪，后台服务仍在继续初始化"
+    || (heartbeatPhase === "starting_im" ? t("status.runtimeStageStartingIm")
+      : heartbeatPhase === "http_ready" ? t("status.runtimeStageHttpReady")
       : backendBootPhase === "starting" ? t("status.backendStarting")
-      : backendReady ? "运行环境已就绪"
-      : serviceStatus?.running ? "后端正在完成初始化"
+      : backendReady ? t("status.runtimeStageReady")
+      : serviceStatus?.running ? t("status.backendInitializing")
       : backendBootPhase === "error" ? t("status.backendStartFailed")
-      : "等待启动后端");
+      : t("status.runtimeStageWaiting"));
   const percent = installProgress?.percent
     ?? (backendBootPhase === "starting" ? 60
       : backendReady ? 100
@@ -134,8 +134,8 @@ export function RuntimeEnvironmentPanel({
   const runtimeDetailItems = [
     ["App venv", appVenvHint],
     ["Agent venv", agentVenvHint],
-    ["默认镜像", indexUrl || "https://mirrors.aliyun.com/pypi/simple/"],
-    ["日志路径", runtimeLogHint],
+    [t("status.defaultMirror"), indexUrl || "https://mirrors.aliyun.com/pypi/simple/"],
+    [t("status.logPath"), runtimeLogHint],
     ...(nodeInfo?.workspace_cache ? [[t("status.workspaceCache"), nodeInfo.workspace_cache]] : []),
   ];
 
@@ -148,11 +148,15 @@ export function RuntimeEnvironmentPanel({
               {stage}
             </Badge>
             <span className="text-sm font-medium">
-              {venvStatus || (backendReady ? "环境正常" : serviceStatus?.running ? "后端初始化中" : "尚未启动")}
+              {venvStatus || (backendReady
+                ? t("status.environmentHealthy")
+                : serviceStatus?.running
+                  ? t("status.backendInitializing")
+                  : t("status.notStarted"))}
             </span>
           </div>
           <p className="mt-1 text-xs leading-5 text-muted-foreground">
-            桌面端使用内置 Python 创建 app runtime venv 和 agent tools venv；失败时可在此修复运行环境。
+            {t("status.runtimeEnvironmentDesc")}
           </p>
         </div>
         <div className="flex flex-wrap justify-end gap-2">
@@ -172,7 +176,7 @@ export function RuntimeEnvironmentPanel({
             disabled={!!busy || !currentWorkspaceId || backendBootPhase === "starting"}
             onClick={() => currentWorkspaceId && doStartLocalService(currentWorkspaceId)}
           >
-            重试启动
+            {t("status.retryStart")}
           </Button>
           <Button
             size="sm"
@@ -202,7 +206,7 @@ export function RuntimeEnvironmentPanel({
             className="h-6 px-2 text-xs"
             onClick={() => setDetailsOpen((v) => !v)}
           >
-            {detailsOpen ? "隐藏详情" : "查看详情"}
+            {detailsOpen ? t("status.hideDetails") : t("status.viewDetails")}
             {detailsOpen ? <ChevronDown className="ml-1" size={13} /> : <ChevronRight className="ml-1" size={13} />}
           </Button>
         </div>
@@ -242,13 +246,15 @@ export function RuntimeEnvironmentDialog({
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
+  const { t } = useTranslation();
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-3xl max-h-[85vh] overflow-y-auto" onOpenAutoFocus={(e) => e.preventDefault()}>
         <DialogHeader>
-          <DialogTitle>OpenAkita 运行环境</DialogTitle>
+          <DialogTitle>{t("status.runtimeDialogTitle")}</DialogTitle>
           <DialogDescription>
-            查看 runtime venv、agent tools venv、Node/npm 与种子包状态，并在异常时修复运行时。
+            {t("status.runtimeDialogDesc")}
           </DialogDescription>
         </DialogHeader>
         <RuntimeEnvironmentPanel {...panelProps} />

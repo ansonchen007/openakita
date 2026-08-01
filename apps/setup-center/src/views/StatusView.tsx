@@ -264,7 +264,7 @@ export function StatusView(props: StatusViewProps) {
             <div className="spinner" style={{ width: 22, height: 22, flexShrink: 0, color: "var(--brand)" }} />
             <div className="min-w-[180px] flex-1">
               <div className="mb-1 text-sm font-semibold text-primary">
-                {busy || (isRunning ? "后端正在完成初始化" : t("status.backendStarting"))}
+                {busy || (isRunning ? t("status.backendInitializing") : t("status.backendStarting"))}
               </div>
               <div className="text-xs text-primary/80">
                 {heartbeatPhase === "starting_im"
@@ -452,14 +452,14 @@ export function StatusView(props: StatusViewProps) {
                 : isRunning ? "statusBadgeOk"
                 : "statusBadgeOff"
               }`}>
-                {phaseStarting ? (busy || (isRunning ? "初始化中" : t("topbar.autoStarting")))
+                {phaseStarting ? (busy || (isRunning ? t("status.initializing") : t("topbar.autoStarting")))
                 : heartbeatState === "degraded" ? t("status.unresponsive")
                 : isRunning ? t("topbar.running")
                 : t("topbar.stopped")}
               </Badge>
               {isRunning && !phaseStarting && (
                 <Badge variant="default" className="statusBadgeInline statusBadgeOk">
-                  环境正常
+                  {t("status.environmentHealthy")}
                 </Badge>
               )}
             </div>

@@ -35,13 +35,14 @@ type MatrixResponse = {
   baseline_only: boolean;
 };
 
-const DECISION_META: Record<Decision, { label: string; color: string; bg: string }> = {
-  allow:   { label: "ALLOW",   color: "#16a34a", bg: "#22c55e1a" },
-  confirm: { label: "CONFIRM", color: "#d97706", bg: "#f59e0b1a" },
-  deny:    { label: "DENY",    color: "#dc2626", bg: "#ef44441a" },
+const DECISION_META: Record<Decision, { color: string; bg: string }> = {
+  allow:   { color: "#16a34a", bg: "#22c55e1a" },
+  confirm: { color: "#d97706", bg: "#f59e0b1a" },
+  deny:    { color: "#dc2626", bg: "#ef44441a" },
 };
 
 function DecisionCell({ decision }: { decision: Decision }) {
+  const { t } = useTranslation();
   const meta = DECISION_META[decision];
   return (
     <span
@@ -51,13 +52,13 @@ function DecisionCell({ decision }: { decision: Decision }) {
         borderRadius: 999,
         fontSize: 10,
         fontWeight: 700,
-        letterSpacing: "0.04em",
+        letterSpacing: 0,
         color: meta.color,
         background: meta.bg,
         border: `1px solid ${meta.color}44`,
       }}
     >
-      {meta.label}
+      {t(`security.decision.${decision}`)}
     </span>
   );
 }
@@ -96,16 +97,12 @@ export function PolicyV2MatrixView({ apiBaseUrl }: { apiBaseUrl: string }) {
       <Card className="p-0 gap-0 border-border/50 shadow-sm">
         <CardHeader className="border-b border-border/50 px-4 py-2.5">
           <CardTitle className="text-sm font-semibold">
-            {t("security.matrixSessionRoleTitle", "Session Role（会话角色）")}
+            {t("security.matrixSessionRoleTitle")}
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-3 px-4 py-3 text-xs">
           <p className="text-muted-foreground leading-5">
-            {t(
-              "security.matrixSessionRoleDesc",
-              "Session role 与 confirmation_mode 正交。Plan / Ask 模式会在引擎 step 4 直接拦截任何写意图（不论下方矩阵给什么），用于"+
-                "纯只读探查会话；Agent / Coordinator 走下方矩阵。",
-            )}
+            {t("security.matrixSessionRoleDesc")}
           </p>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
             {(data?.roles || []).map((role) => (
@@ -115,9 +112,13 @@ export function PolicyV2MatrixView({ apiBaseUrl }: { apiBaseUrl: string }) {
               >
                 <div className="flex items-center gap-2 mb-1">
                   <Badge variant="outline" className="text-[10px] uppercase">{role}</Badge>
-                  <span className="text-sm font-medium">{role}</span>
+                  <span className="text-sm font-medium">
+                    {t(`security.sessionRole.${role}`, role)}
+                  </span>
                 </div>
-                <div className="text-xs text-muted-foreground">由后端 lookup_matrix 生成</div>
+                <div className="text-xs text-muted-foreground">
+                  {t("security.matrixRoleGenerated")}
+                </div>
               </div>
             ))}
           </div>
@@ -128,30 +129,27 @@ export function PolicyV2MatrixView({ apiBaseUrl }: { apiBaseUrl: string }) {
       <Card className="p-0 gap-0 border-border/50 shadow-sm">
         <CardHeader className="border-b border-border/50 px-4 py-2.5">
           <CardTitle className="text-sm font-semibold">
-            {t("security.matrixTitle", "审批矩阵：ApprovalClass × ConfirmationMode")}
+            {t("security.matrixTitle")}
           </CardTitle>
         </CardHeader>
         <CardContent className="px-4 py-3 text-xs">
           <p className="text-muted-foreground leading-5 mb-3">
-            {t(
-              "security.matrixDesc",
-              "下表展示当前 policy_v2 引擎在 Agent / Coordinator 角色下、对每个 ApprovalClass 的默认行为。具体决策"+
-                "还会受 safety_immune（永不放行的 forbidden zone）、unattended（owner 是否在线）、custom override（POLICIES.yaml"+
-                "approval_classes.overrides）影响；下表给出的是没有任何特殊命中时的 baseline。",
-            )}
+            {t("security.matrixDesc")}
           </p>
           {error && <p className="text-xs text-destructive">{error}</p>}
-          {!data && !error && <p className="text-xs text-muted-foreground">正在读取后端审批矩阵...</p>}
+          {!data && !error && (
+            <p className="text-xs text-muted-foreground">{t("security.matrixLoading")}</p>
+          )}
           {data && <div className="overflow-x-auto">
             <table className="w-full border-collapse text-xs">
               <thead>
                 <tr className="border-b border-border/50">
                   <th className="text-left py-2 pr-3 font-medium text-muted-foreground">
-                    {t("security.matrixColClass", "ApprovalClass")}
+                    {t("security.matrixColClass")}
                   </th>
                   {data.modes.map((mode) => (
                     <th key={mode} className="text-center py-2 px-2 font-medium">
-                      <div className="text-sm">{mode}</div>
+                      <div className="text-sm">{t(`security.matrixMode.${mode}`, mode)}</div>
                       <div className="text-[10px] text-muted-foreground font-normal mt-0.5">confirmation_mode</div>
                     </th>
                   ))}
@@ -167,7 +165,9 @@ export function PolicyV2MatrixView({ apiBaseUrl }: { apiBaseUrl: string }) {
                   ...rows.map((row) => (
                     <tr key={`${row.role}-${row.approval_class}`} className="border-b border-border/30 last:border-b-0">
                       <td className="py-2 pr-3">
-                        <code className="text-[10px] text-muted-foreground">{row.approval_class}</code>
+                        <span className="text-xs" title={row.approval_class}>
+                          {t(`security.approvalClass.${row.approval_class}`, row.approval_class)}
+                        </span>
                       </td>
                       {data.modes.map((mode) => (
                         <td key={mode} className="text-center py-2 px-2">
@@ -183,26 +183,23 @@ export function PolicyV2MatrixView({ apiBaseUrl }: { apiBaseUrl: string }) {
 
           {/* Legend */}
           <div className="flex flex-wrap items-center gap-3 mt-4 pt-3 border-t border-border/50 text-[11px]">
-            <span className="text-muted-foreground">{t("security.matrixLegend", "图例：")}</span>
+            <span className="text-muted-foreground">{t("security.matrixLegend")}</span>
             <span className="inline-flex items-center gap-1.5">
               <DecisionCell decision="allow" />
-              <span>{t("security.matrixLegendAllow", "自动放行")}</span>
+              <span>{t("security.matrixLegendAllow")}</span>
             </span>
             <span className="inline-flex items-center gap-1.5">
               <DecisionCell decision="confirm" />
-              <span>{t("security.matrixLegendConfirm", "弹窗确认")}</span>
+              <span>{t("security.matrixLegendConfirm")}</span>
             </span>
             <span className="inline-flex items-center gap-1.5">
               <DecisionCell decision="deny" />
-              <span>{t("security.matrixLegendDeny", "拒绝执行")}</span>
+              <span>{t("security.matrixLegendDeny")}</span>
             </span>
           </div>
 
           <p className="text-[10px] text-muted-foreground mt-3 italic">
-            {t(
-              "security.matrixDataSource",
-              "数据源：后端 lookup_matrix()。这里只展示 baseline，不包含路径名单、敏感路径保护、owner_only、death_switch、trusted_path 等后续叠加。",
-            )}
+            {t("security.matrixDataSource")}
           </p>
         </CardContent>
       </Card>

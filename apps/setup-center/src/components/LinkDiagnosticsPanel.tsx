@@ -43,12 +43,12 @@ export function LinkDiagnosticsPanel({ httpApiBase, initialDiagnostic }: LinkDia
     if (body && Object.keys(body).length > 0) {
       setDiag(body as LinkDiagnostic);
       if (showResult) {
-        setStatusText(t("status.linkDiag.refreshed", { defaultValue: "已刷新，已读取到最近一次链接记录。" }));
+        setStatusText(t("status.linkDiag.refreshed"));
       }
     } else {
       setDiag(null);
       if (showResult) {
-        setStatusText(t("status.linkDiag.refreshedEmpty", { defaultValue: "已刷新，本次会话还没有链接读取记录。" }));
+        setStatusText(t("status.linkDiag.refreshedEmpty"));
       }
     }
   }, [t]);
@@ -64,7 +64,6 @@ export function LinkDiagnosticsPanel({ httpApiBase, initialDiagnostic }: LinkDia
     } catch (e) {
       if (showResult) {
         setStatusText(t("status.linkDiag.refreshFailedDetail", {
-          defaultValue: "刷新失败：{{error}}",
           error: String(e),
         }));
       }
@@ -91,22 +90,20 @@ export function LinkDiagnosticsPanel({ httpApiBase, initialDiagnostic }: LinkDia
           .map(([k]) => k);
         notifySuccess(
           t("status.linkDiag.cleared", {
-            defaultValue: "已清理：{{items}}",
-            items: items.length > 0 ? items.join("、") : "—",
+            items: items.length > 0
+              ? items.join(t("status.linkDiag.itemSeparator"))
+              : "—",
           }),
         );
         setDiag(null);
-        setStatusText(t("status.linkDiag.clearedHint", {
-          defaultValue: "已清理本会话缓存。不会删除聊天记录，只会让下次读取重新获取。",
-        }));
+        setStatusText(t("status.linkDiag.clearedHint"));
       } else {
         notifyError(`HTTP ${resp.status}`);
-        setStatusText(t("status.linkDiag.clearFailed", { defaultValue: "清理失败，请稍后再试。" }));
+        setStatusText(t("status.linkDiag.clearFailed"));
       }
     } catch (e) {
       notifyError(String(e));
       setStatusText(t("status.linkDiag.clearFailedDetail", {
-        defaultValue: "清理失败：{{error}}",
         error: String(e),
       }));
     } finally {
@@ -123,21 +120,20 @@ export function LinkDiagnosticsPanel({ httpApiBase, initialDiagnostic }: LinkDia
     const code = (diag?.error_code || "").toString();
     switch (code) {
       case "binary_content":
-        return t("status.linkDiag.reason.binary", { defaultValue: "页面是文件不是网页" });
+        return t("status.linkDiag.reason.binary");
       case "domain_blocked":
-        return t("status.linkDiag.reason.blocked", { defaultValue: "该域名被你屏蔽了" });
+        return t("status.linkDiag.reason.blocked");
       case "too_many_redirects":
-        return t("status.linkDiag.reason.tooManyRedirects", { defaultValue: "跳转次数太多" });
+        return t("status.linkDiag.reason.tooManyRedirects");
       case "network_error":
-        return t("status.linkDiag.reason.network", { defaultValue: "网络问题" });
+        return t("status.linkDiag.reason.network");
       case "empty_content":
-        return t("status.linkDiag.reason.empty", { defaultValue: "页面没有可读正文" });
+        return t("status.linkDiag.reason.empty");
       case "redirect_missing_location":
-        return t("status.linkDiag.reason.redirectInvalid", { defaultValue: "跳转响应不规范" });
+        return t("status.linkDiag.reason.redirectInvalid");
       default:
         if (typeof diag?.status_code === "number" && diag.status_code >= 400) {
           return t("status.linkDiag.reason.httpError", {
-            defaultValue: "服务器返回 {{code}}",
             code: diag.status_code,
           });
         }
@@ -152,22 +148,24 @@ export function LinkDiagnosticsPanel({ httpApiBase, initialDiagnostic }: LinkDia
       </div>
       <div className="statusPanelInfo">
         <div className="statusPanelTitle">
-          {t("status.linkDiag.title", { defaultValue: "链接读取诊断" })}
+          {t("status.linkDiag.title")}
         </div>
         <div className="statusPanelDesc">
           {diag ? (
             isError ? (
               <span style={{ color: "var(--muted)" }}>
                 {t("status.linkDiag.notRead", {
-                  defaultValue: "上次链接没读取成功：{{url}}",
                   url: shortUrl(finalUrl || requested),
                 })}
-                {errorReason ? `（${errorReason}）` : ""}
+                {errorReason
+                  ? t("status.linkDiag.reasonSuffix", {
+                      reason: errorReason,
+                    })
+                  : ""}
               </span>
             ) : redirected ? (
               <span>
                 {t("status.linkDiag.redirected", {
-                  defaultValue: "上次读取了 {{final}}（由 {{requested}} 跳转）",
                   final: shortUrl(finalUrl),
                   requested: shortUrl(requested),
                 })}
@@ -175,16 +173,13 @@ export function LinkDiagnosticsPanel({ httpApiBase, initialDiagnostic }: LinkDia
             ) : (
               <span>
                 {t("status.linkDiag.ok", {
-                  defaultValue: "上次读取了 {{final}}",
                   final: shortUrl(finalUrl),
                 })}
               </span>
             )
           ) : (
             <span style={{ opacity: 0.7 }}>
-              {t("status.linkDiag.empty", {
-                defaultValue: "本次会话还未读取过链接",
-              })}
+              {t("status.linkDiag.empty")}
             </span>
           )}
           {statusText && (
@@ -201,10 +196,10 @@ export function LinkDiagnosticsPanel({ httpApiBase, initialDiagnostic }: LinkDia
           className="h-7 text-xs px-2.5"
           onClick={() => refresh(true)}
           disabled={loading || clearing}
-          title={t("status.linkDiag.refresh", { defaultValue: "刷新" }) as string}
+          title={t("status.linkDiag.refresh") as string}
         >
           <RefreshCw size={12} className={loading ? "animate-spin" : ""} />
-          {loading ? t("status.checking", { defaultValue: "刷新中" }) : t("status.linkDiag.refresh", { defaultValue: "刷新" })}
+          {loading ? t("status.checking") : t("status.linkDiag.refresh")}
         </Button>
         <Button
           size="sm"
@@ -213,14 +208,11 @@ export function LinkDiagnosticsPanel({ httpApiBase, initialDiagnostic }: LinkDia
           onClick={onClear}
           disabled={clearing || loading}
           title={
-            t("status.linkDiag.clearHint", {
-              defaultValue:
-                "清理 WebFetch 缓存、工具结果缓存、浏览器导航记忆和上下文摘要（不会删除对话）",
-            }) as string
+            t("status.linkDiag.clearHint") as string
           }
         >
           {clearing ? <RefreshCw size={12} className="animate-spin" /> : <Eraser size={12} />}
-          {clearing ? t("status.linkDiag.clearing", { defaultValue: "清理中" }) : t("status.linkDiag.clear", { defaultValue: "清理本会话缓存" })}
+          {clearing ? t("status.linkDiag.clearing") : t("status.linkDiag.clear")}
         </Button>
       </div>
     </div>
