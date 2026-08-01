@@ -78,12 +78,12 @@ const ZONE_META: Record<string, { color: string; tw: string }> = {
 };
 
 const BACKEND_OPTIONS = [
-  { value: "auto", label: "轻量沙箱（当前可用）", available: true },
-  { value: "none", label: "不使用沙箱", available: true },
-  { value: "low_integrity", label: "Low Integrity (Windows，预留)", available: false },
-  { value: "bubblewrap", label: "Bubblewrap (Linux，预留)", available: false },
-  { value: "seatbelt", label: "Seatbelt (macOS，预留)", available: false },
-  { value: "docker", label: "Docker（预留）", available: false },
+  { value: "auto", labelKey: "security.sandboxBackendAuto", available: true },
+  { value: "none", labelKey: "security.sandboxBackendNone", available: true },
+  { value: "low_integrity", labelKey: "security.sandboxBackendLowIntegrity", available: false },
+  { value: "bubblewrap", labelKey: "security.sandboxBackendBubblewrap", available: false },
+  { value: "seatbelt", labelKey: "security.sandboxBackendSeatbelt", available: false },
+  { value: "docker", labelKey: "security.sandboxBackendDocker", available: false },
 ];
 
 function errorMessage(err: unknown, fallback: string) {
@@ -138,10 +138,12 @@ type DryRunDecision = {
   security_profile?: string;
 };
 type PermissionMode = "trust" | "protect" | "strict" | "off" | "custom";
-const OFF_ACK_PHRASE = "确认风险同意关闭";
+// The API contract currently requires this exact value; the phrase shown to the user is localized.
+const OFF_ACK_API_PHRASE = "确认风险同意关闭";
 
 export default function SecurityView({ apiBaseUrl, serviceRunning }: SecurityViewProps) {
   const { t } = useTranslation();
+  const offAckPhraseExpected = t("security.offAckPhrase");
 
   const [tab, setTab] = useState<TabId>("zones");
   const [zones, setZones] = useState<ZoneConfig>({ workspace: [], protected: [] });
@@ -189,7 +191,7 @@ export default function SecurityView({ apiBaseUrl, serviceRunning }: SecurityVie
 
   const load = useCallback(async (showResult = false) => {
     if (!serviceRunning) {
-      if (showResult) toast.error(t("security.backendOff", "后端服务未运行"));
+      if (showResult) toast.error(t("security.backendOff"));
       return false;
     }
     setLoadingAll(true);
@@ -227,12 +229,12 @@ export default function SecurityView({ apiBaseUrl, serviceRunning }: SecurityVie
       }
       if (spRes && spRes.enabled !== undefined) setSelfProtect(spRes);
       if (alRes && (alRes.commands || alRes.tools)) setAllowlist(alRes);
-      if (showResult) toast.success(t("security.refreshAllDone", "安全配置已刷新"));
+      if (showResult) toast.success(t("security.refreshAllDone"));
       return true;
     } catch (err) {
       if (showResult) {
-        toast.error(t("security.refreshFailed", "刷新失败"), {
-          description: errorMessage(err, t("security.refreshFailed", "刷新失败")),
+        toast.error(t("security.refreshFailed"), {
+          description: errorMessage(err, t("security.refreshFailed")),
         });
       }
       return false;
@@ -245,19 +247,19 @@ export default function SecurityView({ apiBaseUrl, serviceRunning }: SecurityVie
 
   const loadAudit = useCallback(async (showResult = false) => {
     if (!serviceRunning) {
-      if (showResult) toast.error(t("security.backendOff", "后端服务未运行"));
+      if (showResult) toast.error(t("security.backendOff"));
       return false;
     }
     setRefreshingAudit(true);
     try {
       const res = await api("/api/config/security/audit");
       setAudit(res.entries || []);
-      if (showResult) toast.success(t("security.auditRefreshed", "审计日志已刷新"));
+      if (showResult) toast.success(t("security.auditRefreshed"));
       return true;
     } catch (err) {
       if (showResult) {
-        toast.error(t("security.refreshFailed", "刷新失败"), {
-          description: errorMessage(err, t("security.refreshFailed", "刷新失败")),
+        toast.error(t("security.refreshFailed"), {
+          description: errorMessage(err, t("security.refreshFailed")),
         });
       }
       return false;
@@ -268,19 +270,19 @@ export default function SecurityView({ apiBaseUrl, serviceRunning }: SecurityVie
 
   const loadCheckpoints = useCallback(async (showResult = false) => {
     if (!serviceRunning) {
-      if (showResult) toast.error(t("security.backendOff", "后端服务未运行"));
+      if (showResult) toast.error(t("security.backendOff"));
       return false;
     }
     setRefreshingCheckpoints(true);
     try {
       const res = await api("/api/config/security/checkpoints");
       setCheckpoints(res.checkpoints || []);
-      if (showResult) toast.success(t("security.checkpointsRefreshed", "文件快照已刷新"));
+      if (showResult) toast.success(t("security.checkpointsRefreshed"));
       return true;
     } catch (err) {
       if (showResult) {
-        toast.error(t("security.refreshFailed", "刷新失败"), {
-          description: errorMessage(err, t("security.refreshFailed", "刷新失败")),
+        toast.error(t("security.refreshFailed"), {
+          description: errorMessage(err, t("security.refreshFailed")),
         });
       }
       return false;
@@ -295,8 +297,8 @@ export default function SecurityView({ apiBaseUrl, serviceRunning }: SecurityVie
       const res = await api("/api/config/security/allowlist");
       if (res.commands || res.tools) setAllowlist(res);
     } catch (err) {
-      toast.error(t("security.refreshFailed", "刷新失败"), {
-        description: errorMessage(err, t("security.refreshFailed", "刷新失败")),
+      toast.error(t("security.refreshFailed"), {
+        description: errorMessage(err, t("security.refreshFailed")),
       });
     }
   }, [api, serviceRunning, t]);
@@ -321,10 +323,10 @@ export default function SecurityView({ apiBaseUrl, serviceRunning }: SecurityVie
         }),
       );
       setImOwnerEntries(entries);
-      if (showResult) toast.success(t("security.imOwnerRefreshed", "IM owner 列表已刷新"));
+      if (showResult) toast.success(t("security.imOwnerRefreshed"));
     } catch (err) {
-      if (showResult) toast.error(t("security.refreshFailed", "刷新失败"), {
-        description: errorMessage(err, t("security.refreshFailed", "刷新失败")),
+      if (showResult) toast.error(t("security.refreshFailed"), {
+        description: errorMessage(err, t("security.refreshFailed")),
       });
     } finally {
       setLoadingImOwner(false);
@@ -338,8 +340,8 @@ export default function SecurityView({ apiBaseUrl, serviceRunning }: SecurityVie
         await api("/api/im/owner-allowlist", "POST", { channel, owners });
         toast.success(
           owners === null
-            ? t("security.imOwnerCleared", "已恢复单用户默认（is_owner=true）")
-            : t("security.imOwnerSaved", "IM owner 列表已保存"),
+            ? t("security.imOwnerCleared")
+            : t("security.imOwnerSaved"),
         );
         await loadImOwnerAllowlist(false);
       } catch (err) {
@@ -361,8 +363,8 @@ export default function SecurityView({ apiBaseUrl, serviceRunning }: SecurityVie
       const res = await api("/api/config/security/preview", "POST", {});
       setDryRunDecisions(Array.isArray(res?.decisions) ? res.decisions : []);
     } catch (err) {
-      toast.error(t("security.dryRunFailed", "预览失败"), {
-        description: errorMessage(err, t("security.dryRunFailed", "预览失败")),
+      toast.error(t("security.dryRunFailed"), {
+        description: errorMessage(err, t("security.dryRunFailed")),
       });
     } finally {
       setLoadingDryRun(false);
@@ -418,7 +420,7 @@ export default function SecurityView({ apiBaseUrl, serviceRunning }: SecurityVie
     setSavingAction("security-profile");
     try {
       await api("/api/config/security-profile", "POST", { profile: mode, ack_phrase });
-      toast.success(t("security.permissionModeSaved", "安全方案已更新"));
+      toast.success(t("security.permissionModeSaved"));
       await load();
       setShowAdvanced(mode === "custom");
     } catch (err) {
@@ -442,12 +444,12 @@ export default function SecurityView({ apiBaseUrl, serviceRunning }: SecurityVie
   };
 
   const confirmOffMode = async () => {
-    if (offAckPhrase.trim() !== OFF_ACK_PHRASE) {
-      setOffAckError(t("security.offAckMismatch", "确认短语不匹配，已阻止关闭。"));
+    if (offAckPhrase.trim() !== offAckPhraseExpected) {
+      setOffAckError(t("security.offAckMismatch"));
       return;
     }
     setOffDialogOpen(false);
-    await applyPermissionMode("off", offAckPhrase.trim());
+    await applyPermissionMode("off", OFF_ACK_API_PHRASE);
   };
 
   const requestRewind = (cp: CheckpointEntry) => {
@@ -466,8 +468,8 @@ export default function SecurityView({ apiBaseUrl, serviceRunning }: SecurityVie
       toast.success(t("security.rewound"));
       await loadCheckpoints(false);
     } catch (err) {
-      toast.error(t("security.rewindFailed", "回滚失败"), {
-        description: errorMessage(err, t("security.rewindFailed", "回滚失败")),
+      toast.error(t("security.rewindFailed"), {
+        description: errorMessage(err, t("security.rewindFailed")),
       });
     } finally {
       setRewindingId(null);
@@ -486,7 +488,7 @@ export default function SecurityView({ apiBaseUrl, serviceRunning }: SecurityVie
   const deleteAllowlistEntry = async (entryType: string, index: number) => {
     try {
       await api(`/api/config/security/allowlist/${entryType}/${index}`, "DELETE");
-      toast.success(t("security.allowlistDeleted", "已删除"));
+      toast.success(t("security.allowlistDeleted"));
       loadAllowlist();
     } catch (err) {
       toast.error(t("security.saveFailed"), {
@@ -499,7 +501,7 @@ export default function SecurityView({ apiBaseUrl, serviceRunning }: SecurityVie
     setSavingAction("death-switch-reset");
     try {
       await api("/api/config/security/death-switch/reset", "POST");
-      toast.success(t("security.deathSwitchReset", "只读保护已解除"));
+      toast.success(t("security.deathSwitchReset"));
       setSelfProtect((p) => ({ ...p, readonly_mode: false }));
     } catch (err) {
       toast.error(t("security.saveFailed"), {
@@ -510,18 +512,18 @@ export default function SecurityView({ apiBaseUrl, serviceRunning }: SecurityVie
     }
   };
 
-  const TABS: { id: TabId; labelKey: string; fallback: string }[] = [
-    { id: "confirmation", labelKey: "security.confirmation", fallback: "确认策略" },
+  const TABS: { id: TabId; labelKey: string }[] = [
+    { id: "confirmation", labelKey: "security.confirmation" },
     // C23 P2-1: policy_v2 审批矩阵（session_role × confirmation_mode × ApprovalClass）
-    { id: "policy_v2_matrix", labelKey: "security.policyV2Matrix", fallback: "审批矩阵" },
-    { id: "zones", labelKey: "security.zones", fallback: "区域" },
-    { id: "commands", labelKey: "security.commands", fallback: "命令" },
-    { id: "sandbox", labelKey: "security.sandbox", fallback: "沙箱" },
-    { id: "selfprotection", labelKey: "security.selfProtection", fallback: "自我保护" },
-    { id: "imowner", labelKey: "security.imOwner", fallback: "IM Owner" },
-    { id: "dryrun", labelKey: "security.dryRun", fallback: "策略预览" },
-    { id: "audit", labelKey: "security.audit", fallback: "审计" },
-    { id: "checkpoints", labelKey: "security.checkpoints", fallback: "快照" },
+    { id: "policy_v2_matrix", labelKey: "security.policyV2Matrix" },
+    { id: "zones", labelKey: "security.zones" },
+    { id: "commands", labelKey: "security.commands" },
+    { id: "sandbox", labelKey: "security.sandbox" },
+    { id: "selfprotection", labelKey: "security.selfProtection" },
+    { id: "imowner", labelKey: "security.imOwner" },
+    { id: "dryrun", labelKey: "security.dryRun" },
+    { id: "audit", labelKey: "security.audit" },
+    { id: "checkpoints", labelKey: "security.checkpoints" },
   ];
 
   // 信息架构：3 个并列机制页 + 1 个观测分组。
@@ -533,41 +535,31 @@ export default function SecurityView({ apiBaseUrl, serviceRunning }: SecurityVie
   const TAB_GROUPS: {
     id: string;
     titleKey: string;
-    titleFallback: string;
     descKey: string;
-    descFallback: string;
     tabs: TabId[];
   }[] = [
     {
       id: "execution",
       titleKey: "security.groupExecutionTitle",
-      titleFallback: "工具执行",
       descKey: "security.groupExecutionDesc",
-      descFallback: "Agent 调用工具时如何确认、拦截、审计。",
       tabs: ["confirmation", "policy_v2_matrix", "commands", "selfprotection", "imowner"],
     },
     {
       id: "sandbox",
       titleKey: "security.groupSandboxTitle",
-      titleFallback: "沙箱隔离",
       descKey: "security.groupSandboxDesc",
-      descFallback: "高风险命令在受限容器/虚拟环境中执行。",
       tabs: ["sandbox"],
     },
     {
       id: "paths",
       titleKey: "security.groupPathsTitle",
-      titleFallback: "路径白名单",
       descKey: "security.groupPathsDesc",
-      descFallback: "Agent 文件访问的工作区与敏感目录硬边界。",
       tabs: ["zones"],
     },
     {
       id: "observability",
       titleKey: "security.groupObservabilityTitle",
-      titleFallback: "观测与历史",
       descKey: "security.groupObservabilityDesc",
-      descFallback: "策略预览、审计日志、文件快照——事后回溯。",
       tabs: ["dryrun", "audit", "checkpoints"],
     },
   ];
@@ -575,36 +567,36 @@ export default function SecurityView({ apiBaseUrl, serviceRunning }: SecurityVie
   const MODE_CARDS: Array<{ id: PermissionMode; title: string; desc: string; icon: typeof ShieldCheck; tone: string }> = [
     {
       id: "trust",
-      title: t("security.modeTrustTitle", "信任方案"),
-      desc: t("security.modeTrustCardDesc", "默认推荐，减少打扰但保留关键保护。"),
+      title: t("security.modeTrustTitle"),
+      desc: t("security.modeTrustCardDesc"),
       icon: ShieldCheck,
       tone: "text-emerald-600 bg-emerald-500/10 border-emerald-500/20",
     },
     {
       id: "protect",
-      title: t("security.modeProtectTitle", "保护方案"),
-      desc: t("security.modeProtectCardDesc", "对高风险命令和敏感访问进行确认，兼顾安全与效率。"),
+      title: t("security.modeProtectTitle"),
+      desc: t("security.modeProtectCardDesc"),
       icon: Shield,
       tone: "text-blue-600 bg-blue-500/10 border-blue-500/20",
     },
     {
       id: "strict",
-      title: t("security.modeStrictTitle", "严格方案"),
-      desc: t("security.modeStrictCardDesc", "适合企业或高风险环境，采用更保守的拦截策略。"),
+      title: t("security.modeStrictTitle"),
+      desc: t("security.modeStrictCardDesc"),
       icon: LockKeyhole,
       tone: "text-amber-600 bg-amber-500/10 border-amber-500/20",
     },
     {
       id: "off",
-      title: "关闭方案",
-      desc: "彻底关闭安全机制，不推荐日常使用。",
+      title: t("security.modeOffTitle"),
+      desc: t("security.modeOffCardDesc"),
       icon: ShieldAlert,
       tone: "text-red-600 bg-red-500/10 border-red-500/20",
     },
     {
       id: "custom",
-      title: "自定义方案",
-      desc: "使用手动调整后的组合策略，适合精细化控制场景。",
+      title: t("security.modeCustomTitle"),
+      desc: t("security.modeCustomCardDesc"),
       icon: Shield,
       tone: "text-purple-600 bg-purple-500/10 border-purple-500/20",
     },
@@ -615,23 +607,23 @@ export default function SecurityView({ apiBaseUrl, serviceRunning }: SecurityVie
       {/* Header */}
       <div className="flex items-start justify-between gap-4">
         <div className="min-w-0 space-y-1">
-          <h2 className="truncate text-xl font-semibold tracking-tight" title={t("security.title", "安全控制")}>
-            {t("security.title", "安全控制")}
+          <h2 className="truncate text-xl font-semibold tracking-tight" title={t("security.title")}>
+            {t("security.title")}
           </h2>
-          <p className="truncate text-[13px] leading-5 text-muted-foreground" title={t("security.desc", "配置系统安全策略，包括文件访问区域、命令拦截和沙箱环境。")}>
-            {t("security.desc", "配置系统安全策略，包括文件访问区域、命令拦截和沙箱环境。")}
+          <p className="truncate text-[13px] leading-5 text-muted-foreground" title={t("security.desc")}>
+            {t("security.desc")}
           </p>
         </div>
         <Button variant="outline" size="sm" className="h-8 shrink-0" onClick={() => load(true)} disabled={loadingAll || saving}>
           <RotateCw size={14} className={cn("mr-1.5", loadingAll && "animate-spin")} />
-          {t("security.refreshAll", "刷新全部")}
+          {t("security.refreshAll")}
         </Button>
       </div>
 
       {/* Mode switch */}
       <Card className="gap-0 border-border/70 py-0 shadow-sm">
         <CardHeader className="px-4 py-3">
-          <CardTitle className="text-[13px] font-semibold">{t("security.permissionMode", "安全模式")}</CardTitle>
+          <CardTitle className="text-[13px] font-semibold">{t("security.permissionMode")}</CardTitle>
         </CardHeader>
         <CardContent className="space-y-3 px-4 pb-4">
           <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-5">
@@ -689,10 +681,10 @@ export default function SecurityView({ apiBaseUrl, serviceRunning }: SecurityVie
           {permissionMode !== "custom" && (
             <div className="flex items-center justify-between gap-3 rounded-lg border border-border/60 bg-muted/20 px-3 py-2">
               <p className="text-[12px] leading-5 text-muted-foreground">
-                {t("security.trustModeAdvancedHint", "当前方案使用预设配置，高级设置默认隐藏。")}
+                {t("security.trustModeAdvancedHint")}
               </p>
               <Button variant="outline" size="sm" className="h-8 shrink-0" onClick={() => setShowAdvanced((v) => !v)}>
-                {showAdvanced ? t("security.hideAdvanced", "收起高级设置") : t("security.showAdvanced", "显示高级设置")}
+                {showAdvanced ? t("security.hideAdvanced") : t("security.showAdvanced")}
               </Button>
             </div>
           )}
@@ -719,10 +711,10 @@ export default function SecurityView({ apiBaseUrl, serviceRunning }: SecurityVie
             >
               <div className="mb-2 space-y-0.5">
                 <div className="text-[12px] font-semibold tracking-wide text-foreground/90">
-                  {t(group.titleKey, group.titleFallback)}
+                  {t(group.titleKey)}
                 </div>
                 <div className="text-[11px] leading-4 text-muted-foreground">
-                  {t(group.descKey, group.descFallback)}
+                  {t(group.descKey)}
                 </div>
               </div>
               <div className="overflow-x-auto pb-0.5">
@@ -738,9 +730,9 @@ export default function SecurityView({ apiBaseUrl, serviceRunning }: SecurityVie
                       key={tb.id}
                       value={tb.id}
                       className="h-7 rounded-md px-2.5 text-[11px] data-[state=on]:border-primary data-[state=on]:bg-primary data-[state=on]:text-primary-foreground"
-                      title={t(tb.labelKey, tb.fallback)}
+                      title={t(tb.labelKey)}
                     >
-                      {t(tb.labelKey, tb.fallback)}
+                      {t(tb.labelKey)}
                     </ToggleGroupItem>
                   ))}
                 </ToggleGroup>
@@ -757,36 +749,36 @@ export default function SecurityView({ apiBaseUrl, serviceRunning }: SecurityVie
       {tab === "confirmation" && (
         <Card className="p-0 gap-0 border-border/50 shadow-sm">
           <CardHeader className="border-b border-border/50 px-4 py-2.5">
-            <CardTitle className="text-sm font-semibold">{t("security.confirmation", "确认行为")}</CardTitle>
+            <CardTitle className="text-sm font-semibold">{t("security.confirmation")}</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4 px-4 pb-4 pt-3">
-            <p className="text-xs leading-5 text-muted-foreground">{t("security.confirmationDesc", "配置安全确认弹窗的触发模式、超时行为和缓存策略。")}</p>
+            <p className="text-xs leading-5 text-muted-foreground">{t("security.confirmationDesc")}</p>
             <div className="max-w-md space-y-3.5">
               {/* Mode selector */}
               <div className="space-y-2">
-                <Label className="text-sm font-medium">{t("security.confirmMode", "确认模式")}</Label>
+                <Label className="text-sm font-medium">{t("security.confirmMode")}</Label>
                 <Select value={confirmConfig.mode} onValueChange={(v) => setConfirmConfig((p) => ({ ...p, mode: v }))}>
                   <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="trust">信任确认 (trust)</SelectItem>
-                    <SelectItem value="default">默认确认 (default)</SelectItem>
-                    <SelectItem value="accept_edits">接受编辑 (accept_edits)</SelectItem>
-                    <SelectItem value="strict">严格确认 (strict)</SelectItem>
-                    <SelectItem value="dont_ask">不打扰 (dont_ask)</SelectItem>
+                    <SelectItem value="trust">{t("security.confirmModeTrust")}</SelectItem>
+                    <SelectItem value="default">{t("security.confirmModeDefault")}</SelectItem>
+                    <SelectItem value="accept_edits">{t("security.confirmModeAcceptEdits")}</SelectItem>
+                    <SelectItem value="strict">{t("security.confirmModeStrict")}</SelectItem>
+                    <SelectItem value="dont_ask">{t("security.confirmModeDontAsk")}</SelectItem>
                   </SelectContent>
                 </Select>
                 <p className="text-xs text-muted-foreground">
-                  工具执行策略只控制是否需要确认，不会扩大文件路径名单。
+                  {t("security.confirmModePathHint")}
                 </p>
               </div>
               {/* Timeout */}
               <div className="space-y-2">
-                <Label className="text-sm font-medium">{t("security.confirmTimeout", "确认超时 (秒)")}</Label>
+                <Label className="text-sm font-medium">{t("security.confirmTimeout")}</Label>
                 <Input type="number" value={confirmConfig.timeout_seconds} onChange={(e) => setConfirmConfig((p) => ({ ...p, timeout_seconds: parseInt(e.target.value) || 60 }))} className="h-9 w-32" />
               </div>
               {/* Default on timeout */}
               <div className="space-y-2">
-                <Label className="text-sm font-medium">{t("security.defaultOnTimeout", "超时默认行为")}</Label>
+                <Label className="text-sm font-medium">{t("security.defaultOnTimeout")}</Label>
                 <Select
                   value={confirmConfig.default_on_timeout}
                   onValueChange={(v) =>
@@ -798,25 +790,25 @@ export default function SecurityView({ apiBaseUrl, serviceRunning }: SecurityVie
                 >
                   <SelectTrigger className="w-40"><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="deny">{t("security.deny", "拒绝")}</SelectItem>
-                    <SelectItem value="allow_once">{t("chat.securityAllowOnce", "允许一次")}</SelectItem>
+                    <SelectItem value="deny">{t("security.deny")}</SelectItem>
+                    <SelectItem value="allow_once">{t("chat.securityAllowOnce")}</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
               {/* TTL */}
               <div className="space-y-2">
-                <Label className="text-sm font-medium">{t("security.confirmTtl", "单次确认缓存 (秒)")}</Label>
+                <Label className="text-sm font-medium">{t("security.confirmTtl")}</Label>
                 <Input type="number" value={confirmConfig.confirm_ttl} onChange={(e) => setConfirmConfig((p) => ({ ...p, confirm_ttl: parseFloat(e.target.value) || 120 }))} className="h-9 w-32" />
-                <p className="text-xs text-muted-foreground">{t("security.confirmTtlDesc", "相同操作在此时间内不再重复弹窗")}</p>
+                <p className="text-xs text-muted-foreground">{t("security.confirmTtlDesc")}</p>
               </div>
             </div>
 
             {/* Persistent allowlist */}
             <div className="border-t border-border/50 pt-4 mt-4 space-y-3">
-              <Label className="text-sm font-medium">{t("security.allowlist", "持久化白名单")}</Label>
-              <p className="text-xs text-muted-foreground">{t("security.allowlistDesc", "通过「始终允许」按钮添加的规则，重启后仍生效。")}</p>
+              <Label className="text-sm font-medium">{t("security.allowlist")}</Label>
+              <p className="text-xs text-muted-foreground">{t("security.allowlistDesc")}</p>
               {allowlist.commands.length === 0 && allowlist.tools.length === 0 ? (
-                <p className="text-xs text-muted-foreground italic py-2">{t("security.noAllowlist", "暂无白名单条目")}</p>
+                <p className="text-xs text-muted-foreground italic py-2">{t("security.noAllowlist")}</p>
               ) : (
                 <div className="space-y-2">
                   {allowlist.commands.map((entry, i) => (
@@ -855,21 +847,21 @@ export default function SecurityView({ apiBaseUrl, serviceRunning }: SecurityVie
       {tab === "selfprotection" && (
         <Card className="p-0 gap-0 border-border/50 shadow-sm">
           <CardHeader className="border-b border-border/50 px-4 py-2.5">
-            <CardTitle className="text-sm font-semibold">{t("security.selfProtection", "自保护")}</CardTitle>
+            <CardTitle className="text-sm font-semibold">{t("security.selfProtection")}</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4 px-4 pb-4 pt-3">
-            <p className="text-xs leading-5 text-muted-foreground">{t("security.selfProtectionDesc", "配置 Agent 自保护机制，防止误操作破坏关键目录。")}</p>
+            <p className="text-xs leading-5 text-muted-foreground">{t("security.selfProtectionDesc")}</p>
             <div className="max-w-lg space-y-3.5">
               {/* Enabled switch */}
               <div className="flex items-center justify-between rounded-lg border border-border/50 bg-muted/20 p-3">
                 <div className="space-y-0.5">
-                  <Label className="text-sm font-medium">{t("security.selfProtectionEnabled", "启用自保护")}</Label>
+                  <Label className="text-sm font-medium">{t("security.selfProtectionEnabled")}</Label>
                 </div>
                 <Switch checked={selfProtect.enabled} onCheckedChange={(v) => setSelfProtect((p) => ({ ...p, enabled: v }))} />
               </div>
               {/* Protected dirs */}
               <div className="space-y-2">
-                <Label className="text-sm font-medium">{t("security.protectedDirs", "受保护目录")}</Label>
+                <Label className="text-sm font-medium">{t("security.protectedDirs")}</Label>
                 <TagEditor
                   label=""
                   items={selfProtect.protected_dirs}
@@ -879,24 +871,24 @@ export default function SecurityView({ apiBaseUrl, serviceRunning }: SecurityVie
               </div>
               {/* Death switch threshold */}
               <div className="space-y-2">
-                <Label className="text-sm font-medium">{t("security.deathSwitchThreshold", "自动保护阈值（连续拒绝次数）")}</Label>
+                <Label className="text-sm font-medium">{t("security.deathSwitchThreshold")}</Label>
                 <Input type="number" value={selfProtect.death_switch_threshold} onChange={(e) => setSelfProtect((p) => ({ ...p, death_switch_threshold: parseInt(e.target.value) || 3 }))} className="h-9 w-32" />
               </div>
               {/* Total multiplier */}
               <div className="space-y-2">
-                <Label className="text-sm font-medium">{t("security.deathSwitchMultiplier", "累计保护系数")}</Label>
+                <Label className="text-sm font-medium">{t("security.deathSwitchMultiplier")}</Label>
                 <Input type="number" value={selfProtect.death_switch_total_multiplier} onChange={(e) => setSelfProtect((p) => ({ ...p, death_switch_total_multiplier: parseInt(e.target.value) || 3 }))} className="h-9 w-32" />
-                <p className="text-xs text-muted-foreground">{t("security.deathSwitchMultiplierDesc", "累计拒绝次数达到阈值 × 系数时，会自动进入只读保护状态。")}</p>
+                <p className="text-xs text-muted-foreground">{t("security.deathSwitchMultiplierDesc")}</p>
               </div>
               <div className="flex items-center justify-between rounded-lg border border-border/50 bg-muted/20 p-3">
                 <div className="space-y-0.5">
-                  <Label className="text-sm font-medium">{t("security.auditToFile", "写入审计日志文件")}</Label>
-                  <p className="text-xs text-muted-foreground">{t("security.auditToFileDesc", "关闭后仍会做安全判定，但不会继续追加本地 JSONL 审计文件。")}</p>
+                  <Label className="text-sm font-medium">{t("security.auditToFile")}</Label>
+                  <p className="text-xs text-muted-foreground">{t("security.auditToFileDesc")}</p>
                 </div>
                 <Switch checked={selfProtect.audit_to_file} onCheckedChange={(v) => setSelfProtect((p) => ({ ...p, audit_to_file: v }))} />
               </div>
               <div className="space-y-2">
-                <Label className="text-sm font-medium">{t("security.auditPath", "审计日志路径")}</Label>
+                <Label className="text-sm font-medium">{t("security.auditPath")}</Label>
                 <Input
                   value={selfProtect.audit_path}
                   onChange={(e) => setSelfProtect((p) => ({ ...p, audit_path: e.target.value }))}
@@ -910,11 +902,11 @@ export default function SecurityView({ apiBaseUrl, serviceRunning }: SecurityVie
                 <div className="flex items-center gap-3 p-4 bg-destructive/10 border border-destructive/30 rounded-lg">
                   <IconAlertCircle size={20} className="text-destructive shrink-0" />
                   <div className="flex-1">
-                    <p className="text-sm font-medium text-destructive">{t("security.readonlyModeActive", "Agent 当前处于只读保护状态，写入操作已暂时暂停。")}</p>
+                    <p className="text-sm font-medium text-destructive">{t("security.readonlyModeActive")}</p>
                   </div>
                   <Button variant="destructive" size="sm" onClick={resetDeathSwitch} disabled={savingAction === "death-switch-reset"}>
                     {savingAction === "death-switch-reset" && <Loader2 className="mr-1 size-3 animate-spin" />}
-                    {t("security.resetDeathSwitch", "解除只读保护")}
+                    {t("security.resetDeathSwitch")}
                   </Button>
                 </div>
               )}
@@ -933,7 +925,7 @@ export default function SecurityView({ apiBaseUrl, serviceRunning }: SecurityVie
       {tab === "zones" && (
         <Card className="p-0 gap-0 border-border/50 shadow-sm">
           <CardHeader className="border-b border-border/50 px-4 py-2.5">
-            <CardTitle className="text-sm font-semibold">{t("security.zones", "路径名单")}</CardTitle>
+            <CardTitle className="text-sm font-semibold">{t("security.zones")}</CardTitle>
           </CardHeader>
           <CardContent className="space-y-3.5 px-4 pb-4 pt-3">
             {/* Profile-aware enforcement hint — trust 跳过 workspace 白名单；off 全部不生效 */}
@@ -941,12 +933,9 @@ export default function SecurityView({ apiBaseUrl, serviceRunning }: SecurityVie
               <div className="flex items-start gap-3 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3">
                 <IconAlertCircle size={18} className="mt-0.5 shrink-0 text-amber-600 dark:text-amber-500" />
                 <div className="flex-1 space-y-1">
-                  <p className="text-sm font-medium">{t("security.zonesHintTrustTitle", "信任方案：工作区白名单已跳过")}</p>
+                  <p className="text-sm font-medium">{t("security.zonesHintTrustTitle")}</p>
                   <p className="text-xs leading-5 text-muted-foreground">
-                    {t(
-                      "security.zonesHintTrustDesc",
-                      "trust 方案下 AI 可访问任意路径，工作区列表仅作为切回保护 / 严格 / 自定义方案时的预置；绝对保护清单仍然生效。",
-                    )}
+                  {t("security.zonesHintTrustDesc")}
                   </p>
                 </div>
               </div>
@@ -955,21 +944,15 @@ export default function SecurityView({ apiBaseUrl, serviceRunning }: SecurityVie
               <div className="flex items-start gap-3 rounded-lg border border-destructive/30 bg-destructive/10 p-3">
                 <IconAlertCircle size={18} className="mt-0.5 shrink-0 text-destructive" />
                 <div className="flex-1 space-y-1">
-                  <p className="text-sm font-medium text-destructive">{t("security.zonesHintOffTitle", "安全策略已整体关闭")}</p>
+                  <p className="text-sm font-medium text-destructive">{t("security.zonesHintOffTitle")}</p>
                   <p className="text-xs leading-5 text-muted-foreground">
-                    {t(
-                      "security.zonesHintOffDesc",
-                      "off 方案下所有路径配置均不强制生效，仅作为切回其他方案时的预置；包括绝对保护清单也不再拦截。",
-                    )}
+                  {t("security.zonesHintOffDesc")}
                   </p>
                 </div>
               </div>
             )}
             <p className="text-xs leading-5 text-muted-foreground">
-              {t(
-                "security.zonesIntro",
-                "工作区决定 Agent 文件工具可访问的目录范围（trust / off 方案除外）；绝对保护清单在除 off 之外的方案下始终生效，AI 不可读写其中任何路径。",
-              )}
+              {t("security.zonesIntro")}
             </p>
             <div className="grid grid-cols-1 gap-2.5">
               {(["workspace", "protected"] as const).map((zone) => (
@@ -1001,7 +984,7 @@ export default function SecurityView({ apiBaseUrl, serviceRunning }: SecurityVie
       {tab === "commands" && (
         <Card className="p-0 gap-0 border-border/50 shadow-sm">
           <CardHeader className="border-b border-border/50 px-4 py-2.5">
-            <CardTitle className="text-sm font-semibold">{t("security.commands", "命令拦截")}</CardTitle>
+            <CardTitle className="text-sm font-semibold">{t("security.commands")}</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4 px-4 pb-4 pt-3">
             <p className="text-xs leading-5 text-muted-foreground">{t("security.commandsDesc")}</p>
@@ -1045,7 +1028,7 @@ export default function SecurityView({ apiBaseUrl, serviceRunning }: SecurityVie
       {tab === "sandbox" && (
         <Card className="p-0 gap-0 border-border/50 shadow-sm">
           <CardHeader className="border-b border-border/50 px-4 py-2.5">
-            <CardTitle className="text-sm font-semibold">{t("security.sandbox", "沙箱配置")}</CardTitle>
+            <CardTitle className="text-sm font-semibold">{t("security.sandbox")}</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4 px-4 pb-4 pt-3">
             <p className="text-xs leading-5 text-muted-foreground">{t("security.sandboxDesc")}</p>
@@ -1053,7 +1036,7 @@ export default function SecurityView({ apiBaseUrl, serviceRunning }: SecurityVie
               <div className="flex items-center justify-between rounded-lg border border-border/50 bg-muted/20 p-3">
                 <div className="space-y-0.5">
                   <Label className="text-sm font-medium">{t("security.sandboxEnabled")}</Label>
-                  <p className="text-xs text-muted-foreground">{t("security.sandboxEnabledDesc", "启用或禁用命令执行沙箱")}</p>
+                  <p className="text-xs text-muted-foreground">{t("security.sandboxEnabledDesc")}</p>
                 </div>
                 <Switch
                   checked={sandbox.enabled}
@@ -1069,17 +1052,19 @@ export default function SecurityView({ apiBaseUrl, serviceRunning }: SecurityVie
                   <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
                   <SelectContent>
                     {BACKEND_OPTIONS.map((o) => (
-                      <SelectItem key={o.value} value={o.value} disabled={!o.available}>{o.label}</SelectItem>
+                      <SelectItem key={o.value} value={o.value} disabled={!o.available}>
+                        {t(o.labelKey)}
+                      </SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
                 <p className="text-xs text-muted-foreground pt-1">
-                  {t("security.sandboxBackendDesc", "当前后端实现为轻量沙箱：执行前做策略检查并限制高危命令，Docker/seatbelt/bubblewrap 等 OS 级隔离暂未接入。")}
+                  {t("security.sandboxBackendDesc")}
                 </p>
               </div>
               {/* Risk levels */}
               <div className="space-y-2">
-                <Label className="text-sm font-medium">{t("security.sandboxRiskLevels", "沙箱风险等级")}</Label>
+                <Label className="text-sm font-medium">{t("security.sandboxRiskLevels")}</Label>
                 <div className="flex gap-2 flex-wrap">
                   {["HIGH", "MEDIUM"].map((lvl) => (
                     <Badge
@@ -1097,11 +1082,11 @@ export default function SecurityView({ apiBaseUrl, serviceRunning }: SecurityVie
                     </Badge>
                   ))}
                 </div>
-                <p className="text-xs text-muted-foreground">{t("security.sandboxRiskLevelsDesc", "选中的风险等级命令将在沙箱中执行")}</p>
+                <p className="text-xs text-muted-foreground">{t("security.sandboxRiskLevelsDesc")}</p>
               </div>
               {/* Exempt commands */}
               <TagEditor
-                label={t("security.exemptCommands", "豁免命令")}
+                label={t("security.exemptCommands")}
                 items={sandbox.exempt_commands}
                 onChange={(v) => setSandbox((p) => ({ ...p, exempt_commands: v }))}
                 placeholder="e.g. npm test"
@@ -1129,7 +1114,7 @@ export default function SecurityView({ apiBaseUrl, serviceRunning }: SecurityVie
         <Card className="p-0 gap-0 border-border/50 shadow-sm overflow-hidden">
           <CardHeader className="flex flex-row items-center justify-between space-y-0 border-b border-border/50 px-4 py-2.5">
             <div className="space-y-1">
-              <CardTitle className="text-sm font-semibold">{t("security.audit", "审计日志")}</CardTitle>
+              <CardTitle className="text-sm font-semibold">{t("security.audit")}</CardTitle>
               <p className="text-xs text-muted-foreground">
                 {t("security.auditCount", { count: audit.length })}
               </p>
@@ -1177,9 +1162,9 @@ export default function SecurityView({ apiBaseUrl, serviceRunning }: SecurityVie
         <Card className="p-0 gap-0 border-border/50 shadow-sm">
           <CardHeader className="flex flex-row items-center justify-between space-y-0 border-b border-border/50 px-4 py-2.5">
             <div className="space-y-1">
-              <CardTitle className="text-sm font-semibold">{t("security.imOwner", "IM Owner")}</CardTitle>
+              <CardTitle className="text-sm font-semibold">{t("security.imOwner")}</CardTitle>
               <p className="text-xs text-muted-foreground">
-                {t("security.imOwnerDesc", "限定哪些 IM 用户能调用 CONTROL_PLANE 工具（如 switch_mode、delegate_to_agent 等）。未配置 = 单用户私聊默认（is_owner=true）。")}
+                {t("security.imOwnerDesc")}
               </p>
             </div>
             <Button variant="outline" size="sm" onClick={() => loadImOwnerAllowlist(true)} disabled={loadingImOwner} className="h-8">
@@ -1191,8 +1176,8 @@ export default function SecurityView({ apiBaseUrl, serviceRunning }: SecurityVie
               <div className="flex flex-col items-center py-8 text-center text-sm text-muted-foreground">
                 <ShieldCheck size={32} className="mb-3 opacity-20" />
                 {loadingImOwner
-                  ? t("common.loading", "加载中...")
-                  : t("security.imOwnerNoChannel", "未发现已启用的 IM 渠道")}
+                  ? t("common.loading")
+                  : t("security.imOwnerNoChannel")}
               </div>
             ) : (
               imOwnerEntries.map((entry) => (
@@ -1213,30 +1198,30 @@ export default function SecurityView({ apiBaseUrl, serviceRunning }: SecurityVie
         <Card className="p-0 gap-0 border-border/50 shadow-sm">
           <CardHeader className="flex flex-row items-center justify-between space-y-0 border-b border-border/50 px-4 py-2.5">
             <div className="space-y-1">
-              <CardTitle className="text-sm font-semibold">{t("security.dryRun", "策略预览")}</CardTitle>
+              <CardTitle className="text-sm font-semibold">{t("security.dryRun")}</CardTitle>
               <p className="text-xs text-muted-foreground">
-                {t("security.dryRunDesc", "用当前已保存的 policy_v2 配置对常见工具进行试运行，确认配置真实效果（不会执行任何工具）。")}
+                {t("security.dryRunDesc")}
               </p>
             </div>
             <Button variant="outline" size="sm" onClick={runDryRunPreview} disabled={loadingDryRun} className="h-8">
-              <RotateCw size={14} className={cn("mr-1.5", loadingDryRun && "animate-spin")} /> {t("security.dryRunRun", "重新运行")}
+              <RotateCw size={14} className={cn("mr-1.5", loadingDryRun && "animate-spin")} /> {t("security.dryRunRun")}
             </Button>
           </CardHeader>
           <CardContent className="p-0">
             {dryRunDecisions.length === 0 ? (
               <div className="flex flex-col items-center py-10 text-center text-sm text-muted-foreground">
                 <Shield size={32} className="mb-3 opacity-20" />
-                {loadingDryRun ? t("common.loading", "加载中...") : t("security.dryRunEmpty", "尚无预览结果")}
+                {loadingDryRun ? t("common.loading") : t("security.dryRunEmpty")}
               </div>
             ) : (
               <Table>
                 <TableHeader className="bg-muted/30">
                   <TableRow className="hover:bg-transparent">
-                    <TableHead className="text-xs h-10 px-5 font-medium">{t("security.dryRunTool", "工具")}</TableHead>
-                    <TableHead className="text-xs h-10 px-4 font-medium">{t("security.dryRunArgs", "参数")}</TableHead>
-                    <TableHead className="text-xs h-10 px-4 font-medium">{t("security.dryRunDecision", "决策")}</TableHead>
-                    <TableHead className="hidden md:table-cell text-xs h-10 px-4 font-medium">{t("security.dryRunClass", "分类")}</TableHead>
-                    <TableHead className="hidden lg:table-cell text-xs h-10 px-4 font-medium">{t("security.dryRunReason", "原因")}</TableHead>
+                    <TableHead className="text-xs h-10 px-5 font-medium">{t("security.dryRunTool")}</TableHead>
+                    <TableHead className="text-xs h-10 px-4 font-medium">{t("security.dryRunArgs")}</TableHead>
+                    <TableHead className="text-xs h-10 px-4 font-medium">{t("security.dryRunDecision")}</TableHead>
+                    <TableHead className="hidden md:table-cell text-xs h-10 px-4 font-medium">{t("security.dryRunClass")}</TableHead>
+                    <TableHead className="hidden lg:table-cell text-xs h-10 px-4 font-medium">{t("security.dryRunReason")}</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -1252,7 +1237,7 @@ export default function SecurityView({ apiBaseUrl, serviceRunning }: SecurityVie
                         <DecisionBadge decision={d.decision} labelKey={d.decision_label_key} />
                         {d.safety_immune_match && (
                           <Badge variant="outline" className="ml-1.5 text-[10px] uppercase border-amber-500/40 text-amber-600">
-                            {t("security.flag.immune", "免疫")}
+                            {t("security.flag.immune")}
                           </Badge>
                         )}
                       </TableCell>
@@ -1284,7 +1269,7 @@ export default function SecurityView({ apiBaseUrl, serviceRunning }: SecurityVie
         <Card className="p-0 gap-0 border-border/50 shadow-sm overflow-hidden">
           <CardHeader className="flex flex-row items-center justify-between space-y-0 border-b border-border/50 px-4 py-2.5">
             <div className="space-y-1">
-              <CardTitle className="text-sm font-semibold">{t("security.checkpoints", "安全检查点")}</CardTitle>
+              <CardTitle className="text-sm font-semibold">{t("security.checkpoints")}</CardTitle>
               <p className="text-xs text-muted-foreground">
                 {t("security.checkpointCount", { count: checkpoints.length })}
               </p>
@@ -1355,28 +1340,22 @@ export default function SecurityView({ apiBaseUrl, serviceRunning }: SecurityVie
               <span className="grid size-8 place-items-center rounded-lg border border-red-500/20 bg-red-500/10 text-red-600">
                 <ShieldAlert size={16} />
               </span>
-              {t("security.offDialogTitle", "确认关闭安全方案")}
+              {t("security.offDialogTitle")}
             </AlertDialogTitle>
             <AlertDialogDescription asChild>
               <div className="space-y-3 text-sm text-muted-foreground">
                 <p>
-                  {t(
-                    "security.offDialogDesc",
-                    "关闭后将停用确认、路径名单、敏感路径保护、沙箱与命令拦截。仅建议在临时排障或完全可信环境中使用。",
-                  )}
+                  {t("security.offDialogDesc")}
                 </p>
                 <div className="rounded-md border border-red-500/20 bg-red-500/5 px-3 py-2 text-xs leading-5 text-red-700 dark:text-red-300">
-                  {t(
-                    "security.offDialogWarning",
-                    "请输入下方确认短语后才能关闭安全方案；这会写入审计日志。",
-                  )}
+                  {t("security.offDialogWarning")}
                 </div>
                 <div className="space-y-1.5">
                   <Label className="text-xs font-medium text-foreground">
-                    {t("security.offAckLabel", "确认短语")}
+                    {t("security.offAckLabel")}
                   </Label>
                   <code className="block rounded-md border bg-muted/40 px-2.5 py-2 text-xs text-foreground">
-                    {OFF_ACK_PHRASE}
+                    {offAckPhraseExpected}
                   </code>
                   <Input
                     autoFocus
@@ -1391,7 +1370,7 @@ export default function SecurityView({ apiBaseUrl, serviceRunning }: SecurityVie
                         void confirmOffMode();
                       }
                     }}
-                    placeholder={OFF_ACK_PHRASE}
+                    placeholder={offAckPhraseExpected}
                     className="h-9"
                   />
                   {offAckError && (
@@ -1403,16 +1382,16 @@ export default function SecurityView({ apiBaseUrl, serviceRunning }: SecurityVie
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel disabled={saving}>
-              {t("common.cancel", "取消")}
+              {t("common.cancel")}
             </AlertDialogCancel>
             <Button
               type="button"
               variant="destructive"
-              disabled={saving || offAckPhrase.trim() !== OFF_ACK_PHRASE}
+              disabled={saving || offAckPhrase.trim() !== offAckPhraseExpected}
               onClick={() => void confirmOffMode()}
             >
               {saving && <Loader2 className="mr-2 size-4 animate-spin" />}
-              {t("security.offDialogConfirm", "确认关闭")}
+              {t("security.offDialogConfirm")}
             </Button>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -1431,28 +1410,22 @@ export default function SecurityView({ apiBaseUrl, serviceRunning }: SecurityVie
               <span className="grid size-8 place-items-center rounded-lg border border-amber-500/20 bg-amber-500/10 text-amber-600">
                 <ShieldAlert size={16} />
               </span>
-              {t("security.customSwitchTitle", "切换到自定义方案")}
+              {t("security.customSwitchTitle")}
             </AlertDialogTitle>
             <AlertDialogDescription asChild>
               <div className="space-y-2 text-sm text-muted-foreground">
                 <p>
-                  {t(
-                    "security.customSwitchDesc",
-                    "修改底层安全机制（路径白名单 / 命令拦截 / 沙箱 / 确认策略等）后，当前方案会从预设切换为「自定义方案」。",
-                  )}
+                  {t("security.customSwitchDesc")}
                 </p>
                 <p>
-                  {t(
-                    "security.customSwitchHint",
-                    "之后可以随时回到预设方案，已有的自定义改动会被覆盖。",
-                  )}
+                  {t("security.customSwitchHint")}
                 </p>
               </div>
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel disabled={saving}>
-              {t("common.cancel", "取消")}
+              {t("common.cancel")}
             </AlertDialogCancel>
             <Button
               type="button"
@@ -1460,7 +1433,7 @@ export default function SecurityView({ apiBaseUrl, serviceRunning }: SecurityVie
               onClick={() => void confirmCustomSwitch()}
             >
               {saving && <Loader2 className="mr-2 size-4 animate-spin" />}
-              {t("security.customSwitchConfirm", "继续保存")}
+              {t("security.customSwitchConfirm")}
             </Button>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -1479,28 +1452,25 @@ export default function SecurityView({ apiBaseUrl, serviceRunning }: SecurityVie
               <span className="grid size-8 place-items-center rounded-lg border border-red-500/20 bg-red-500/10 text-red-600">
                 <ShieldAlert size={16} />
               </span>
-              {t("security.rewindDialogTitle", "确认回滚到快照")}
+              {t("security.rewindDialogTitle")}
             </AlertDialogTitle>
             <AlertDialogDescription asChild>
               <div className="space-y-3 text-sm text-muted-foreground">
                 <p>
-                  {t(
-                    "security.rewindDialogDesc",
-                    "回滚后将用快照里的版本覆盖当前文件，本次回滚之后写入的改动会丢失。操作会写入审计日志。",
-                  )}
+                  {t("security.rewindDialogDesc")}
                 </p>
                 {rewindDialog && (
                   <div className="space-y-1 rounded-md border bg-muted/30 px-3 py-2 text-xs">
                     <div className="flex justify-between gap-3">
-                      <span className="text-muted-foreground">{t("security.checkpointTool", "工具")}</span>
+                      <span className="text-muted-foreground">{t("security.checkpointTool")}</span>
                       <span className="font-medium text-foreground">{rewindDialog.tool_name}</span>
                     </div>
                     <div className="flex justify-between gap-3">
-                      <span className="text-muted-foreground">{t("security.checkpointFiles", "文件")}</span>
+                      <span className="text-muted-foreground">{t("security.checkpointFiles")}</span>
                       <span className="font-mono text-foreground">{rewindDialog.file_count}</span>
                     </div>
                     <div className="flex justify-between gap-3">
-                      <span className="text-muted-foreground">{t("security.checkpointTime", "时间")}</span>
+                      <span className="text-muted-foreground">{t("security.checkpointTime")}</span>
                       <span className="font-mono text-foreground">
                         {new Date(rewindDialog.timestamp * 1000).toLocaleString()}
                       </span>
@@ -1518,7 +1488,7 @@ export default function SecurityView({ apiBaseUrl, serviceRunning }: SecurityVie
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel disabled={rewindingId !== null}>
-              {t("common.cancel", "取消")}
+              {t("common.cancel")}
             </AlertDialogCancel>
             <Button
               type="button"
@@ -1527,7 +1497,7 @@ export default function SecurityView({ apiBaseUrl, serviceRunning }: SecurityVie
               onClick={() => void confirmRewind()}
             >
               {rewindingId !== null && <Loader2 className="mr-2 size-4 animate-spin" />}
-              {t("security.rewindDialogConfirm", "确认回滚")}
+              {t("security.rewindDialogConfirm")}
             </Button>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -1580,7 +1550,7 @@ function ImOwnerChannelRow({
             </Badge>
           ) : (
             <Badge variant="outline" className="text-xs text-muted-foreground border-dashed">
-              {t("security.imOwnerUnconfigured", "未配置（is_owner=true）")}
+              {t("security.imOwnerUnconfigured")}
             </Badge>
           )}
         </div>
@@ -1594,8 +1564,8 @@ function ImOwnerChannelRow({
           >
             <IconTrash size={12} className="mr-1" />
             {pendingClear
-              ? t("security.imOwnerClearConfirm", "再次点击清除")
-              : t("security.imOwnerClear", "清除")}
+              ? t("security.imOwnerClearConfirm")
+              : t("security.imOwnerClear")}
           </Button>
           <Button
             variant="default"
@@ -1605,25 +1575,19 @@ function ImOwnerChannelRow({
             className="h-7 text-xs"
           >
             {saving && <Loader2 className="mr-1 size-3 animate-spin" />}
-            <Save size={12} className="mr-1" /> {t("common.save", "保存")}
+            <Save size={12} className="mr-1" /> {t("common.save")}
           </Button>
         </div>
       </div>
       <textarea
         value={draft}
         onChange={(e) => setDraft(e.target.value)}
-        placeholder={t(
-          "security.imOwnerPlaceholder",
-          "每行一个 user_id（也支持逗号/分号/空格分隔）。空 = 显式锁定（CONTROL_PLANE 全员被拒）",
-        )}
+        placeholder={t("security.imOwnerPlaceholder")}
         rows={Math.max(2, draft.split("\n").length)}
         className="w-full resize-none rounded-md border border-border/50 bg-background px-3 py-2 font-mono text-xs focus:border-primary focus:outline-none"
       />
       <p className="text-[11px] text-muted-foreground">
-        {t(
-          "security.imOwnerHint",
-          "三态语义：未配置 → 单用户默认；空列表 → 显式锁定；非空 → 仅列表内 user_id 可调控制面工具。",
-        )}
+        {t("security.imOwnerHint")}
       </p>
     </div>
   );
@@ -1633,11 +1597,11 @@ function DecisionBadge({ decision, labelKey }: { decision: string; labelKey?: st
   const { t } = useTranslation();
   const variant = decision === "deny" ? "destructive" : decision === "confirm" ? "outline" : "secondary";
   const fallback = decision === "deny"
-    ? t("security.decision.deny", "拒绝")
+    ? t("security.decision.deny")
     : decision === "confirm"
-      ? t("security.decision.confirm", "需确认")
+      ? t("security.decision.confirm")
       : decision === "allow"
-        ? t("security.decision.allow", "允许")
+        ? t("security.decision.allow")
         : decision;
   const label = labelKey ? t(labelKey, fallback) : fallback;
   return (
@@ -1697,7 +1661,7 @@ function ZonePanel({ zone, paths, onChange }: {
             />
             <Button variant="secondary" size="sm" onClick={add} className="h-8 px-3">
               <IconPlus size={14} className="mr-1.5" />
-              {t("common.add", "添加")}
+              {t("common.add")}
             </Button>
           </div>
         </CardContent>
@@ -1746,7 +1710,7 @@ function TagEditor({ label, items, onChange, placeholder }: {
         />
         <Button variant="secondary" size="sm" onClick={add} className="h-8 px-3">
           <IconPlus size={14} className="mr-1.5" />
-          {t("common.add", "添加")}
+          {t("common.add")}
         </Button>
       </div>
     </div>

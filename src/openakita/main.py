@@ -98,7 +98,7 @@ def _init_tracing() -> None:
         tracer.add_exporter(FileExporter(settings.tracing_export_dir))
         if settings.tracing_console_export and not _is_mcp_subprocess:
             tracer.add_exporter(ConsoleExporter())
-        logger.info("[Tracing] 追踪系统已启用")
+        logger.info("[Tracing] Tracing system enabled")
     set_tracer(tracer)
 
 

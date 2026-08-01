@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
+import type { TFunction } from "i18next";
 import { AlertTriangle, CheckCircle2, RefreshCw, XCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { safeFetch } from "../providers";
@@ -22,29 +23,29 @@ export interface SkillConflictsPanelProps {
   httpApiBase: () => string;
 }
 
-function describeSource(src?: ConflictSource): string {
+function describeSource(t: TFunction, src?: ConflictSource): string {
   if (!src) return "—";
   const parts: string[] = [];
-  if (src.origin) parts.push(describeOrigin(src.origin));
+  if (src.origin) parts.push(describeOrigin(t, src.origin));
   if (src.plugin_source) parts.push(src.plugin_source);
   if (src.path) parts.push(src.path);
   return parts.join(" · ") || "—";
 }
 
-function describeOrigin(origin?: string): string {
+function describeOrigin(t: TFunction, origin?: string): string {
   switch (origin) {
     case "remote":
-      return "远程安装";
+      return t("status.skillConflicts.origin.remote");
     case "project":
-      return "本地项目";
+      return t("status.skillConflicts.origin.project");
     case "system":
-      return "系统内置";
+      return t("status.skillConflicts.origin.system");
     case "marketplace":
-      return "技能市场";
+      return t("status.skillConflicts.origin.marketplace");
     case "plugin":
-      return "工作台应用提供";
+      return t("status.skillConflicts.origin.plugin");
     default:
-      return origin || "未知来源";
+      return origin || t("status.skillConflicts.origin.unknown");
   }
 }
 
@@ -65,13 +66,15 @@ export function SkillConflictsPanel({ httpApiBase }: SkillConflictsPanelProps) {
         const next = Array.isArray(body.conflicts) ? body.conflicts : [];
         setConflicts(next);
         if (showResult) {
-          setStatusText(next.length > 0 ? "已刷新，仍有同名来源需要确认。" : "已刷新，当前没有同名来源提示。");
+          setStatusText(t(next.length > 0
+            ? "status.skillConflicts.refreshedNonEmpty"
+            : "status.skillConflicts.refreshedEmpty"));
         }
       } else if (showResult) {
-        setStatusText("刷新失败，请稍后再试。");
+        setStatusText(t("status.skillConflicts.refreshFailed"));
       }
     } catch {
-      if (showResult) setStatusText("刷新失败，请检查后端服务是否在线。");
+      if (showResult) setStatusText(t("status.skillConflicts.refreshOffline"));
     } finally {
       setLoading(false);
     }
@@ -86,12 +89,12 @@ export function SkillConflictsPanel({ httpApiBase }: SkillConflictsPanelProps) {
       if (resp.ok) {
         setConflicts([]);
         setExpanded(false);
-        setStatusText("已清除提示。技能文件不会被删除，当前生效技能保持不变。");
+        setStatusText(t("status.skillConflicts.cleared"));
       } else {
-        setStatusText("清除失败，请稍后再试。");
+        setStatusText(t("status.skillConflicts.clearFailed"));
       }
     } catch {
-      setStatusText("清除失败，请检查后端服务是否在线。");
+      setStatusText(t("status.skillConflicts.clearOffline"));
     } finally {
       setClearing(false);
     }
@@ -123,19 +126,16 @@ export function SkillConflictsPanel({ httpApiBase }: SkillConflictsPanelProps) {
       </div>
       <div className="statusPanelInfo" style={{ minWidth: 0 }}>
         <div className="statusPanelTitle">
-          {t("status.skillConflicts.title", { defaultValue: "同名技能来源提示" })}
+          {t("status.skillConflicts.title")}
         </div>
         <div className="statusPanelDesc">
           {total === 0 ? (
             <span style={{ opacity: 0.7 }}>
-              {t("status.skillConflicts.empty", {
-                defaultValue: "未发现同名技能来源",
-              })}
+              {t("status.skillConflicts.empty")}
             </span>
           ) : (
             <span style={{ color: "#c0392b" }}>
               {t("status.skillConflicts.nonEmpty", {
-                defaultValue: "发现 {{count}} 个技能名来自多个来源，OpenAkita 已自动只保留一个生效。",
                 count: total,
               })}
             </span>
@@ -157,15 +157,21 @@ export function SkillConflictsPanel({ httpApiBase }: SkillConflictsPanelProps) {
               }}
             >
               {conflicts.map((c, i) => {
-                const action = c.action === "overridden" ? "已自动使用较新的来源" : "已保留原来源";
+                const action = c.action === "overridden"
+                  ? t("status.skillConflicts.actionOverridden")
+                  : t("status.skillConflicts.actionRejected");
                 return (
                   <li key={i} style={{ marginBottom: 4 }}>
-                    <strong>{c.skill_id || c.name || "(unknown)"}</strong> · {action}
+                    <strong>{c.skill_id || c.name || t("status.skillConflicts.unknownSkill")}</strong> · {action}
                     <div style={{ opacity: 0.75 }}>
-                      当前生效：{describeSource(c.winner)}
+                      {t("status.skillConflicts.currentSource", {
+                        source: describeSource(t, c.winner),
+                      })}
                     </div>
                     <div style={{ opacity: 0.6 }}>
-                      已忽略的同名来源：{describeSource(c.shadowed)}
+                      {t("status.skillConflicts.shadowedSource", {
+                        source: describeSource(t, c.shadowed),
+                      })}
                     </div>
                   </li>
                 );
@@ -183,8 +189,8 @@ export function SkillConflictsPanel({ httpApiBase }: SkillConflictsPanelProps) {
           disabled={total === 0}
         >
           {expanded
-            ? t("status.skillConflicts.collapse", { defaultValue: "收起" })
-            : t("status.skillConflicts.expand", { defaultValue: "查看详情" })}
+            ? t("status.skillConflicts.collapse")
+            : t("status.skillConflicts.expand")}
         </Button>
         {total > 0 && (
           <Button
@@ -193,10 +199,10 @@ export function SkillConflictsPanel({ httpApiBase }: SkillConflictsPanelProps) {
             className="h-7 text-xs px-2.5"
             onClick={clearConflicts}
             disabled={clearing || loading}
-            title="只清除这条提示记录，不删除技能。"
+            title={t("status.skillConflicts.clearHint")}
           >
             {clearing ? <RefreshCw size={12} className="animate-spin" /> : <XCircle size={12} />}
-            清除提示
+            {clearing ? t("status.skillConflicts.clearing") : t("status.skillConflicts.clear")}
           </Button>
         )}
         <Button
@@ -207,7 +213,9 @@ export function SkillConflictsPanel({ httpApiBase }: SkillConflictsPanelProps) {
           disabled={loading || clearing}
         >
           {loading ? <RefreshCw size={12} className="animate-spin" /> : <CheckCircle2 size={12} />}
-          {loading ? "刷新中" : t("status.skillConflicts.refresh", { defaultValue: "刷新状态" })}
+          {loading
+            ? t("status.skillConflicts.refreshing")
+            : t("status.skillConflicts.refresh")}
         </Button>
       </div>
     </div>
