@@ -287,6 +287,7 @@ def test_list_python_deps_returns_all_known_packages(client) -> None:
     components = body["components"]
     by_id = {c["id"]: c for c in components}
     assert {"oss2", "mutagen", "edge_tts", "dashscope", "comfykit"} <= set(by_id)
+    assert by_id["comfykit"]["pip_spec"] == "comfykit>=0.1.12"
     sample = by_id["oss2"]
     for k in ("display_name", "description", "import_name", "pip_spec", "ok"):
         assert k in sample, f"missing {k} in {sample}"
