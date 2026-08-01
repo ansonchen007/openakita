@@ -19,7 +19,7 @@ invariants on ``ui/dist/index.html`` that we promised in Gate 5:
     8. Toast + modal (``modal-mask`` + ``showToast``)
 - ``character_identify_enabled`` is gated on diarization (red line:
   toggle disabled when diarization is off).
-- ``/healthz`` is rendered with all 4 fields.
+- ``/healthz`` readiness and browser install controls are rendered.
 - SSE event ``task_update`` is wired (red line #21).
 """
 
@@ -152,7 +152,7 @@ def test_char_identify_gated_by_diarization():
     assert "create.charIdentify.requireDiarization" in text
 
 
-def test_healthz_renders_all_four_fields():
+def test_healthz_renders_runtime_fields_and_browser_installer():
     text = _read()
     # FFmpeg health used to be a plain `ffmpeg_ok` HealthRow tag;
     # since the 系统组件 redesign it is surfaced by the FfmpegInstaller
@@ -166,9 +166,13 @@ def test_healthz_renders_all_four_fields():
     for f in (
         "playwright_ok",
         "playwright_browser_ready",
+        "system_chromium_ok",
         "dashscope_api_key_present",
     ):
         assert f in text, f"healthz field missing in UI: {f}"
+    assert '"/system/playwright-chromium/install"' in text
+    assert '"/system/playwright-chromium/status"' in text
+    assert "settings.system.health.installBrowser" in text
 
 
 def test_sse_event_wired():

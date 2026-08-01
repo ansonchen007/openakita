@@ -1081,12 +1081,18 @@ const I18N_DICT = {
     "settings.system.logEmpty": "暂无输出",
     "settings.system.healthTitle": "其他依赖",
     "settings.system.health.playwright": "Playwright 包",
-    "settings.system.health.playwrightBrowser": "Chromium 浏览器",
+    "settings.system.health.playwrightBrowser": "Playwright 专用 Chromium",
+    "settings.system.health.systemChromium": "系统 Chromium / Chrome",
     "settings.system.health.apiKey": "DashScope API Key",
     "settings.system.health.refresh": "重新检测",
     "settings.system.health.ok": "可用",
     "settings.system.health.missing": "缺失",
-    "settings.system.health.intro": "Playwright + Chromium 用于 HTML 字幕渲染(高级模式);DashScope API Key 用于 ASR 与翻译。下面 3 项任意缺失,对应功能会自动降级或拒绝执行。",
+    "settings.system.health.installBrowser": "安装",
+    "settings.system.health.browserInstalling": "安装中",
+    "settings.system.health.browserInstalled": "Playwright Chromium 安装成功",
+    "settings.system.health.browserInstallFailed": "Playwright Chromium 安装失败:{msg}",
+    "settings.system.health.playwrightRequired": "需要先安装 Playwright 包",
+    "settings.system.health.intro": "HTML 字幕渲染使用 Playwright 专用 Chromium;系统 Chromium 单独显示用于环境诊断。DashScope API Key 用于 ASR 与翻译。",
     "settings.storage.title": "存储统计",
     "settings.storage.totalFiles": "文件总数",
     "settings.storage.totalSize": "总大小",
@@ -1414,12 +1420,18 @@ const I18N_DICT = {
     "settings.system.logEmpty": "No output yet",
     "settings.system.healthTitle": "Other dependencies",
     "settings.system.health.playwright": "Playwright package",
-    "settings.system.health.playwrightBrowser": "Chromium browser",
+    "settings.system.health.playwrightBrowser": "Playwright Chromium",
+    "settings.system.health.systemChromium": "System Chromium / Chrome",
     "settings.system.health.apiKey": "DashScope API Key",
     "settings.system.health.refresh": "Re-check",
     "settings.system.health.ok": "OK",
     "settings.system.health.missing": "Missing",
-    "settings.system.health.intro": "Playwright + Chromium are used by the HTML subtitle renderer (advanced mode); the DashScope API key drives ASR and translation. Any of these missing will gracefully degrade or refuse the matching feature.",
+    "settings.system.health.installBrowser": "Install",
+    "settings.system.health.browserInstalling": "Installing",
+    "settings.system.health.browserInstalled": "Playwright Chromium installed",
+    "settings.system.health.browserInstallFailed": "Playwright Chromium install failed: {msg}",
+    "settings.system.health.playwrightRequired": "Install the Playwright package first",
+    "settings.system.health.intro": "The HTML subtitle renderer uses Playwright Chromium. System Chromium is reported separately for environment diagnostics. The DashScope API key drives ASR and translation.",
     "settings.storage.title": "Storage",
     "settings.storage.totalFiles": "Files",
     "settings.storage.totalSize": "Total size",
@@ -3647,6 +3659,125 @@ function FfmpegInstaller({ onChanged }) {
   );
 }
 
+function BrowserRuntimeInstaller({ playwrightReady, managedFallback, systemFallback, onChanged }) {
+  const t = useT();
+  const [managed, setManaged] = useState(null);
+  const [systemBrowser, setSystemBrowser] = useState(null);
+  const [status, setStatus] = useState(null);
+  const notifiedRef = useRef(false);
+
+  const refresh = useCallback(async () => {
+    try {
+      const r = await pluginApi("GET", "/system/components");
+      const items = (r.body && r.body.items) || [];
+      const managedItem = items.find(x => x.id === "playwright-chromium") || null;
+      setManaged(managedItem);
+      setSystemBrowser(items.find(x => x.id === "system-chromium") || null);
+      if (managedItem && managedItem.busy) {
+        setStatus((managedItem.last_install) || { busy: true, log_tail: [] });
+      }
+    } catch (e) { /* The healthz fallback remains visible after a transient request failure. */ }
+  }, []);
+
+  useEffect(() => { refresh(); }, [refresh]);
+
+  const busy = !!((status && status.busy) || (managed && managed.busy));
+
+  useEffect(() => {
+    if (!busy) return;
+    let disposed = false;
+    const tick = async () => {
+      try {
+        const r = await pluginApi("GET", "/system/playwright-chromium/status");
+        const next = r.body || {};
+        if (disposed) return;
+        setStatus(next);
+        if (!next.busy) {
+          await refresh();
+          if (onChanged) onChanged();
+          if (!notifiedRef.current) {
+            notifiedRef.current = true;
+            if (next.found) showToast(_tr("settings.system.health.browserInstalled"));
+            else showToast(_tr("settings.system.health.browserInstallFailed", { msg: next.error || "?" }), "error");
+          }
+        }
+      } catch (e) { /* Retry on the next poll. */ }
+    };
+    tick();
+    const timer = setInterval(tick, 3000);
+    return () => { disposed = true; clearInterval(timer); };
+  }, [busy, refresh, onChanged]);
+
+  const install = async () => {
+    if (!playwrightReady || busy) return;
+    notifiedRef.current = false;
+    setStatus({ busy: true, log_tail: [], elapsed_sec: 0 });
+    try {
+      const r = await pluginApi(
+        "POST",
+        "/system/playwright-chromium/install",
+        { method_index: 0 },
+      );
+      const body = r.body || {};
+      if (body.ok === false) {
+        setStatus({ busy: false, error: body.error || "unknown", log_tail: [] });
+        showToast(_tr("settings.system.health.browserInstallFailed", { msg: body.error || "unknown" }), "error");
+      }
+    } catch (e) {
+      setStatus({ busy: false, error: e.message || "network error", log_tail: [] });
+      showToast(_tr("settings.system.health.browserInstallFailed", { msg: e.message || "network error" }), "error");
+    }
+  };
+
+  const managedOk = managed ? !!managed.found : !!managedFallback;
+  const systemOk = systemBrowser ? !!systemBrowser.found : !!systemFallback;
+  const detail = snap => snap
+    ? [snap.version, snap.location].filter(Boolean).join(" · ")
+    : "";
+  const live = status || (managed && managed.last_install) || null;
+  const logLines = (live && live.log_tail) || [];
+  const installAction = !managedOk ? (
+    <button className="btn btn-sm btn-primary"
+            onClick={install}
+            disabled={busy || !playwrightReady}
+            title={!playwrightReady ? t("settings.system.health.playwrightRequired") : undefined}>
+      {busy
+        ? <><span className="sysdep-spinner" /> {t("settings.system.health.browserInstalling")}</>
+        : <><OAIcon name="package" /> {t("settings.system.health.installBrowser")}</>}
+    </button>
+  ) : null;
+
+  return (
+    <>
+      <HealthRow
+        label={t("settings.system.health.playwrightBrowser")}
+        ok={managedOk}
+        pending={busy}
+        detail={detail(managed)}
+        action={installAction}
+        t={t}
+      />
+      <HealthRow
+        label={t("settings.system.health.systemChromium")}
+        ok={systemOk}
+        detail={detail(systemBrowser)}
+        t={t}
+      />
+      {(busy || logLines.length > 0) && (
+        <div className="sysdep-log" style={{gridColumn: "1 / -1", marginTop: 0}}>
+          <div className="sysdep-log__head">
+            <span>{t("settings.system.logTitle")}</span>
+            {busy && live && live.elapsed_sec != null && <span>{Math.round(live.elapsed_sec)}s</span>}
+          </div>
+          {logLines.length
+            ? <pre className="sysdep-log__body">{logLines.join("\n")}</pre>
+            : <pre className="sysdep-log__body sysdep-log__body--empty">{t("settings.system.logEmpty")}</pre>}
+        </div>
+      )}
+    </>
+  );
+}
+
 /* =================================================================
  * SettingsTab — DashScope key, system components (FFmpeg + health),
  * default runtime parameters, storage stats. The old standalone
@@ -3791,10 +3922,15 @@ function SettingsTab({ health, onApiKeyChange }) {
           <div className="text-xs text-dim" style={{marginBottom: 8, lineHeight: 1.6}}>
             {t("settings.system.health.intro")}
           </div>
-          <div className="grid-2" style={{gap: 8}}>
+          <div className="grid-2" style={{gap: 8, gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 280px), 1fr))"}}>
             <HealthRow label={t("settings.system.health.playwright")} ok={healthLocal && healthLocal.playwright_ok} t={t} />
-            <HealthRow label={t("settings.system.health.playwrightBrowser")} ok={healthLocal && healthLocal.playwright_browser_ready} t={t} />
             <HealthRow label={t("settings.system.health.apiKey")} ok={healthLocal && healthLocal.dashscope_api_key_present} t={t} />
+            <BrowserRuntimeInstaller
+              playwrightReady={!!(healthLocal && healthLocal.playwright_ok)}
+              managedFallback={!!(healthLocal && healthLocal.playwright_browser_ready)}
+              systemFallback={!!(healthLocal && healthLocal.system_chromium_ok)}
+              onChanged={refresh}
+            />
           </div>
         </div>
       </div>
@@ -3848,13 +3984,21 @@ function SettingsTab({ health, onApiKeyChange }) {
   );
 }
 
-function HealthRow({ label, ok, t }) {
+function HealthRow({ label, ok, pending=false, detail="", action=null, t }) {
   return (
-    <div className="flex items-center justify-between" style={{padding: "6px 10px", border: "1px solid var(--border)", borderRadius: 6}}>
-      <span className="text-sm">{label}</span>
-      <span className={"tag " + (ok ? "tag-green" : "tag-red")}>
-        {ok ? t("settings.system.health.ok") : t("settings.system.health.missing")}
-      </span>
+    <div className="flex items-center justify-between" style={{padding: "6px 10px", minHeight: 42, gap: 8, border: "1px solid var(--border)", borderRadius: 6}}>
+      <div style={{minWidth: 0}}>
+        <div className="text-sm">{label}</div>
+        {detail && <div className="text-xs text-dim" style={{marginTop: 2, wordBreak: "break-all"}} title={detail}>{detail}</div>}
+      </div>
+      <div className="flex items-center" style={{gap: 6, flexShrink: 0}}>
+        <span className={"tag " + (pending ? "" : (ok ? "tag-green" : "tag-red"))}>
+          {pending
+            ? t("settings.system.health.browserInstalling")
+            : (ok ? t("settings.system.health.ok") : t("settings.system.health.missing"))}
+        </span>
+        {action}
+      </div>
     </div>
   );
 }
