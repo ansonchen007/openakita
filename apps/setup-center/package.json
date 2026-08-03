@@ -1,7 +1,7 @@
 {
   "name": "openakita-setup-center",
   "private": true,
-  "version": "1.27.33",
+  "version": "1.27.34",
   "license": "AGPL-3.0-only",
   "type": "module",
   "scripts": {
