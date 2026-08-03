@@ -724,17 +724,17 @@ class Session:
             self.state = SessionState.ACTIVE
 
     def reactivate(self) -> None:
-        """把空闲会话标回活跃，但**不**改动 ``last_active``。
+        """把空闲或旧版过期会话标回活跃，但**不**改动 ``last_active``。
 
         供 ``get_session`` 等查询路径使用：被访问的会话可以从 IDLE 恢复成
         ACTIVE，但"被访问"本身不算一次新的会话活动，不应改写它在会话列表
         里的时间与排序位置。
         """
-        if self.state == SessionState.IDLE:
+        if self.state in (SessionState.IDLE, SessionState.EXPIRED):
             self.state = SessionState.ACTIVE
 
     def is_expired(self) -> bool:
-        """仅在超长不活跃时标记过期（30 天冷归档）"""
+        """Return whether this loaded object is eligible for cold-memory eviction."""
         elapsed = (datetime.now() - self.last_active).total_seconds() / 60
         return elapsed > 60 * 24 * 30
 

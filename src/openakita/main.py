@@ -343,10 +343,12 @@ async def ensure_session_manager():
 
 
 def _setup_session_backfill(agent_or_master):
-    """从 SQLite 回填 session 中可能缺失的消息（崩溃恢复）。
+    """Bind lazy SQLite history recovery and per-turn crash persistence.
 
     PR-D3：同时绑定 ``set_turn_writer``，让 ``Session.add_message`` 能在
     用户/助手每条消息落地时同步写一份到 SQLite，进程崩溃也不丢历史。
+    完整历史由 ``SessionManager.get_session`` 在会话实际使用时按需回填，
+    避免启动阶段为了修复少数会话而加载全部历史。
     """
     _actual_agent = agent_or_master
     if _actual_agent and hasattr(_actual_agent, "memory_manager"):
@@ -389,9 +391,6 @@ def _setup_session_backfill(agent_or_master):
                 _session_manager.set_turn_writer(_write_turn)
             except Exception as exc:
                 logger.warning(f"[main] set_turn_writer failed: {exc}")
-            backfilled = _session_manager.backfill_sessions_from_store()
-            if backfilled:
-                logger.info(f"Session backfill: recovered {backfilled} turns from SQLite")
 
 
 def _web_password_already_set() -> bool:

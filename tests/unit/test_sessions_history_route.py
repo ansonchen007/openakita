@@ -1,3 +1,5 @@
+from datetime import datetime, timedelta
+
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -202,6 +204,101 @@ def test_session_list_returns_conversation_ui_state(tmp_path):
     assert body["sessions"][0]["orgMode"] is True
     assert body["sessions"][0]["orgId"] == "org_company"
     assert body["sessions"][0]["orgNodeId"] == "pm"
+
+
+def test_session_list_pages_catalog_without_hydrating_histories(tmp_path):
+    storage_path = tmp_path / "sessions"
+    manager = SessionManager(storage_path=storage_path)
+    for index in range(5):
+        session = manager.get_session("desktop", f"conv-{index}", "desktop_user")
+        session.add_message("user", f"catalog message {index}")
+    manager.persist()
+
+    reloaded = SessionManager(storage_path=storage_path)
+    app = FastAPI()
+    app.include_router(router)
+    app.state.session_manager = reloaded
+    client = TestClient(app)
+
+    first = client.get("/api/sessions", params={"limit": 2, "offset": 0}).json()
+    second = client.get("/api/sessions", params={"limit": 2, "offset": 2}).json()
+
+    assert first["ready"] is True
+    assert first["total"] == 5
+    assert first["has_more"] is True
+    assert first["next_offset"] == 2
+    assert len(first["sessions"]) == 2
+    assert second["next_offset"] == 4
+    assert len(second["sessions"]) == 2
+    assert {item["id"] for item in first["sessions"]}.isdisjoint(
+        {item["id"] for item in second["sessions"]}
+    )
+    assert reloaded._sessions == {}
+
+
+def test_session_list_includes_cold_catalog_entries_without_hydrating(tmp_path):
+    storage_path = tmp_path / "sessions"
+    manager = SessionManager(storage_path=storage_path)
+    session = manager.get_session("desktop", "cold", "desktop_user")
+    session.add_message("user", "old history")
+    session.last_active = datetime.now() - timedelta(days=90)
+    manager.persist()
+
+    reloaded = SessionManager(storage_path=storage_path)
+    app = FastAPI()
+    app.include_router(router)
+    app.state.session_manager = reloaded
+
+    body = TestClient(app).get("/api/sessions").json()
+
+    assert body["total"] == 1
+    assert body["sessions"][0]["id"] == "cold"
+    assert reloaded._sessions == {}
+
+
+def test_session_list_pages_put_old_pinned_sessions_first(tmp_path):
+    storage_path = tmp_path / "sessions"
+    manager = SessionManager(storage_path=storage_path)
+    old_pinned = manager.get_session("desktop", "old-pinned", "desktop_user")
+    old_pinned.add_message("user", "old but pinned")
+    old_pinned.context.messages[-1]["timestamp"] = "2020-01-01T00:00:00"
+    old_pinned.set_metadata("pinned", True)
+    recent = manager.get_session("desktop", "recent", "desktop_user")
+    recent.add_message("user", "recent")
+    recent.context.messages[-1]["timestamp"] = "2026-01-01T00:00:00"
+    manager.persist()
+
+    reloaded = SessionManager(storage_path=storage_path)
+    app = FastAPI()
+    app.include_router(router)
+    app.state.session_manager = reloaded
+
+    body = TestClient(app).get("/api/sessions", params={"limit": 1}).json()
+
+    assert body["sessions"][0]["id"] == "old-pinned"
+    assert body["sessions"][0]["pinned"] is True
+    assert reloaded._sessions == {}
+
+
+def test_session_list_searches_deferred_catalog_summaries(tmp_path):
+    storage_path = tmp_path / "sessions"
+    manager = SessionManager(storage_path=storage_path)
+    first = manager.get_session("desktop", "matching", "desktop_user")
+    first.add_message("user", "unique deferred phrase")
+    second = manager.get_session("desktop", "other", "desktop_user")
+    second.add_message("user", "unrelated")
+    manager.persist()
+
+    reloaded = SessionManager(storage_path=storage_path)
+    app = FastAPI()
+    app.include_router(router)
+    app.state.session_manager = reloaded
+
+    body = TestClient(app).get("/api/sessions", params={"q": "deferred phrase"}).json()
+
+    assert body["total"] == 1
+    assert [item["id"] for item in body["sessions"]] == ["matching"]
+    assert reloaded._sessions == {}
 
 
 def test_update_session_ui_state_persists_conversation_selection(tmp_path):

@@ -3,7 +3,7 @@
 import json
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import pytest
 
@@ -182,29 +182,34 @@ class TestAgentProfileScopedHistory:
 
 
 class TestSessionPersistence:
-    def test_save_sessions_uses_strict_atomic_json_write(self, tmp_path, monkeypatch):
+    def test_save_sessions_uses_strict_atomic_writes(self, tmp_path, monkeypatch):
+        from openakita.sessions import catalog as catalog_module
+        from openakita.utils.atomic_io import safe_write as real_safe_write
+
         manager = SessionManager(storage_path=tmp_path / "sessions")
         session = manager.get_session("cli", "chat-1", "user-1")
         session.add_message("user", "hello")
         calls = {}
 
-        def spy(path, data, **kwargs):
+        def spy(path, content, **kwargs):
             calls["path"] = path
-            calls["data"] = data
+            calls["content"] = content
             calls["kwargs"] = kwargs
+            real_safe_write(path, content, **kwargs)
 
-        monkeypatch.setattr("openakita.sessions.manager.atomic_json_write", spy)
+        monkeypatch.setattr(catalog_module, "safe_write", spy)
 
         assert manager._save_sessions() is True
 
         assert calls["path"] == tmp_path / "sessions" / "sessions.json"
-        assert calls["kwargs"]["indent"] is None
         assert calls["kwargs"]["fsync"] is True
         assert calls["kwargs"]["allow_fallback"] is False
-        assert calls["data"][0]["context"]["messages"][0]["content"] == "hello"
+        assert json.loads(calls["content"])[0]["context"]["messages"][0]["content"] == "hello"
+        assert (tmp_path / "sessions" / "sessions.index.json").exists()
 
     def test_save_sessions_serializes_concurrent_writes(self, tmp_path, monkeypatch):
-        from openakita.utils.atomic_io import atomic_json_write as real_atomic_json_write
+        from openakita.sessions import catalog as catalog_module
+        from openakita.utils.atomic_io import safe_write as real_safe_write
 
         manager = SessionManager(storage_path=tmp_path / "sessions")
         session = manager.get_session("cli", "chat-1", "user-1")
@@ -216,14 +221,14 @@ class TestSessionPersistence:
         active_writes = 0
         max_active_writes = 0
 
-        def spy(path, data, **kwargs):
+        def spy(path, content, **kwargs):
             nonlocal active_writes, max_active_writes
             with counter_lock:
                 active_writes += 1
                 max_active_writes = max(max_active_writes, active_writes)
             try:
                 time.sleep(0.001)
-                real_atomic_json_write(path, data, **kwargs)
+                real_safe_write(path, content, **kwargs)
             finally:
                 with counter_lock:
                     active_writes -= 1
@@ -234,9 +239,7 @@ class TestSessionPersistence:
                 if not manager._save_sessions():
                     failures.append((worker_id, i))
 
-        from openakita.sessions import manager as manager_module
-
-        monkeypatch.setattr(manager_module, "atomic_json_write", spy)
+        monkeypatch.setattr(catalog_module, "safe_write", spy)
         threads = [threading.Thread(target=worker, args=(i,)) for i in range(8)]
         for thread in threads:
             thread.start()
@@ -260,6 +263,185 @@ class TestSessionPersistence:
         manager.persist()
 
         assert manager._dirty is True
+
+    def test_index_write_failure_keeps_deferred_offsets_aligned_for_retry(
+        self, tmp_path, monkeypatch
+    ):
+        from openakita.sessions import catalog as catalog_module
+        from openakita.utils.atomic_io import atomic_json_write as real_atomic_json_write
+
+        storage_path = tmp_path / "sessions"
+        manager = SessionManager(storage_path=storage_path)
+        first = manager.get_session("desktop", "first", "desktop_user")
+        first.add_message("user", "short")
+        second = manager.get_session("desktop", "second", "desktop_user")
+        second.add_message("user", "second history")
+        assert manager._save_sessions() is True
+
+        reloaded = SessionManager(storage_path=storage_path)
+        restored_first = reloaded.get_session(
+            "desktop", "first", "desktop_user", create_if_missing=False
+        )
+        assert restored_first is not None
+        restored_first.add_message("assistant", "a much longer response that moves later offsets")
+        old_second_offset = reloaded._session_catalog["desktop:second:desktop_user"].offset
+
+        def fail_index_write(*_args, **_kwargs):
+            raise OSError("index unavailable")
+
+        monkeypatch.setattr(catalog_module, "atomic_json_write", fail_index_write)
+
+        assert reloaded._save_sessions() is False
+        new_second_offset = reloaded._session_catalog["desktop:second:desktop_user"].offset
+        assert new_second_offset > old_second_offset
+
+        monkeypatch.setattr(catalog_module, "atomic_json_write", real_atomic_json_write)
+        assert reloaded._save_sessions() is True
+
+        retried = SessionManager(storage_path=storage_path)
+        restored_second = retried.get_session(
+            "desktop", "second", "desktop_user", create_if_missing=False
+        )
+        assert restored_second is not None
+        assert restored_second.context.messages[0]["content"] == "second history"
+
+    def test_restart_defers_full_session_hydration_until_lookup(self, tmp_path, monkeypatch):
+        storage_path = tmp_path / "sessions"
+        manager = SessionManager(storage_path=storage_path)
+        first = manager.get_session("desktop", "first", "desktop_user")
+        first.add_message("user", "first history")
+        second = manager.get_session("desktop", "second", "desktop_user")
+        second.add_message("user", "second history")
+        assert manager._save_sessions() is True
+
+        original_from_dict = Session.from_dict
+        hydration_calls = 0
+
+        def recording_from_dict(data):
+            nonlocal hydration_calls
+            hydration_calls += 1
+            return original_from_dict(data)
+
+        monkeypatch.setattr(Session, "from_dict", recording_from_dict)
+        reloaded = SessionManager(storage_path=storage_path)
+
+        assert reloaded._sessions == {}
+        assert hydration_calls == 0
+        assert {item["chat_id"] for item in reloaded.list_session_summaries()} == {
+            "first",
+            "second",
+        }
+
+        restored = reloaded.get_session("desktop", "first", "desktop_user", create_if_missing=False)
+
+        assert restored is not None
+        assert hydration_calls == 1
+        assert restored.context.messages[0]["content"] == "first history"
+        assert list(reloaded._sessions) == ["desktop:first:desktop_user"]
+
+    def test_get_session_by_id_caches_a_deferred_session(self, tmp_path):
+        storage_path = tmp_path / "sessions"
+        manager = SessionManager(storage_path=storage_path)
+        session = manager.get_session("desktop", "first", "desktop_user")
+        session.add_message("user", "first history")
+        session_id = session.id
+        assert manager._save_sessions() is True
+
+        reloaded = SessionManager(storage_path=storage_path)
+        restored = reloaded.get_session_by_id(session_id)
+
+        assert restored is not None
+        assert restored.context.messages[0]["content"] == "first history"
+        assert reloaded._sessions[restored.session_key] is restored
+
+    def test_cold_session_remains_available_and_hydrates_on_demand(self, tmp_path):
+        storage_path = tmp_path / "sessions"
+        manager = SessionManager(storage_path=storage_path)
+        session = manager.get_session("desktop", "cold", "desktop_user")
+        session.add_message("user", "old history")
+        session.last_active = datetime.now() - timedelta(days=90)
+        assert manager._save_sessions() is True
+
+        reloaded = SessionManager(storage_path=storage_path)
+
+        assert reloaded._sessions == {}
+        assert [summary["chat_id"] for summary in reloaded.list_session_summaries()] == ["cold"]
+
+        restored = reloaded.get_session("desktop", "cold", "desktop_user", create_if_missing=False)
+        assert restored is not None
+        assert restored.context.messages[0]["content"] == "old history"
+
+    def test_legacy_expired_session_reactivates_when_opened(self, tmp_path):
+        storage_path = tmp_path / "sessions"
+        manager = SessionManager(storage_path=storage_path)
+        session = manager.get_session("desktop", "legacy-expired", "desktop_user")
+        session.add_message("user", "legacy history")
+        session.last_active = datetime.now() - timedelta(days=90)
+        session.mark_expired()
+        assert manager._save_sessions() is True
+
+        reloaded = SessionManager(storage_path=storage_path)
+        summaries = reloaded.list_session_summaries()
+        assert summaries[0]["state"] == SessionState.IDLE.value
+
+        restored = reloaded.get_session(
+            "desktop", "legacy-expired", "desktop_user", create_if_missing=False
+        )
+        assert restored is not None
+        assert restored.state == SessionState.ACTIVE
+
+    @pytest.mark.asyncio
+    async def test_cold_cleanup_evicts_memory_but_keeps_session_reloadable(self, tmp_path):
+        storage_path = tmp_path / "sessions"
+        manager = SessionManager(storage_path=storage_path)
+        session = manager.get_session("desktop", "cold", "desktop_user")
+        session.add_message("user", "reload me")
+        session.last_active = datetime.now() - timedelta(days=90)
+        assert manager._save_sessions() is True
+
+        assert await manager.cleanup_expired() == 1
+        assert manager._sessions == {}
+        assert [summary["chat_id"] for summary in manager.list_session_summaries()] == ["cold"]
+
+        restored = manager.get_session("desktop", "cold", "desktop_user", create_if_missing=False)
+        assert restored is not None
+        assert restored.context.messages[0]["content"] == "reload me"
+
+    @pytest.mark.asyncio
+    async def test_cold_cleanup_keeps_loaded_session_when_persistence_fails(
+        self, tmp_path, monkeypatch
+    ):
+        manager = SessionManager(storage_path=tmp_path / "sessions")
+        session = manager.get_session("desktop", "cold", "desktop_user")
+        session.add_message("user", "unsaved history")
+        session.last_active = datetime.now() - timedelta(days=90)
+        manager.mark_dirty()
+        monkeypatch.setattr(manager, "_save_sessions", lambda: False)
+
+        assert await manager.cleanup_expired() == 0
+        assert manager._sessions[session.session_key] is session
+        assert manager._dirty is True
+
+    def test_catalog_build_failure_keeps_cold_sessions_available(self, tmp_path, monkeypatch):
+        from openakita.sessions.catalog import SessionCatalogStore
+
+        storage_path = tmp_path / "sessions"
+        manager = SessionManager(storage_path=storage_path)
+        session = manager.get_session("desktop", "cold", "desktop_user")
+        session.add_message("user", "fallback history")
+        session.last_active = datetime.now() - timedelta(days=90)
+        assert manager._save_sessions() is True
+        (storage_path / "sessions.index.json").unlink()
+
+        def fail_catalog_write(*_args, **_kwargs):
+            raise OSError("index unavailable")
+
+        monkeypatch.setattr(SessionCatalogStore, "write", fail_catalog_write)
+        reloaded = SessionManager(storage_path=storage_path)
+
+        restored = reloaded.get_session("desktop", "cold", "desktop_user", create_if_missing=False)
+        assert restored is not None
+        assert restored.context.messages[0]["content"] == "fallback history"
 
 
 class TestSessionState:
