@@ -4597,9 +4597,9 @@ class Agent:
             logger.warning(f"[Memory] Failed to align memory session: {e}")
 
         # 2. IM context setup（协程隔离）
-        from .im_context import set_im_context
+        from .im_context import ensure_im_context
 
-        im_tokens = set_im_context(
+        im_tokens = ensure_im_context(
             session=session if gateway else None,
             gateway=gateway,
         )
@@ -6276,6 +6276,17 @@ class Agent:
             yield {"type": "preparation_stage", "stage": "analyzing_intent"}
             _prepare_events: asyncio.Queue[dict] = asyncio.Queue()
 
+            # _prepare_session_context runs in a child task so preparation-stage
+            # events can be emitted while it works. ContextVar changes made only
+            # in that child do not propagate back to this task, where tools run.
+            # Install the IM context here first; the child inherits it.
+            from .im_context import ensure_im_context
+
+            im_tokens = ensure_im_context(
+                session=session if gateway else None,
+                gateway=gateway,
+            )
+
             def _queue_prepare_stage(stage: str) -> None:
                 _prepare_events.put_nowait({"type": "preparation_stage", "stage": stage})
 
@@ -6320,7 +6331,7 @@ class Agent:
                     session_type,
                     task_monitor,
                     conversation_id,
-                    im_tokens,
+                    _prepare_im_tokens,
                 ) = await _prepare_task
             except UserCancelledError:
                 logger.info(

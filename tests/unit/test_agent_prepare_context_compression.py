@@ -8,6 +8,7 @@ from openakita.agent.core import Agent
 from openakita.agent.errors import UserCancelledError
 from openakita.core._context_runtime import _CancelledError as _CtxCancelledError
 from openakita.core.agent_state import AgentState
+from openakita.core.im_context import get_im_gateway, get_im_session, reset_im_context
 
 
 class _FakeContextManager:
@@ -207,6 +208,61 @@ async def test_chat_with_session_stream_reports_preparation_stages() -> None:
         {"type": "text_delta", "content": "✅ 好的，已停止当前任务。"},
         {"type": "done"},
     ]
+
+
+@pytest.mark.asyncio
+async def test_chat_with_session_stream_keeps_im_context_after_prepare_task() -> None:
+    agent = _make_chat_agent()
+    session = SimpleNamespace(channel="wechat:test")
+    gateway = object()
+    context_seen: list[str] = []
+
+    async def _prepare_session_context(**kwargs):
+        assert get_im_session() is session
+        assert get_im_gateway() is gateway
+        context_seen.append("prepare")
+        return [], "im", None, "session-1", None
+
+    checks = 0
+
+    def _is_session_cancelled(_session_id):
+        nonlocal checks
+        checks += 1
+        if checks >= 2:
+            assert get_im_session() is session
+            assert get_im_gateway() is gateway
+            context_seen.append("after_prepare")
+            return True
+        return False
+
+    def _cleanup_im_context(tokens):
+        if tokens is not None:
+            reset_im_context(tokens)
+
+    agent._prepare_session_context = _prepare_session_context
+    agent._is_session_cancelled = _is_session_cancelled
+    agent._consume_pending_cancel = lambda _session_id: None
+    agent._build_slow_compiler_hint = lambda _session_id: None
+    agent._cleanup_session_state = _cleanup_im_context
+
+    events = [
+        event
+        async for event in agent.chat_with_session_stream(
+            message="生成并发送一张图片",
+            session_messages=[],
+            session_id="session-1",
+            session=session,
+            gateway=gateway,
+        )
+    ]
+
+    assert context_seen == ["prepare", "after_prepare"]
+    assert events[-2:] == [
+        {"type": "text_delta", "content": "✅ 好的，已停止当前任务。"},
+        {"type": "done"},
+    ]
+    assert get_im_session() is None
+    assert get_im_gateway() is None
 
 
 @pytest.mark.asyncio

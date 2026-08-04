@@ -34,6 +34,15 @@ def set_im_context(*, session: Any | None, gateway: Any | None) -> tuple[Any, An
     return tok1, tok2
 
 
+def ensure_im_context(
+    *, session: Any | None, gateway: Any | None
+) -> tuple[Any, Any] | None:
+    """Install an IM context unless this task already carries the same one."""
+    if current_im_session.get() is session and current_im_gateway.get() is gateway:
+        return None
+    return set_im_context(session=session, gateway=gateway)
+
+
 def reset_im_context(tokens: tuple[Any, Any]) -> None:
     tok1, tok2 = tokens
     current_im_session.reset(tok1)
