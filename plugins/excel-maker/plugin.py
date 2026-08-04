@@ -49,6 +49,11 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from openakita.plugins.api import PluginAPI, PluginBase
+from openakita.plugins.llm_support import (
+    complete_text,
+    llm_catalog_payload,
+    validate_llm_endpoint,
+)
 
 PLUGIN_ID = "excel-maker"
 SETTINGS_KEY = "excel_maker_settings"
@@ -126,6 +131,7 @@ class SettingsUpdateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     data_dir: str | None = None
+    llm_endpoint: str | None = None
     export_dir: str | None = None
     default_style: str | None = None
     brand_color: str | None = None
@@ -191,6 +197,11 @@ class Plugin(PluginBase):
                 "resolved": {key: str(path) for key, path in self._storage_paths(settings).items()},
             }
 
+        @router.get("/llm/models")
+        async def get_llm_models() -> dict[str, Any]:
+            settings = self._settings()
+            return llm_catalog_payload(self._api, selected_endpoint=settings.llm_endpoint)
+
         @router.put("/settings")
         async def update_settings(payload: SettingsUpdateRequest) -> dict[str, Any]:
             settings = self._settings()
@@ -207,6 +218,8 @@ class Plugin(PluginBase):
             for key, value in payload.model_dump(exclude_none=True).items():
                 if key in path_keys and value:
                     write_probe(value)
+                if key == "llm_endpoint":
+                    value = validate_llm_endpoint(self._api, value)
                 values[key] = value
             values["updated_at"] = __import__("time").time()
             self._save_settings(Settings(**values))
@@ -681,22 +694,22 @@ class Plugin(PluginBase):
             "是否需要保留 Raw_Data 明细，以及哪些字段属于敏感字段？",
             "最终交付样式是否有品牌色、字体或模板要求？",
         ]
-        brain = getattr(self._api, "brain", None) if self._api else None
-        if brain is None:
+        if self._api is None or self._api.get_llm() is None:
             return fallback
         try:
             prompt = (
                 "基于以下 Excel profile 和用户目标，生成 5 个用于完善 Excel 报表需求的中文追问。"
                 '只返回 JSON：{"questions":[...]}\n'
-                f"目标：{payload.goal}\nProfile：{json.dumps(profile or {}, ensure_ascii=False)[:6000]}"
+                f"目标：{payload.goal}\n"
+                f"Profile：{json.dumps(profile or {}, ensure_ascii=False)[:6000]}"
             )
-            access = getattr(brain, "access", None)
-            if not callable(access):
-                return fallback
-            response = access(prompt)
-            if hasattr(response, "__await__"):
-                response = await response
-            parsed = parse_json_object(str(response))
+            response = await complete_text(
+                self._api,
+                endpoint=self._settings().llm_endpoint,
+                prompt=prompt,
+                max_tokens=1200,
+            )
+            parsed = parse_json_object(str(response.text))
             questions = parsed.get("questions")
             if isinstance(questions, list) and questions:
                 return [str(item) for item in questions[:8]]
@@ -719,25 +732,28 @@ class Plugin(PluginBase):
             profile=profile,
             brief=brief,
         )
-        brain = getattr(self._api, "brain", None) if self._api else None
-        access = getattr(brain, "access", None)
-        if not callable(access):
+        if self._api is None or self._api.get_llm() is None:
             return fallback
         try:
             prompt = (
                 "你是 Excel 报表方案设计助手。请基于 brief 和 profile 生成 WorkbookPlan JSON。"
-                "只能返回 JSON 对象，不要 markdown。字段必须包含 title, purpose, source_workbook_id,"
+                "只能返回 JSON 对象，不要 markdown。字段必须包含 "
+                "title, purpose, source_workbook_id,"
                 "sheets, operations, formulas, style, audit_expectations。"
-                "operations 只能使用 rename_column/cast_type/fill_missing/drop_duplicates/derive_column/"
+                "operations 只能使用 rename_column/cast_type/fill_missing/"
+                "drop_duplicates/derive_column/"
                 "groupby/pivot/sort/filter/write_formula；公式必须以 = 开头。\n"
                 f"title: {title}\nworkbook_id: {workbook_id}\n"
                 f"brief: {json.dumps(brief or {}, ensure_ascii=False)[:3000]}\n"
                 f"profile: {json.dumps(profile or {}, ensure_ascii=False)[:7000]}"
             )
-            response = access(prompt)
-            if hasattr(response, "__await__"):
-                response = await response
-            candidate = parse_json_object(str(response))
+            response = await complete_text(
+                self._api,
+                endpoint=self._settings().llm_endpoint,
+                prompt=prompt,
+                max_tokens=2400,
+            )
+            candidate = parse_json_object(str(response.text))
             candidate.setdefault("title", title)
             candidate.setdefault("source_workbook_id", workbook_id)
             return builder.validate_plan(candidate)

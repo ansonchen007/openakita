@@ -6,27 +6,31 @@ import pytest
 from word_brain_helper import WordBrainHelper
 
 
-class FakeBrain:
+class FakeLLM:
     def __init__(self, response: str) -> None:
         self.response = response
         self.prompts: list[str] = []
 
-    async def compiler_think(self, prompt: str, **kwargs) -> str:
-        self.prompts.append(prompt)
-        return self.response
+    async def complete(self, **kwargs):
+        self.prompts.append(kwargs["prompt"])
+        return type("Completion", (), {"text": self.response})()
 
 
 class FakeAPI:
-    def __init__(self, brain=None, granted: bool = True) -> None:
-        self.brain = brain
+    def __init__(self, llm=None, granted: bool = True, endpoint: str = "") -> None:
+        self.llm = llm
         self.granted = granted
+        self.endpoint = endpoint
 
     def has_permission(self, name: str) -> bool:
         assert name == "brain.access"
         return self.granted
 
-    def get_brain(self):
-        return self.brain
+    def get_llm(self):
+        return self.llm
+
+    def get_config(self):
+        return {"word_maker_settings": {"llm_endpoint": self.endpoint}}
 
 
 @pytest.mark.asyncio
@@ -37,20 +41,20 @@ async def test_clarify_requirements_uses_brain_json() -> None:
         "assumptions": ["使用正式语气"],
         "next_action": "generate_outline",
     }
-    brain = FakeBrain("```json\n" + json.dumps(payload, ensure_ascii=False) + "\n```")
-    helper = WordBrainHelper(FakeAPI(brain))
+    llm = FakeLLM("```json\n" + json.dumps(payload, ensure_ascii=False) + "\n```")
+    helper = WordBrainHelper(FakeAPI(llm, endpoint="primary"))
 
     result = await helper.clarify_requirements(requirement="生成会议纪要")
 
     assert result.ok is True
     assert result.used_brain is True
     assert result.data["doc_type"] == "meeting_minutes"
-    assert "Return ONLY valid JSON" in brain.prompts[0]
+    assert "Return ONLY valid JSON" in llm.prompts[0]
 
 
 @pytest.mark.asyncio
 async def test_generate_outline_falls_back_without_permission() -> None:
-    helper = WordBrainHelper(FakeAPI(FakeBrain("{}"), granted=False))
+    helper = WordBrainHelper(FakeAPI(FakeLLM("{}"), granted=False))
 
     result = await helper.generate_outline(requirement="生成报告", doc_type="research_report")
 
@@ -62,7 +66,7 @@ async def test_generate_outline_falls_back_without_permission() -> None:
 
 @pytest.mark.asyncio
 async def test_invalid_brain_json_returns_schema_error() -> None:
-    helper = WordBrainHelper(FakeAPI(FakeBrain('{"title": "Only title"}')))
+    helper = WordBrainHelper(FakeAPI(FakeLLM('{"title": "Only title"}')))
 
     result = await helper.generate_outline(requirement="生成报告", doc_type="research_report")
 
@@ -75,7 +79,7 @@ async def test_invalid_brain_json_returns_schema_error() -> None:
 @pytest.mark.asyncio
 async def test_extract_fields_schema() -> None:
     payload = {"fields": {"company": "OpenAkita"}, "missing": [], "confidence": "high"}
-    helper = WordBrainHelper(FakeAPI(FakeBrain(json.dumps(payload, ensure_ascii=False))))
+    helper = WordBrainHelper(FakeAPI(FakeLLM(json.dumps(payload, ensure_ascii=False))))
 
     result = await helper.extract_fields(
         template_vars=["company"],

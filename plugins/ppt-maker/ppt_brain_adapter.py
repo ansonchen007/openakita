@@ -22,10 +22,6 @@ import time
 from pathlib import Path
 from typing import Any, TypeVar
 
-from ppt_layouts import describe_layouts_for_prompt, fill_required, layout_for
-from ppt_maker_inline.file_utils import ensure_dir, safe_name
-from ppt_maker_inline.llm_json_parser import parse_llm_json_object
-from ppt_models import ChartType, DeckMode, SlideType
 from ppt_generation_models import (
     ContextPack,
     DesignSystem,
@@ -33,7 +29,13 @@ from ppt_generation_models import (
     SlideSpec,
     StoryPlan,
 )
+from ppt_layouts import describe_layouts_for_prompt, fill_required, layout_for
+from ppt_maker_inline.file_utils import ensure_dir, safe_name
+from ppt_maker_inline.llm_json_parser import parse_llm_json_object
+from ppt_models import ChartType, DeckMode, SlideType
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
+
+from openakita.plugins.llm_support import complete_text
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -238,14 +240,24 @@ class PptBrainAdapter:
                 return False
         return False
 
-    def get_brain(self) -> Any:
+    def get_llm(self) -> Any:
         if not self.has_brain_access():
             raise BrainAccessError("brain.access not granted")
-        get_brain = getattr(self._api, "get_brain", None)
-        brain = get_brain() if callable(get_brain) else None
-        if brain is None:
-            raise BrainAccessError("Host Brain is not available")
-        return brain
+        get_llm = getattr(self._api, "get_llm", None)
+        llm = get_llm() if callable(get_llm) else None
+        if llm is None:
+            raise BrainAccessError("Host plugin LLM is not available")
+        return llm
+
+    def _endpoint(self) -> str:
+        path = self._data_root / "settings.json"
+        if not path.exists():
+            return ""
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, TypeError):
+            return ""
+        return str(raw.get("llm_endpoint") or "").strip() if isinstance(raw, dict) else ""
 
     # ── Requirement / source / table / template helpers (existing) ─────
 
@@ -484,7 +496,7 @@ Return STRICT JSON:
 - ``speaker_note`` is 1-2 natural-language sentences.
 - For data-heavy layouts (chart_*, data_table, metric_cards), only include numbers that are present in the context; otherwise use qualitative descriptors like "increasing", "majority", "low".
 """
-        brain = self.get_brain()
+        self.get_llm()
         system = (
             "You are the OpenAkita ppt-maker per-slide content engine. "
             "Return strict JSON only. Do not include Markdown fences."
@@ -503,8 +515,14 @@ Return STRICT JSON:
             },
         )
         try:
-            response = await brain.think(prompt, system=system, max_tokens=2048)
-            raw = getattr(response, "content", response)
+            response = await complete_text(
+                self._api,
+                endpoint=self._endpoint(),
+                prompt=prompt,
+                system=system,
+                max_tokens=2048,
+            )
+            raw = getattr(response, "text", getattr(response, "content", response))
             text = raw if isinstance(raw, str) else str(raw)
             parsed = parse_llm_json_object(text, fallback=None)
             if parsed is None:
@@ -885,7 +903,7 @@ Slide: {json.dumps(slide, ensure_ascii=False)}
         model: type[T],
         project_id: str | None,
     ) -> T:
-        brain = self.get_brain()
+        self.get_llm()
         system = (
             "You are the OpenAkita ppt-maker planning engine. "
             "Return strict JSON only. Do not include Markdown fences unless unavoidable."
@@ -909,8 +927,14 @@ Slide: {json.dumps(slide, ensure_ascii=False)}
             },
         )
         try:
-            response = await brain.think(prompt, system=system, max_tokens=4096)
-            raw = getattr(response, "content", response)
+            response = await complete_text(
+                self._api,
+                endpoint=self._endpoint(),
+                prompt=prompt,
+                system=system,
+                max_tokens=4096,
+            )
+            raw = getattr(response, "text", getattr(response, "content", response))
             text = raw if isinstance(raw, str) else str(raw)
             parsed = parse_llm_json_object(text, fallback=None)
             if parsed is None:

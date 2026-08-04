@@ -38,7 +38,7 @@ class FakeAPI:
     def has_permission(self, name: str) -> bool:
         return name != "brain.access"
 
-    def get_brain(self):
+    def get_llm(self):
         return None
 
     def spawn_task(self, coro, *, name=None):

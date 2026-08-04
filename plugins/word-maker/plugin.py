@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import time
 from pathlib import Path
 from typing import Any
 
@@ -12,21 +11,21 @@ from fastapi import APIRouter, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field
 from word_brain_helper import WordBrainHelper
+from word_field_prepare import prepare_template_fields
 from word_maker_inline.file_utils import safe_name, unique_child
 from word_maker_inline.python_deps import build_dependency_report, check_optional_deps
 from word_maker_inline.storage_stats import collect_storage_stats
 from word_maker_inline.upload_preview import add_upload_preview_route
 from word_models import build_catalog, default_starter_doc_type
+from word_outline_sync import (
+    build_outline_from_sources,
+    merge_outline_into_fields,
+)
 from word_pipeline import WordPipelineContext, audit_output, build_ppt_asset_metadata, run_pipeline
 from word_source_loader import load_source
 from word_task_manager import WordTaskManager
 from word_template_convert import convert_template
 from word_template_engine import extract_template_vars, render_template
-from word_field_prepare import prepare_template_fields
-from word_outline_sync import (
-    build_outline_from_sources,
-    merge_outline_into_fields,
-)
 from word_template_starters import (
     ensure_starter_files,
     list_starter_catalog,
@@ -37,6 +36,7 @@ from word_template_starters import (
 from word_workflow import build_workflow_state, collect_project_sources_text, load_project_draft
 
 from openakita.plugins.api import PluginAPI, PluginBase
+from openakita.plugins.llm_support import llm_catalog_payload, validate_llm_endpoint
 
 PLUGIN_ID = "word-maker"
 SETTINGS_KEY = "word_maker_settings"
@@ -50,6 +50,7 @@ def _read_settings(api: PluginAPI | None) -> dict[str, Any]:
         "default_language": settings.get("default_language", "zh-CN"),
         "default_tone": settings.get("default_tone", "professional"),
         "retention_days": int(settings.get("retention_days", 30)),
+        "llm_endpoint": str(settings.get("llm_endpoint") or "").strip(),
     }
 
 
@@ -115,6 +116,7 @@ class SettingsUpdateRequest(StrictModel):
     default_language: str = "zh-CN"
     default_tone: str = "professional"
     retention_days: int = 30
+    llm_endpoint: str = ""
 
 
 class ClarifyRequest(StrictModel):
@@ -353,6 +355,7 @@ class Plugin(PluginBase):
             "default_language": settings.get("default_language", "zh-CN"),
             "default_tone": settings.get("default_tone", "professional"),
             "retention_days": int(settings.get("retention_days", 30)),
+            "llm_endpoint": settings.get("llm_endpoint", ""),
             "data_dir_active": str(self._require_workspace()),
             "brain_available": brain_available,
             "brain_status": brain_status,
@@ -719,8 +722,20 @@ class Plugin(PluginBase):
         @router.put("/settings")
         async def put_settings(body: SettingsUpdateRequest) -> dict[str, Any]:
             if self._api:
-                self._api.set_config({SETTINGS_KEY: body.model_dump()})
+                updates = body.model_dump()
+                updates["llm_endpoint"] = validate_llm_endpoint(
+                    self._api, updates.get("llm_endpoint")
+                )
+                self._api.set_config({SETTINGS_KEY: updates})
             return self._settings()
+
+        @router.get("/llm/models")
+        async def get_llm_models() -> dict[str, Any]:
+            settings = _read_settings(self._api)
+            return llm_catalog_payload(
+                self._api,
+                selected_endpoint=settings.get("llm_endpoint", ""),
+            )
 
         @router.get("/storage/stats")
         async def storage_stats() -> dict[str, Any]:
@@ -1125,4 +1140,3 @@ def _tool_definitions() -> list[dict[str, Any]]:
         }
         for name, desc in names
     ]
-

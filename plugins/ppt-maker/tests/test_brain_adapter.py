@@ -19,8 +19,8 @@ class FakeBrain:
         self.payload = payload
         self.calls: list[dict] = []
 
-    async def think(self, prompt: str, *, system: str, max_tokens: int) -> FakeResponse:
-        self.calls.append({"prompt": prompt, "system": system, "max_tokens": max_tokens})
+    async def complete(self, **kwargs) -> FakeResponse:
+        self.calls.append(kwargs)
         return FakeResponse(json.dumps(self.payload, ensure_ascii=False))
 
 
@@ -32,7 +32,7 @@ class FakeApi:
     def has_permission(self, name: str) -> bool:
         return self.granted and name == "brain.access"
 
-    def get_brain(self):
+    def get_llm(self):
         return self.brain
 
 
@@ -73,7 +73,7 @@ def test_missing_brain_permission_raises(tmp_path) -> None:
     adapter = PptBrainAdapter(FakeApi(granted=False, brain=FakeBrain({})), data_root=tmp_path)
 
     with pytest.raises(BrainAccessError):
-        adapter.get_brain()
+        adapter.get_llm()
 
 
 @pytest.mark.asyncio
@@ -249,7 +249,7 @@ async def test_generate_slide_content_rejects_garbage_json(tmp_path) -> None:
     from ppt_models import SlideType
 
     class BadBrain:
-        async def think(self, prompt, *, system, max_tokens):
+        async def complete(self, **kwargs):
             return FakeResponse("not even close to JSON")
 
     adapter = PptBrainAdapter(FakeApi(granted=True, brain=BadBrain()), data_root=tmp_path)

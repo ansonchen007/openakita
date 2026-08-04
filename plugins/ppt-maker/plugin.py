@@ -46,6 +46,7 @@ from ppt_template_manager import TemplateDiagnosticError, TemplateManager
 from pydantic import BaseModel, ConfigDict
 
 from openakita.plugins.api import PluginAPI, PluginBase
+from openakita.plugins.llm_support import llm_catalog_payload, validate_llm_endpoint
 
 PLUGIN_ID = "ppt-maker"
 
@@ -188,6 +189,14 @@ class Plugin(PluginBase):
                 "resolved": _resolved_storage_paths(data_dir, settings),
             }
 
+        @router.get("/llm/models")
+        async def get_llm_models() -> dict[str, Any]:
+            settings = _load_settings(data_dir, apply_relay=False)
+            return llm_catalog_payload(
+                self._api,
+                selected_endpoint=settings.get("llm_endpoint", ""),
+            )
+
         @router.put("/settings")
         async def update_settings(payload: SettingsUpdateRequest) -> dict[str, Any]:
             # apply_relay=False so the relay-resolved dashscope_base_url
@@ -199,7 +208,11 @@ class Plugin(PluginBase):
             for key, value in payload.updates.items():
                 if key not in allowed:
                     raise HTTPException(status_code=400, detail=f"Unknown setting: {key}")
-                settings[key] = str(value)
+                settings[key] = (
+                    validate_llm_endpoint(self._api, value)
+                    if key == "llm_endpoint"
+                    else str(value)
+                )
             _save_settings(data_dir, settings)
             # Rebuild the asset provider so a relay-endpoint change actually
             # repoints the next DashScope T2I request without a plugin reload.
@@ -1497,6 +1510,7 @@ def _default_settings() -> dict[str, str]:
         "tone": "professional",
         "language": "zh-CN",
         "single_shot_mode": "false",
+        "llm_endpoint": "",
         "web_search_enabled": "false",
         "quality_mode": "standard",
         "output_mode": "editable",

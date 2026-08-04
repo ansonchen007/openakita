@@ -87,8 +87,8 @@ class _ScriptedBrain:
         self._payloads = list(payloads)
         self.calls: list[dict] = []
 
-    async def think(self, prompt, *, system, max_tokens):
-        self.calls.append({"prompt": prompt, "system": system})
+    async def complete(self, **kwargs):
+        self.calls.append(kwargs)
         if not self._payloads:
             raise RuntimeError("no scripted response left")
         return _FakeResp(json.dumps(self._payloads.pop(0), ensure_ascii=False))
@@ -101,7 +101,7 @@ class _FakeApi:
     def has_permission(self, name: str) -> bool:
         return name == "brain.access"
 
-    def get_brain(self):
+    def get_llm(self):
         return self.brain
 
 
@@ -191,7 +191,7 @@ async def test_pipeline_uses_brain_outline_when_adapter_available(tmp_path) -> N
 @pytest.mark.asyncio
 async def test_pipeline_falls_back_when_brain_outline_raises(tmp_path) -> None:
     class ExplodingBrain:
-        async def think(self, prompt, *, system, max_tokens):
+        async def complete(self, **kwargs):
             raise RuntimeError("brain offline")
 
     adapter = PptBrainAdapter(_FakeApi(ExplodingBrain()), data_root=tmp_path)
