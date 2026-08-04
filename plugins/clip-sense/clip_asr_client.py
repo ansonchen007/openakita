@@ -1,4 +1,4 @@
-"""DashScope Paraformer ASR + Qwen analysis client for clip-sense.
+"""DashScope Paraformer ASR plus OpenAkita Plugin LLM analysis.
 
 Reference: plugins-archive/_shared/asr/dashscope_paraformer.py (async task model)
 Reference: CutClaw prompt.py:522-606 (structure proposal prompts)
@@ -6,7 +6,7 @@ Reference: CutClaw prompt.py:522-606 (structure proposal prompts)
 P0-1: file_urls must be publicly reachable URLs
 P0-2: Paraformer timestamps are in milliseconds (divide by 1000)
 P0-3: Sentence-level granularity (archive only parses sentences, not words)
-P0-7: Qwen JSON output parsed via llm_json_parser 5-level fallback
+P0-7: Plugin LLM JSON output parsed via llm_json_parser 5-level fallback
 """
 
 from __future__ import annotations
@@ -67,7 +67,7 @@ class AsrError(Exception):
 
 
 class ClipAsrClient:
-    """DashScope Paraformer + Qwen client for clip-sense."""
+    """DashScope Paraformer ASR plus OpenAkita-hosted text analysis."""
 
     def __init__(
         self,
@@ -87,11 +87,8 @@ class ClipAsrClient:
         self._poll_interval = poll_interval
         self._poll_max_seconds = poll_max_seconds
         self._timeout = timeout
-        self._qwen_model = qwen_model
         self._client: Any = None
-        self._analysis_provider = self._normalize_analysis_provider(analysis_provider)
         self._analysis_brain = analysis_brain
-        self._analysis_api_key = analysis_api_key
 
     def update_api_key(self, key: str) -> None:
         self._api_key = key
@@ -103,13 +100,7 @@ class ClipAsrClient:
         brain: Any = None,
         api_key: str = "",
     ) -> None:
-        self._analysis_provider = self._normalize_analysis_provider(provider)
         self._analysis_brain = brain
-        self._analysis_api_key = api_key
-
-    @staticmethod
-    def _normalize_analysis_provider(provider: str) -> str:
-        return "dashscope" if str(provider or "").lower() == "dashscope" else "host"
 
     async def _ensure_client(self) -> Any:
         if self._client is None:
@@ -128,15 +119,6 @@ class ClipAsrClient:
         if async_mode:
             h["X-DashScope-Async"] = "enable"
         return h
-
-    def _analysis_auth_headers(self) -> dict[str, str]:
-        key = self._analysis_api_key
-        if not key:
-            raise AsrError("DashScope analysis API key not configured", kind="auth")
-        return {
-            "Authorization": f"Bearer {key}",
-            "Content-Type": "application/json",
-        }
 
     @staticmethod
     def _oss_resolve_headers(source_url: str) -> dict[str, str]:
@@ -324,7 +306,7 @@ class ClipAsrClient:
         )
 
     # ------------------------------------------------------------------
-    # Qwen analysis methods
+    # OpenAkita Plugin LLM analysis methods
     # ------------------------------------------------------------------
 
     async def analyze_highlights(
@@ -407,78 +389,16 @@ class ClipAsrClient:
         fallback: Any = None,
         max_retries: int = MAX_ANALYSIS_RETRIES,
     ) -> Any:
-        """Analyze with host LLM by default, or DashScope Qwen when explicitly enabled."""
+        """Analyze through the OpenAkita Plugin LLM facade only."""
         from clip_sense_inline.llm_json_parser import parse_llm_json
 
-        if self._analysis_provider != "dashscope":
-            return await self._host_analyze_with_retry(
-                prompt,
-                expect_type=expect_type,
-                fallback=fallback,
-                max_retries=max_retries,
-                parse_llm_json=parse_llm_json,
-            )
-
-        import httpx
-
-        client = await self._ensure_client()
-        url = f"{self._base_url}/compatible-mode/v1/chat/completions"
-        last_feedback = ""
-
-        for attempt in range(max_retries + 1):
-            messages = [{"role": "user", "content": prompt}]
-            if last_feedback:
-                messages.append(
-                    {
-                        "role": "user",
-                        "content": f"**IMPORTANT - PREVIOUS ATTEMPT FAILED:** {last_feedback}\n请只返回合法的 JSON。",
-                    }
-                )
-
-            body = {
-                "model": self._qwen_model,
-                "messages": messages,
-                "temperature": 0.3,
-            }
-
-            try:
-                resp = await client.post(url, headers=self._analysis_auth_headers(), json=body)
-            except httpx.HTTPError as exc:
-                if attempt < max_retries:
-                    await asyncio.sleep(2**attempt)
-                    continue
-                raise AsrError(
-                    f"Qwen network error: {exc}", retryable=True, kind="network"
-                ) from exc
-
-            if resp.status_code >= 400:
-                if attempt < max_retries and resp.status_code in (429, 500, 502, 503, 504):
-                    await asyncio.sleep(2**attempt)
-                    continue
-                kind = "auth" if resp.status_code in (401, 403) else "network"
-                raise AsrError(
-                    f"Qwen HTTP {resp.status_code}: {resp.text[:200]}",
-                    kind=kind,
-                )
-
-            data = resp.json()
-            content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
-
-            errors: list[str] = []
-            result = parse_llm_json(content, fallback=None, expect=expect_type, errors=errors)
-            if result is not None:
-                return result
-
-            last_feedback = "; ".join(errors[:3])
-            logger.warning(
-                "Qwen JSON parse failed (attempt %d/%d): %s",
-                attempt + 1,
-                max_retries + 1,
-                last_feedback,
-            )
-
-        logger.error("Qwen analysis exhausted all retries, returning fallback")
-        return fallback if fallback is not None else ([] if expect_type is list else {})
+        return await self._host_analyze_with_retry(
+            prompt,
+            expect_type=expect_type,
+            fallback=fallback,
+            max_retries=max_retries,
+            parse_llm_json=parse_llm_json,
+        )
 
     async def _host_analyze_with_retry(
         self,
@@ -489,10 +409,10 @@ class ClipAsrClient:
         max_retries: int,
         parse_llm_json: Any,
     ) -> Any:
-        brain = self._analysis_brain
-        if brain is None:
+        api = self._analysis_brain
+        if api is None:
             raise AsrError(
-                "Host LLM is unavailable. Grant brain.access or enable custom Bailian analysis key.",
+                "OpenAkita Plugin LLM is unavailable. Grant brain.access and configure a text model.",
                 kind="auth",
             )
 
@@ -506,7 +426,7 @@ class ClipAsrClient:
             if last_feedback:
                 user += f"\n\n上一次输出无法解析，错误：{last_feedback}\n请只返回合法 JSON。"
             try:
-                content = await _call_host_brain(brain, system=system, prompt=user)
+                content = await _call_host_brain(api, system=system, prompt=user)
             except Exception as exc:
                 if attempt < max_retries:
                     await asyncio.sleep(2**attempt)
@@ -535,30 +455,17 @@ class ClipAsrClient:
 
 
 async def _call_host_brain(brain: Any, *, system: str, prompt: str) -> str:
-    if hasattr(brain, "chat"):
-        response = await brain.chat(
-            messages=[{"role": "user", "content": prompt}],
-            system=system,
-            temperature=0.2,
-            max_tokens=4000,
-        )
-    elif hasattr(brain, "think_lightweight"):
-        response = await brain.think_lightweight(
-            prompt=prompt,
-            system=system,
-            temperature=0.2,
-            max_tokens=4000,
-        )
-    elif hasattr(brain, "think"):
-        response = await brain.think(
-            prompt=prompt,
-            system=system,
-            temperature=0.2,
-            max_tokens=4000,
-        )
-    else:
-        raise RuntimeError("Host Brain has no supported LLM call method")
-    return _response_to_text(response)
+    from openakita.plugins.llm_support import complete_text
+
+    response = await complete_text(
+        brain,
+        endpoint=str(brain.get_config().get("llm_endpoint") or ""),
+        prompt=prompt,
+        system=system,
+        temperature=0.2,
+        max_tokens=4000,
+    )
+    return str(response.text or "")
 
 
 def _response_to_text(response: Any) -> str:

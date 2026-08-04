@@ -5,7 +5,7 @@ into a tag taxonomy. Stage 2 (``score_batch``) scores a batch of articles
 against the taxonomy on the finance-tuned 0-10 scale (see
 :mod:`finpulse_ai.prompts`). Both stages:
 
-* Go through ``api.get_brain()`` — fin-pulse does **not** ship its own
+* Go through ``api.get_llm()`` — fin-pulse does **not** ship its own
   LLM factory (the host already abstracts 10 providers with end-point
   priority, fail-over, and auth-cool-down built in).
 * Fall back on per-item exceptions: a single score failure degrades to
@@ -25,7 +25,8 @@ import hashlib
 import json
 import logging
 import re
-from typing import Any, Awaitable, Callable
+from collections.abc import Awaitable, Callable
+from typing import Any
 
 from finpulse_ai.prompts import (
     SCORE_SYSTEM_EN,
@@ -113,8 +114,12 @@ async def extract_tags(
     system = TAG_EXTRACTION_SYSTEM_ZH if lang == "zh" else TAG_EXTRACTION_SYSTEM_EN
     user = TAG_EXTRACTION_USER_TEMPLATE.format(interests=interests.strip())
     try:
-        response = await brain.chat(
-            messages=[{"role": "user", "content": user}],
+        from openakita.plugins.llm_support import complete_text
+
+        response = await complete_text(
+            brain,
+            endpoint=str(brain.get_config().get("llm_endpoint") or ""),
+            prompt=user,
             system=system,
             temperature=temperature,
             max_tokens=max_tokens,
@@ -123,7 +128,7 @@ async def extract_tags(
         logger.warning("extract_tags failed: %s", exc)
         return []
     try:
-        data = _parse_json(_brain_content(response))
+        data = _parse_json(str(response.text or ""))
     except Exception as exc:  # noqa: BLE001
         logger.warning("extract_tags json parse failed: %s", exc)
         return []
@@ -180,8 +185,12 @@ async def score_batch(
         block = build_score_items_block(batch)
         user = SCORE_USER_TEMPLATE.format(tags_json=tags_json, items_block=block)
         try:
-            response = await brain.chat(
-                messages=[{"role": "user", "content": user}],
+            from openakita.plugins.llm_support import complete_text
+
+            response = await complete_text(
+                brain,
+                endpoint=str(brain.get_config().get("llm_endpoint") or ""),
+                prompt=user,
                 system=system,
                 temperature=temperature,
                 max_tokens=max_tokens,
@@ -197,7 +206,7 @@ async def score_batch(
                 }
             continue
         try:
-            parsed = _parse_json(_brain_content(response))
+            parsed = _parse_json(str(response.text or ""))
         except Exception as exc:  # noqa: BLE001 — malformed JSON is per-batch
             logger.warning("score_batch parse failed @%s: %s", start, exc)
             for it in batch:

@@ -30,7 +30,6 @@ from pathlib import Path
 from typing import Any
 
 import aiosqlite
-
 from finpulse_models import DEFAULT_CRONS, SOURCE_DEFS
 
 logger = logging.getLogger(__name__)
@@ -129,7 +128,7 @@ _ARTICLE_EVENT_TIME_SQL = (
 #
 # Source-level ``{source_id}.enabled`` flags seed from SOURCE_DEFS. Anything
 # LLM-provider-specific stays out: fin-pulse never manages LLM credentials
-# directly — we delegate to the host LLMClient via ``api.get_brain()``.
+# directly — we delegate to the host through the safe ``api.get_llm()`` facade.
 
 
 def _seed_default_config() -> dict[str, str]:

@@ -670,7 +670,7 @@ class Plugin(PluginBase):
                 "brand": BRAND,
                 "data_dir": str(self._data_dir),
                 "db_ready": self._tm.ready,
-                "brain_available": self._api.get_brain() is not None if self._api else False,
+                "llm_available": self._api.get_llm() is not None if self._api else False,
                 "sources_total": len(sources),
                 "sources_enabled": enabled_count,
                 "sources_failed": failed_count,

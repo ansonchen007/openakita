@@ -41,6 +41,23 @@ class _StubAPI:
     def get_brain(self) -> Any:
         return self._brain
 
+    def get_config(self) -> dict[str, str]:
+        return {"llm_endpoint": ""}
+
+    def get_llm(self) -> Any:
+        return self if self._has_perm and self._brain is not None else None
+
+    async def complete(self, *, prompt: str, system: str, max_tokens: int, **kwargs: Any) -> Any:
+        try:
+            text = await self._brain.think_lightweight(
+                prompt=prompt, system=system, max_tokens=max_tokens
+            )
+        except (AttributeError, RuntimeError):
+            text = await self._brain.think(
+                prompt=prompt, system=system, max_tokens=max_tokens
+            )
+        return type("Completion", (), {"text": text})()
+
 
 class _LightweightBrain:
     """Brain that exposes ``think_lightweight`` (and falls through if

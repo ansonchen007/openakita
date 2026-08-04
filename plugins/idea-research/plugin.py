@@ -58,8 +58,9 @@ except Exception as exc:  # noqa: BLE001
 
 import httpx
 from fastapi import APIRouter, HTTPException, Query
-from openakita.plugins.api import PluginBase
 from pydantic import BaseModel, ConfigDict, Field
+
+from openakita.plugins.api import PluginBase
 
 
 def _purge_idea_research_module_cache() -> int:
@@ -1238,8 +1239,6 @@ class Plugin(PluginBase):
 
     def _render_task_export(self, row: dict[str, Any], *, fmt: str) -> tuple[str, str]:
         row = self._present_task_row(row)
-        task_id = str(row.get("id") or "")
-        mode = str(row.get("mode") or "task")
         payload = self._decode_json_field(row.get("output_json"))
         if payload is None:
             payload = row
@@ -1434,6 +1433,7 @@ class Plugin(PluginBase):
             registry=self._collectors,
             dashscope=self._dashscope,
             mdrm=self._mdrm,
+            api=self._api,
             persona_name=persona or inp.get("persona"),
             handoff_target=handoff_target,
         )

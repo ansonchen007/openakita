@@ -725,18 +725,16 @@ async def test_disabled_package_does_not_show_historical_radar_items(tmp_path: P
 
 
 @pytest.mark.asyncio
-async def test_brief_falls_back_without_brain() -> None:
+async def test_brief_requires_plugin_llm() -> None:
     from media_ai.analyzer import build_brief
 
-    md, source = await build_brief(
-        None,
-        [{"title": "政策发布", "url": "https://example.com", "source_id": "demo", "hot_score": 7}],
-        title="融媒智策早报",
-        session="morning",
-    )
-    assert source == "fallback"
-    assert "融媒智策早报" in md
-    assert "https://example.com" in md
+    with pytest.raises(RuntimeError, match="plugin_llm_unavailable"):
+        await build_brief(
+            None,
+            [{"title": "政策发布", "url": "https://example.com", "source_id": "demo"}],
+            title="融媒智策早报",
+            session="morning",
+        )
 
 
 @pytest.mark.asyncio
@@ -747,9 +745,15 @@ async def test_brief_uses_host_brain_think() -> None:
         def __init__(self) -> None:
             self.calls: list[dict[str, object]] = []
 
-        async def think(self, prompt: str, **kwargs: object) -> object:
+        def get_config(self) -> dict[str, str]:
+            return {"llm_endpoint": ""}
+
+        def get_llm(self) -> FakeBrain:
+            return self
+
+        async def complete(self, prompt: str, **kwargs: object) -> object:
             self.calls.append({"prompt": prompt, **kwargs})
-            return type("Resp", (), {"content": "# AI 简报\n\n已由大模型生成。"})()
+            return type("Resp", (), {"text": "# AI 简报\n\n已由大模型生成。"})()
 
     brain = FakeBrain()
     md, source = await build_brief(
@@ -759,10 +763,9 @@ async def test_brief_uses_host_brain_think() -> None:
         session="morning",
     )
 
-    assert source == "brain"
+    assert source == "openakita_llm"
     assert "AI 简报" in md
     assert brain.calls
-    assert brain.calls[0]["enable_thinking"] is False
     assert "融媒智策" in str(brain.calls[0]["system"])
 
 
@@ -771,17 +774,14 @@ async def test_brain_content_parses_anthropic_blocks() -> None:
     from media_ai.analyzer import build_verify_pack
 
     class FakeBrain:
-        async def messages_create_async(self, **_: object) -> object:
-            return type(
-                "Msg",
-                (),
-                {
-                    "content": [
-                        {"type": "text", "text": "# 复核清单"},
-                        type("Block", (), {"text": "需要补查官方口径。"})(),
-                    ]
-                },
-            )()
+        def get_config(self) -> dict[str, str]:
+            return {"llm_endpoint": ""}
+
+        def get_llm(self) -> FakeBrain:
+            return self
+
+        async def complete(self, **_: object) -> object:
+            return type("Msg", (), {"text": "# 复核清单\n需要补查官方口径。"})()
 
     md, source = await build_verify_pack(
         FakeBrain(),
@@ -789,7 +789,7 @@ async def test_brain_content_parses_anthropic_blocks() -> None:
         topic="台海最新动态复核",
     )
 
-    assert source == "brain"
+    assert source == "openakita_llm"
     assert "# 复核清单" in md
     assert "需要补查官方口径" in md
     assert "{'type': 'text'" not in md
@@ -800,10 +800,15 @@ async def test_topic_analysis_uses_brain_for_top_clusters() -> None:
     from media_ai.analyzer import build_topic_analysis
 
     class FakeBrain:
-        async def think(self, prompt: str, **kwargs: object) -> object:
+        def get_config(self) -> dict[str, str]:
+            return {"llm_endpoint": ""}
+
+        def get_llm(self) -> FakeBrain:
+            return self
+
+        async def complete(self, prompt: str, **kwargs: object) -> object:
             assert "热点簇 JSON" in prompt
-            assert kwargs["enable_thinking"] is False
-            return type("Resp", (), {"content": "# AI 选题分析报告\n\n## Top 3"})()
+            return type("Resp", (), {"text": "# AI 选题分析报告\n\n## Top 3"})()
 
     md, source = await build_topic_analysis(
         FakeBrain(),
@@ -819,7 +824,7 @@ async def test_topic_analysis_uses_brain_for_top_clusters() -> None:
         ],
     )
 
-    assert source == "brain"
+    assert source == "openakita_llm"
     assert "AI 选题分析报告" in md
 
 

@@ -29,7 +29,7 @@ from idea_dashscope_client import (
     TranscriptResult,
     TranscriptSegment,
 )
-from idea_models import TrendItem
+from idea_models import ResolvedSource, TrendItem
 from idea_research_inline.mdrm_adapter import HookRecord
 from idea_research_inline.vendor_client import (
     VendorError,
@@ -78,6 +78,28 @@ class FakeDashScope:
         )
 
 
+class FakePluginAPI:
+    def __init__(self, dashscope: FakeDashScope) -> None:
+        self.dashscope = dashscope
+
+    def get_config(self) -> dict[str, str]:
+        return {"llm_endpoint": ""}
+
+    def get_llm(self) -> FakePluginAPI:
+        return self
+
+    async def complete(self, *, prompt: str, system: str, **kwargs: Any) -> Any:
+        result = await self.dashscope.chat_completion(
+            user=prompt, system=system, **kwargs
+        )
+        text = (
+            json.dumps(result.parsed_json, ensure_ascii=False)
+            if result.parsed_json is not None
+            else result.content
+        )
+        return type("Completion", (), {"text": text, "model": result.model})()
+
+
 @dataclass
 class FakeRegistry:
     items: list[TrendItem] = field(default_factory=list)
@@ -102,6 +124,16 @@ class FakeRegistry:
             publish_at=int(time.time()) - 3600,
             fetched_at=int(time.time()),
         )
+
+    async def fetch_single_source(
+        self,
+        url: str,
+        *,
+        with_comments: bool = False,
+        prefer: str = "auto",
+    ) -> ResolvedSource | None:
+        item = await self.fetch_single_url(url, with_comments=with_comments)
+        return ResolvedSource(item=item) if item is not None else None
 
     async def fetch_for_radar(
         self, platforms: list[str], keywords: list[str], **kwargs: Any
@@ -189,6 +221,7 @@ def _build_ctx(
     registry: FakeRegistry | None = None,
     mdrm: FakeMdrm | None = None,
 ) -> pipeline.IdeaPipelineContext:
+    dashscope_client = dashscope or FakeDashScope()
     return pipeline.IdeaPipelineContext(
         task_id=task_id,
         mode=mode,
@@ -196,8 +229,9 @@ def _build_ctx(
         work_dir=work_dir,
         tm=tm,
         registry=registry or FakeRegistry(),
-        dashscope=dashscope or FakeDashScope(),
+        dashscope=dashscope_client,
         mdrm=mdrm or FakeMdrm(),
+        api=FakePluginAPI(dashscope_client),
         persona_name=persona,
         download_media_fn=lambda wd, url: {
             "video": (wd / "video.mp4"),
@@ -207,6 +241,31 @@ def _build_ctx(
             (out / f"f{i}.jpg") for i in range(3)
         ],
     )
+
+
+@pytest.mark.asyncio
+async def test_plugin_text_chat_normalizes_facade_failures(
+    tmp_path: Path, task_manager: IdeaTaskManager
+) -> None:
+    class _FailingAPI:
+        def get_config(self) -> dict[str, str]:
+            return {"llm_endpoint": "configured-model"}
+
+        def get_llm(self) -> _FailingAPI:
+            return self
+
+        async def complete(self, **_: Any) -> Any:
+            raise RuntimeError("plugin_llm_endpoint_unavailable")
+
+    ctx = _build_ctx(
+        tm=task_manager,
+        task_id="facade-failure",
+        work_dir=tmp_path / "wd",
+    )
+    ctx.api = _FailingAPI()
+
+    with pytest.raises(VendorError, match="plugin_llm_endpoint_unavailable"):
+        await pipeline._plugin_text_chat(ctx, user="prompt", system="system")
 
 
 # --------------------------------------------------------------------------- #
@@ -285,7 +344,7 @@ async def test_breakdown_url_degrades_when_asr_fails(
     ctx = _build_ctx(tm=tm, task_id=tid, work_dir=tmp_path / "wd", inp=inp, dashscope=ds)
     out = await pipeline.run_breakdown_url(ctx)
 
-    assert out["transcript"] is None
+    assert out["transcript"]["error_kind"] == "unavailable"
     assert out["structure"]["hook"]["type"] == "悬念"
     row = await tm.get_task(tid)
     assert row["status"] == "done"
@@ -496,7 +555,7 @@ async def test_run_compare_accounts_happy_path(
         ]
     )
 
-    class _NoVidsRegistry(FakeRegistry):
+    class _AccountRegistry(FakeRegistry):
         def resolve_collector(self, platform: str, *, engine_pref: str = "auto"):  # type: ignore[override]
             from idea_collectors import CollectorChoice
 
@@ -505,11 +564,20 @@ async def test_run_compare_accounts_happy_path(
         def _engine_a_for(self, platform: str):  # type: ignore[override]
             class _Stub:
                 async def fetch_user(self, url: str, limit: int):  # noqa: A002 — local stub
-                    return []
+                    return [
+                        TrendItem(
+                            id=f"video-{url}",
+                            platform="bilibili",
+                            external_id=f"external-{url}",
+                            external_url=url,
+                            title="Account sample",
+                            fetched_at=int(time.time()),
+                        )
+                    ]
 
             return _Stub()
 
-    reg = _NoVidsRegistry()
+    reg = _AccountRegistry()
     ctx = _build_ctx(
         tm=tm,
         task_id=tid,
@@ -580,12 +648,20 @@ async def test_run_script_remix_returns_variants(
                 content="{}",
                 model="qwen-max",
                 parsed_json={
-                    "variants": [
-                        {"title": "v1", "hook_line": "前 3s"},
-                        {"title": "v2", "hook_line": "前 3s2"},
-                    ]
+                    "title": "v1",
+                    "hook_line": "前 3s",
+                    "body_outline": "三段式",
                 },
-            )
+            ),
+            ChatResult(
+                content="{}",
+                model="qwen-max",
+                parsed_json={
+                    "title": "v2",
+                    "hook_line": "前 3s2",
+                    "body_outline": "三段式变体",
+                },
+            ),
         ]
     )
     ctx = _build_ctx(
@@ -623,7 +699,15 @@ async def test_run_script_remix_continues_when_mdrm_search_fails(
 
     ds = FakeDashScope(
         chat_responses=[
-            ChatResult(content="{}", model="qwen-max", parsed_json={"variants": [{"title": "v"}]}),
+            ChatResult(
+                content="{}",
+                model="qwen-max",
+                parsed_json={
+                    "title": "v",
+                    "hook_line": "开场",
+                    "body_outline": "正文",
+                },
+            ),
         ]
     )
     ctx = _build_ctx(

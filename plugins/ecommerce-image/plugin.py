@@ -481,28 +481,21 @@ class Plugin(PluginBase):
         self._broadcast_update(task_id, "succeeded")
 
     def _get_brain(self) -> Any:
-        if self._brain:
-            return self._brain
-        try:
-            self._brain = self._api.get_brain()
-        except Exception:
-            pass
-        return self._brain
+        return self._api
 
     async def _call_brain(
         self, brain: Any, user_msg: str, system: str, max_tokens: int = 2048
     ) -> str:
-        from ecom_execution import _extract_text
+        from openakita.plugins.llm_support import complete_text
 
-        if hasattr(brain, "think_lightweight"):
-            result = await brain.think_lightweight(
-                prompt=user_msg, system=system, max_tokens=max_tokens
-            )
-        elif hasattr(brain, "think"):
-            result = await brain.think(prompt=user_msg, system=system)
-        else:
-            raise HTTPException(500, "Brain has no think method")
-        text = _extract_text(result).strip()
+        result = await complete_text(
+            brain,
+            endpoint=str(brain.get_config().get("llm_endpoint") or ""),
+            prompt=user_msg,
+            system=system,
+            max_tokens=max_tokens,
+        )
+        text = str(result.text or "").strip()
         if not text:
             raise HTTPException(500, "LLM 返回了空结果")
         return text

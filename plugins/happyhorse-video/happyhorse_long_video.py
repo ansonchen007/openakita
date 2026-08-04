@@ -123,21 +123,16 @@ async def decompose_storyboard(
     user_msg = f"## 用户故事\n{story}\n\n请生成 {segment_count} 段分镜脚本。"
 
     try:
-        if hasattr(brain, "think"):
-            result = await brain.think(prompt=user_msg, system=system)
-            text = getattr(result, "content", "") or (
-                result.get("content", "") if isinstance(result, dict) else str(result)
-            )
-        elif hasattr(brain, "chat"):
-            result = await brain.chat(
-                messages=[
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": user_msg},
-                ]
-            )
-            text = result.get("content", "") if isinstance(result, dict) else str(result)
-        else:
-            return {"error": "No LLM available"}
+        from openakita.plugins.llm_support import complete_text
+
+        result = await complete_text(
+            brain,
+            endpoint=str(brain.get_config().get("llm_endpoint") or ""),
+            prompt=user_msg,
+            system=system,
+            max_tokens=4096,
+        )
+        text = str(result.text or "")
 
         parse_errors: list[str] = []
         parsed = parse_llm_json_object(text, errors=parse_errors)

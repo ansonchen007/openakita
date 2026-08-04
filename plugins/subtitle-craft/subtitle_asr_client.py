@@ -1,13 +1,11 @@
-"""DashScope client wrappers for subtitle-craft.
+"""Subtitle Craft ASR plus OpenAkita-hosted text processing.
 
 Three vendor surfaces, each as its own method on ``SubtitleAsrClient``:
 
 - ``transcribe()`` — Paraformer-v2 word-level ASR (P0-1, P0-2, P0-3, P0-4,
   P0-5, P0-15 + word_normalize).
-- ``translate_batch()`` — Qwen-MT chunked translation (P0-6, P0-7, P1-5,
-  P1-6).
-- ``identify_characters()`` — Qwen-VL speaker → character name mapping
-  (P1-12 fallback rules; CutClaw prompt translated to Chinese).
+- ``translate_batch()`` — Plugin LLM chunked translation.
+- ``identify_characters()`` — Plugin LLM speaker → character name mapping.
 
 Architectural rules baked in (red-line guardrails):
 
@@ -42,18 +40,10 @@ DASHSCOPE_BASE_URL = "https://dashscope.aliyuncs.com"
 
 PARAFORMER_SUBMIT_PATH = "/api/v1/services/audio/asr/transcription"
 PARAFORMER_TASK_PATH_TPL = "/api/v1/tasks/{task_id}"
-QWEN_OPENAI_PATH = "/compatible-mode/v1/chat/completions"
-
 PARAFORMER_MODEL = "paraformer-v2"
 QWEN_MT_DEFAULT_MODEL = "qwen-mt-flash"
 QWEN_VL_DEFAULT_MODEL = "qwen-vl-max"
 QWEN_PLUS_DEFAULT_MODEL = "qwen-plus"
-# Models that reliably honor OpenAI-compatible JSON mode on DashScope (v1.1).
-# Lesser models (qwen-mt, qwen-vl) silently ignore response_format.
-QWEN_PLUS_JSON_MODE_WHITELIST: frozenset[str] = frozenset(
-    {"qwen-plus", "qwen-plus-2025-09-11", "qwen-max"}
-)
-
 _TERMINAL_STATES = frozenset({"SUCCEEDED", "FAILED", "CANCELED", "UNKNOWN"})
 
 # Per VALIDATION.md §3: 8192 doc cap; 6000 token safe headroom; ~0.7 token/char
@@ -190,11 +180,25 @@ class SubtitleAsrClient(BaseVendorClient):
         timeout: float = 120.0,
         poll_interval: float = 3.0,
         poll_max_seconds: float = 900.0,
+        plugin_api: Any = None,
     ) -> None:
         super().__init__(base_url=base_url, timeout=timeout)
         self._api_key = (api_key or "").strip()
         self.poll_interval = max(1.0, float(poll_interval))
         self.poll_max_seconds = max(30.0, float(poll_max_seconds))
+        self._plugin_api = plugin_api
+
+    async def _plugin_text(self, *, prompt: str, system: str = "", **kwargs: Any) -> str:
+        from openakita.plugins.llm_support import complete_text
+
+        result = await complete_text(
+            self._plugin_api,
+            endpoint=str(self._plugin_api.get_config().get("llm_endpoint") or ""),
+            prompt=prompt,
+            system=system,
+            **kwargs,
+        )
+        return str(result.text or "")
 
     # -- subclass contract ------------------------------------------------
 
@@ -480,28 +484,15 @@ class SubtitleAsrClient(BaseVendorClient):
         return out
 
     async def _translate_one(self, text: str, *, src: str, tgt: str, model: str) -> str:
-        body = {
-            "model": model,
-            "messages": [{"role": "user", "content": text}],
-            "translation_options": {
-                "source_lang": src,
-                "target_lang": tgt,
-            },
-        }
         try:
-            payload = await self.request("POST", QWEN_OPENAI_PATH, json_body=body, timeout=60.0)
-        except VendorError as exc:
-            # Surface as AsrError so caller can decide single-piece fallback.
-            raise _from_vendor_error(exc, f"Qwen-MT {model} call failed") from exc
-
-        choices = payload.get("choices") or []
-        if not choices:
-            raise AsrError(
-                f"Qwen-MT {model} returned no choices[]",
-                kind="unknown",
-                body=payload,
+            content = await self._plugin_text(
+                prompt=text,
+                system=f"Translate from {src} to {tgt}. Return only the translation.",
+                temperature=0.1,
+                max_tokens=4000,
             )
-        content = ((choices[0].get("message") or {}).get("content")) or ""
+        except Exception as exc:
+            raise AsrError(f"OpenAkita translation failed: {exc}", kind="unknown") from exc
         return _strip_prose_preamble(content).strip()
 
     # -- 3. Qwen-VL character identification (P1-12) ---------------------
@@ -542,21 +533,16 @@ class SubtitleAsrClient(BaseVendorClient):
             "若信息不足以判断，返回空对象 {}。"
         )
 
-        body = {
-            "model": model,
-            "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0.3,
-        }
         try:
-            payload = await self.request("POST", QWEN_OPENAI_PATH, json_body=body, timeout=60.0)
-        except VendorError as exc:
-            logger.warning("identify_characters: vendor failed (%s); returning {}", exc)
+            content = await self._plugin_text(
+                prompt=prompt,
+                system="只返回合法 JSON 对象，不要输出 Markdown 围栏或解释。",
+                temperature=0.3,
+                max_tokens=1000,
+            )
+        except Exception as exc:
+            logger.warning("identify_characters: Plugin LLM failed (%s); returning {}", exc)
             return {}
-
-        choices = payload.get("choices") or []
-        if not choices:
-            return {}
-        content = ((choices[0].get("message") or {}).get("content")) or ""
 
         from subtitle_craft_inline.llm_json_parser import parse_llm_json
 
@@ -586,15 +572,13 @@ class SubtitleAsrClient(BaseVendorClient):
     ) -> str | None:
         """Generic Qwen chat-completion call (used by ``hook_picker``).
 
-        Reuses ``BaseVendorClient.request`` so we keep the inherited retry /
-        cancel / moderation contract — **no new openai SDK dependency**
-        (red line #1).  Returns the raw assistant content string, or
-        ``None`` if the response carried no choices.
+        Routes the prompt through OpenAkita's Plugin LLM facade. Returns the
+        raw assistant content string, or ``None`` for an empty completion.
 
         Args:
             messages: OpenAI-style ``[{role, content}, ...]`` chat history.
-            model: Qwen model id; only models in
-                ``QWEN_PLUS_JSON_MODE_WHITELIST`` enable strict JSON mode.
+            model: Retained for call compatibility; host model selection is
+                controlled by ``llm_endpoint``.
             temperature: Sampling temperature (CutClaw uses ``0.3``).
             max_tokens: Max output tokens; hook prompts return ~150 tokens
                 so 2000 is generous.
@@ -608,24 +592,20 @@ class SubtitleAsrClient(BaseVendorClient):
                 ``VendorError``) so the pipeline can write directly to
                 ``tasks.error_kind`` without remapping.
         """
-        body: dict[str, Any] = {
-            "model": model,
-            "messages": messages,
-            "temperature": temperature,
-            "max_tokens": max_tokens,
-        }
-        if response_format_json and model in QWEN_PLUS_JSON_MODE_WHITELIST:
-            body["response_format"] = {"type": "json_object"}
         try:
-            payload = await self.request("POST", QWEN_OPENAI_PATH, json_body=body, timeout=timeout)
-        except VendorError as exc:
-            raise _from_vendor_error(exc, f"Qwen-Plus {model} call failed") from exc
-
-        choices = payload.get("choices") or []
-        if not choices:
-            return None
-        content = ((choices[0].get("message") or {}).get("content")) or None
-        return content
+            system = "\n".join(m["content"] for m in messages if m.get("role") == "system")
+            prompt = "\n".join(m["content"] for m in messages if m.get("role") != "system")
+            if response_format_json:
+                system += "\n只返回合法 JSON，不要输出额外文本。"
+            return await self._plugin_text(
+                prompt=prompt,
+                system=system,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                timeout=timeout,
+            )
+        except Exception as exc:
+            raise AsrError(f"OpenAkita text generation failed: {exc}", kind="unknown") from exc
 
 
 # ---------------------------------------------------------------------------

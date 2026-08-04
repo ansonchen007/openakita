@@ -111,38 +111,20 @@ async def optimize_prompt(
         mode_formula=mode_formula,
     )
 
-    if hasattr(brain, "think_lightweight"):
-        try:
-            result = await brain.think_lightweight(prompt=user_msg, system=OPTIMIZE_SYSTEM_PROMPT)
-            text = getattr(result, "content", "") or (
-                result.get("content", "") if isinstance(result, dict) else str(result)
-            )
-            if text and text.strip():
-                return text
-        except Exception as e:  # noqa: BLE001
-            logger.warning("think_lightweight failed, falling back to think: %s", e)
-
     try:
-        if hasattr(brain, "think"):
-            result = await brain.think(prompt=user_msg, system=OPTIMIZE_SYSTEM_PROMPT)
-            text = getattr(result, "content", "") or (
-                result.get("content", "") if isinstance(result, dict) else str(result)
-            )
-            if not text or not text.strip():
-                raise PromptOptimizeError("LLM 返回了空内容")
-            return text
-        if hasattr(brain, "chat"):
-            result = await brain.chat(
-                messages=[
-                    {"role": "system", "content": OPTIMIZE_SYSTEM_PROMPT},
-                    {"role": "user", "content": user_msg},
-                ]
-            )
-            text = result.get("content", "") if isinstance(result, dict) else str(result)
-            if not text.strip():
-                raise PromptOptimizeError("LLM 返回了空内容")
-            return text
-        raise PromptOptimizeError("Brain 对象没有 think() 或 chat() 方法")
+        from openakita.plugins.llm_support import complete_text
+
+        result = await complete_text(
+            brain,
+            endpoint=str(brain.get_config().get("llm_endpoint") or ""),
+            prompt=user_msg,
+            system=OPTIMIZE_SYSTEM_PROMPT,
+            max_tokens=2048,
+        )
+        text = str(result.text or "")
+        if not text.strip():
+            raise PromptOptimizeError("LLM 返回了空内容")
+        return text
     except PromptOptimizeError:
         raise
     except Exception as e:  # noqa: BLE001

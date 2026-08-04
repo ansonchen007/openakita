@@ -36,9 +36,15 @@ class _FakeBrainThink:
         self._content = content
         self.calls: list[dict] = []
 
-    async def think(self, *, prompt: str, system: str) -> dict:
+    def get_config(self) -> dict[str, str]:
+        return {"llm_endpoint": ""}
+
+    def get_llm(self):
+        return self
+
+    async def complete(self, *, prompt: str, system: str, **kwargs: Any) -> Any:
         self.calls.append({"prompt": prompt, "system": system})
-        return {"content": self._content}
+        return type("Completion", (), {"text": self._content})()
 
 
 class _FakeBrainChat:
@@ -47,8 +53,14 @@ class _FakeBrainChat:
     def __init__(self, content: str) -> None:
         self._content = content
 
-    async def chat(self, *, messages: list[dict]) -> dict:
-        return {"content": self._content}
+    def get_config(self) -> dict[str, str]:
+        return {"llm_endpoint": ""}
+
+    def get_llm(self):
+        return self
+
+    async def complete(self, **kwargs: Any) -> Any:
+        return type("Completion", (), {"text": self._content})()
 
 
 @pytest.mark.asyncio
@@ -101,7 +113,7 @@ async def test_decompose_storyboard_uses_chat_fallback() -> None:
 @pytest.mark.asyncio
 async def test_decompose_storyboard_no_llm_returns_error() -> None:
     out = await decompose_storyboard(brain=object(), story="x")
-    assert out == {"error": "No LLM available"}
+    assert "error" in out
 
 
 # ── ChainGenerator + run_parallel (B4/N1.1) ───────────────────────────

@@ -110,6 +110,22 @@ STYLE_MODIFIERS = {
 # ---------------------------------------------------------------------------
 
 
+async def _complete(api: Any, *, prompt: str, system: str, max_tokens: int = 2048) -> str:
+    from openakita.plugins.llm_support import complete_text
+
+    result = await complete_text(
+        api,
+        endpoint=str(api.get_config().get("llm_endpoint") or ""),
+        prompt=prompt,
+        system=system,
+        max_tokens=max_tokens,
+    )
+    text = str(result.text or "").strip()
+    if not text:
+        raise RuntimeError("plugin_llm_empty_response")
+    return text
+
+
 async def optimize_prompt(
     brain: Any,
     prompt: str,
@@ -134,29 +150,7 @@ async def optimize_prompt(
     if prefix:
         user_msg = f"[参考风格关键词: {prefix.rstrip('，')}]\n\n用户原始描述：{prompt}"
 
-    try:
-        if hasattr(brain, "think_lightweight"):
-            result = await brain.think_lightweight(prompt=user_msg, system=system)
-        elif hasattr(brain, "think"):
-            result = await brain.think(prompt=user_msg, system=system)
-        else:
-            logger.warning("Brain has no think method, returning enhanced prompt")
-            return f"{prefix}{prompt}" if prefix else prompt
-
-        if isinstance(result, str):
-            optimized = result.strip()
-        elif isinstance(result, dict):
-            optimized = result.get("content", "").strip()
-        else:
-            optimized = getattr(result, "content", "").strip() or str(result).strip()
-
-        if not optimized:
-            return f"{prefix}{prompt}" if prefix else prompt
-        return optimized
-
-    except Exception as e:
-        logger.warning("Prompt optimization failed: %s", e)
-        return f"{prefix}{prompt}" if prefix else prompt
+    return await _complete(brain, prompt=user_msg, system=system)
 
 
 async def enhance_for_batch(
@@ -172,19 +166,9 @@ async def enhance_for_batch(
         f"每个变体保持核心主题但改变：角度、光影、配色、场景、构图中的一两项。\n"
         f"输出格式：每行一个提示词，不要编号，不要解释。"
     )
-    try:
-        if hasattr(brain, "think_lightweight"):
-            result = await brain.think_lightweight(prompt=base_prompt, system=system)
-        else:
-            result = await brain.think(prompt=base_prompt, system=system)
-
-        text = result if isinstance(result, str) else getattr(result, "content", str(result))
-        lines = [l.strip() for l in text.strip().split("\n") if l.strip()]
-        return (
-            lines[:count] if len(lines) >= count else lines + [base_prompt] * (count - len(lines))
-        )
-    except Exception:
-        return [base_prompt] * count
+    text = await _complete(brain, prompt=base_prompt, system=system)
+    lines = [line.strip() for line in text.split("\n") if line.strip()]
+    return lines[:count]
 
 
 # ===========================================================================
@@ -364,10 +348,6 @@ async def optimize_video_prompt(
     if not user_prompt or not user_prompt.strip():
         return user_prompt or ""
 
-    if brain is None:
-        logger.info("optimize_video_prompt: brain unavailable, returning original prompt")
-        return user_prompt
-
     level_instruction = VIDEO_LEVEL_INSTRUCTIONS.get(
         level, VIDEO_LEVEL_INSTRUCTIONS["professional"]
     )
@@ -381,25 +361,12 @@ async def optimize_video_prompt(
         level_instruction=level_instruction,
     )
 
-    try:
-        if hasattr(brain, "think_lightweight"):
-            result = await brain.think_lightweight(
-                prompt=user_msg,
-                system=VIDEO_OPTIMIZE_SYSTEM_PROMPT,
-                max_tokens=4096,
-            )
-        elif hasattr(brain, "think"):
-            result = await brain.think(
-                prompt=user_msg,
-                system=VIDEO_OPTIMIZE_SYSTEM_PROMPT,
-            )
-        else:
-            return user_prompt
-        text = _extract_text(result).strip()
-        return text or user_prompt
-    except Exception as e:
-        logger.warning("optimize_video_prompt failed (%s); falling back to original prompt", e)
-        return user_prompt
+    return await _complete(
+        brain,
+        prompt=user_msg,
+        system=VIDEO_OPTIMIZE_SYSTEM_PROMPT,
+        max_tokens=4096,
+    )
 
 
 def get_prompt_guide(kind: str = "video") -> dict:

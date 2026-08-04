@@ -135,35 +135,20 @@ async def optimize_prompt(
         language_instruction=language_instruction,
     )
 
-    if hasattr(brain, "think_lightweight"):
-        try:
-            result = await brain.think_lightweight(prompt=user_msg, system=OPTIMIZE_SYSTEM_PROMPT)
-            text = _extract_text(result)
-            if text.strip():
-                return text
-        except Exception as e:
-            logger.warning("think_lightweight failed, falling back to think: %s", e)
-
     try:
-        if hasattr(brain, "think"):
-            result = await brain.think(prompt=user_msg, system=OPTIMIZE_SYSTEM_PROMPT)
-            text = _extract_text(result)
-            if not text.strip():
-                raise PromptOptimizeError("LLM 返回了空内容")
-            return text
-        elif hasattr(brain, "chat"):
-            result = await brain.chat(
-                messages=[
-                    {"role": "system", "content": OPTIMIZE_SYSTEM_PROMPT},
-                    {"role": "user", "content": user_msg},
-                ]
-            )
-            text = _extract_text(result)
-            if not text.strip():
-                raise PromptOptimizeError("LLM 返回了空内容")
-            return text
-        else:
-            raise PromptOptimizeError("Brain 对象没有 think() 或 chat() 方法")
+        from openakita.plugins.llm_support import complete_text
+
+        result = await complete_text(
+            brain,
+            endpoint=str(brain.get_config().get("llm_endpoint") or ""),
+            prompt=user_msg,
+            system=OPTIMIZE_SYSTEM_PROMPT,
+            max_tokens=2048,
+        )
+        text = str(result.text or "")
+        if not text.strip():
+            raise PromptOptimizeError("LLM 返回了空内容")
+        return text
     except PromptOptimizeError:
         raise
     except Exception as e:

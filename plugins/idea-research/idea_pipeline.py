@@ -28,14 +28,11 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import html
-import importlib.util
 import json
 import logging
-import os
 import re
 import shutil
 import subprocess
-import sys
 import time
 import urllib.error
 import urllib.parse
@@ -47,8 +44,8 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from idea_collectors import CollectorRegistry
-from idea_engine_api import filter_items_by_keywords
 from idea_dashscope_client import DashScopeClient, faster_whisper_available
+from idea_engine_api import filter_items_by_keywords
 from idea_models import (
     PERSONAS_BY_NAME,
     PLUGIN_ID,
@@ -57,8 +54,8 @@ from idea_models import (
     TrendItem,
     estimate_cost,
     format_script_remix_markdown,
-    normalize_script_remix_variants,
     hint_for,
+    normalize_script_remix_variants,
 )
 from idea_research_inline.mdrm_adapter import HookRecord, MdrmAdapter
 from idea_research_inline.parallel_executor import run_with_semaphore
@@ -293,6 +290,7 @@ class IdeaPipelineContext:
     registry: CollectorRegistry
     dashscope: DashScopeClient
     mdrm: MdrmAdapter
+    api: Any = None
     persona_name: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
     source_info: dict[str, Any] = field(default_factory=dict)
@@ -325,6 +323,36 @@ class IdeaPipelineContext:
             encoding="utf-8",
         )
         return path
+
+
+async def _plugin_text_chat(ctx: IdeaPipelineContext, **kwargs: Any) -> Any:
+    """Return a DashScope-compatible result backed by Plugin LLM."""
+    from idea_dashscope_client import ChatResult, parse_llm_json
+
+    from openakita.plugins.llm_support import complete_text
+
+    if ctx.api is None:
+        raise VendorError("plugin_llm_unavailable")
+    try:
+        completion = await complete_text(
+            ctx.api,
+            endpoint=str(ctx.api.get_config().get("llm_endpoint") or ""),
+            prompt=str(kwargs.get("user") or ""),
+            system=str(kwargs.get("system") or ""),
+            temperature=float(kwargs.get("temperature") or 0.5),
+            max_tokens=int(kwargs.get("max_tokens") or 2048),
+        )
+    except VendorError:
+        raise
+    except Exception as exc:
+        raise VendorError(f"OpenAkita Plugin LLM failed: {exc}") from exc
+    text = str(completion.text or "")
+    parsed = (
+        parse_llm_json(text, expected_keys=kwargs.get("expected_keys"))
+        if kwargs.get("response_json")
+        else None
+    )
+    return ChatResult(text, str(completion.model), parsed, {}, None)
 
 
 # --------------------------------------------------------------------------- #
@@ -1171,7 +1199,7 @@ async def structure_analyze(ctx: IdeaPipelineContext) -> dict[str, Any]:
         frames_descriptions_json=json.dumps(frames_descriptions, ensure_ascii=False),
     )
     persona = PERSONAS_BY_NAME.get(ctx.persona_name) if ctx.persona_name else None
-    chat = await ctx.dashscope.chat_completion(
+    chat = await _plugin_text_chat(ctx,
         system=(persona.system_prompt if persona else ""),
         user=user,
         model="qwen-max",
@@ -1209,7 +1237,7 @@ async def comment_summary(
             return ctx.comments_summary
         return None
     try:
-        chat = await ctx.dashscope.chat_completion(
+        chat = await _plugin_text_chat(ctx,
             system="",
             user=PROMPTS["COMMENT_SUMMARY_PROMPT"].format(
                 comments_json=json.dumps(comments[:100], ensure_ascii=False)
@@ -1251,7 +1279,7 @@ async def finalize(ctx: IdeaPipelineContext) -> dict[str, Any]:
     }
     if ctx.structure:
         try:
-            takeaways_chat = await ctx.dashscope.chat_completion(
+            takeaways_chat = await _plugin_text_chat(ctx,
                 system="",
                 user=PROMPTS["PERSONA_TAKEAWAYS_PROMPT"].format(
                     persona=persona,
@@ -1605,7 +1633,7 @@ async def run_compare_accounts(ctx: IdeaPipelineContext) -> dict[str, Any]:
                         "bio": creator.get("bio"),
                     }
                 return account
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 return {
                     "url": url,
                     "error_kind": "timeout",
@@ -1636,7 +1664,7 @@ async def run_compare_accounts(ctx: IdeaPipelineContext) -> dict[str, Any]:
             err = VendorError(msg)
             err.error_kind = "format"
             raise err
-        chat = await asyncio.wait_for(ctx.dashscope.chat_completion(
+        chat = await asyncio.wait_for(_plugin_text_chat(ctx,
             system=(
                 "你是新媒体对标分析师。基于多账号近期视频列表，输出严格 JSON："
                 '{"common_traits": ["..."], "differentiators": [{"url": "...",'
@@ -1739,7 +1767,7 @@ async def run_script_remix(
                 avoid_titles_json=json.dumps(prior_titles, ensure_ascii=False),
                 **remix_common,
             )
-            chat = await ctx.dashscope.chat_completion(
+            chat = await _plugin_text_chat(ctx,
                 system=system,
                 user=user,
                 model="qwen-max",

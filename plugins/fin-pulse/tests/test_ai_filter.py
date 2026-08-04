@@ -12,6 +12,7 @@ import json
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -27,7 +28,6 @@ from finpulse_ai.filter import (
 )
 from finpulse_ai.prompts import (
     SCORE_SYSTEM_EN,
-    SCORE_SYSTEM_ZH,
     SCORE_USER_TEMPLATE,
     TAG_EXTRACTION_SYSTEM_ZH,
     build_score_items_block,
@@ -71,6 +71,18 @@ class _StubBrain:
             raise self.exceptions[idx]
         body = self.replies.pop(0) if self.replies else "{}"
         return _BrainResponse(content=body)
+
+    def get_config(self) -> dict[str, str]:
+        return {"llm_endpoint": ""}
+
+    def get_llm(self) -> _StubBrain:
+        return self
+
+    async def complete(self, *, prompt: str, system: str, **kw: Any) -> Any:
+        response = await self.chat(
+            messages=[{"role": "user", "content": prompt}], system=system, **kw
+        )
+        return SimpleNamespace(text=response.content)
 
 
 # ── interests_digest ───────────────────────────────────────────────────

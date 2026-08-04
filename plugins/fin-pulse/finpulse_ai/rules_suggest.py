@@ -84,9 +84,9 @@ async def suggest_rules_text(
 ) -> dict[str, Any]:
     """Return ``{"ok", "rules_text", "source"}``.
 
-    ``source`` is ``"brain"`` when the Brain produced the text and
-    ``"fallback"`` when we degraded to the local heuristic. Callers can
-    surface this so the user knows whether to trust the draft.
+    ``source`` is ``"openakita_llm"`` when the configured OpenAkita model
+    produced the text. Facade failures are returned as errors; no private
+    provider or heuristic text fallback is used.
     """
 
     desc = (description or "").strip()
@@ -98,49 +98,32 @@ async def suggest_rules_text(
     if len(existing_text) > _MAX_OUT_CHARS:
         existing_text = existing_text[:_MAX_OUT_CHARS]
 
-    if brain is None:
-        text = _fallback_rules(desc)
-        return {
-            "ok": bool(text),
-            "rules_text": text,
-            "source": "fallback",
-            "message": "brain.access not granted — returning heuristic draft",
-        }
-
     system = RULES_SUGGEST_SYSTEM_ZH if lang == "zh" else RULES_SUGGEST_SYSTEM_EN
     user = RULES_SUGGEST_USER_TEMPLATE.format(
         description=desc, existing=existing_text or "(无 / none)"
     )
     try:
-        response = await brain.chat(
-            messages=[{"role": "user", "content": user}],
+        from openakita.plugins.llm_support import complete_text
+
+        response = await complete_text(
+            brain,
+            endpoint=str(brain.get_config().get("llm_endpoint") or ""),
+            prompt=user,
             system=system,
             temperature=temperature,
             max_tokens=max_tokens,
         )
     except Exception as exc:  # noqa: BLE001 — degrade gracefully
-        logger.warning("suggest_rules_text brain.chat failed: %s", exc)
-        text = _fallback_rules(desc)
-        return {
-            "ok": bool(text),
-            "rules_text": text,
-            "source": "fallback",
-            "message": f"brain error: {exc}",
-        }
+        logger.warning("suggest_rules_text Plugin LLM failed: %s", exc)
+        return {"ok": False, "error": str(exc), "source": "openakita_llm"}
 
-    raw = _brain_content(response)
+    raw = str(response.text or "")
     cleaned = _strip_fence(raw)
     if not cleaned:
-        text = _fallback_rules(desc)
-        return {
-            "ok": bool(text),
-            "rules_text": text,
-            "source": "fallback",
-            "message": "brain returned empty payload",
-        }
+        return {"ok": False, "error": "plugin_llm_empty_response"}
     if len(cleaned) > _MAX_OUT_CHARS:
         cleaned = cleaned[:_MAX_OUT_CHARS]
-    return {"ok": True, "rules_text": cleaned, "source": "brain"}
+    return {"ok": True, "rules_text": cleaned, "source": "openakita_llm"}
 
 
 __all__ = ["suggest_rules_text"]

@@ -18,7 +18,7 @@ import json
 import logging
 import re
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from string import Template
 from typing import TYPE_CHECKING, Any
 
@@ -26,7 +26,7 @@ from ..audit import maybe_persist_debug_snapshot, record_llm_call
 from ..consent import ConsentDenied, check_consent
 from ..desensitizer import SensitivityLevel, desensitize
 from ..models import LLMOutcome
-from ..router import FinanceAIRouter, HostBrainResponder, LLMResponse, MockLLMResponder
+from ..router import FinanceAIRouter, HostBrainResponder, LLMResponse
 
 if TYPE_CHECKING:
     from ...routes import FinanceAutoService
@@ -51,11 +51,10 @@ def resolve_router(
     """
     if router is not None:
         return router
-    getter = getattr(service, "get_host_brain", None)
-    brain = getter() if callable(getter) else None
-    if brain is not None:
-        return FinanceAIRouter(responder=HostBrainResponder(brain))
-    return FinanceAIRouter(responder=MockLLMResponder())
+    api = service.plugin_api
+    if api is None or api.get_llm() is None:
+        raise RuntimeError("plugin_llm_unavailable: OpenAkita text model is unavailable")
+    return FinanceAIRouter(responder=HostBrainResponder(api))
 
 
 @dataclass

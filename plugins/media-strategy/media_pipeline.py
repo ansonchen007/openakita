@@ -32,10 +32,7 @@ class MediaPipeline:
         self.output_dir = Path(output_dir)
 
     def _brain(self) -> Any:
-        try:
-            return self.api.get_brain()
-        except Exception:
-            return None
+        return self.api
 
     async def _package_disabled(self, package_id: str) -> bool:
         if not package_id:
