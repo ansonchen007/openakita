@@ -1,6 +1,10 @@
+import asyncio
+from datetime import datetime, timedelta
+
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from openakita.api.routes import sessions as sessions_routes
 from openakita.api.routes.sessions import router
 from openakita.sessions import SessionManager
 
@@ -204,13 +208,201 @@ def test_session_list_returns_conversation_ui_state(tmp_path):
     assert body["sessions"][0]["orgNodeId"] == "pm"
 
 
-def test_update_session_ui_state_persists_conversation_selection(tmp_path):
+def test_session_list_pages_catalog_without_hydrating_histories(tmp_path):
+    storage_path = tmp_path / "sessions"
+    manager = SessionManager(storage_path=storage_path)
+    for index in range(5):
+        session = manager.get_session("desktop", f"conv-{index}", "desktop_user")
+        session.add_message("user", f"catalog message {index}")
+    manager.persist()
+
+    reloaded = SessionManager(storage_path=storage_path)
+    app = FastAPI()
+    app.include_router(router)
+    app.state.session_manager = reloaded
+    client = TestClient(app)
+
+    first = client.get("/api/sessions", params={"limit": 2, "offset": 0}).json()
+    second = client.get("/api/sessions", params={"limit": 2, "offset": 2}).json()
+
+    assert first["ready"] is True
+    assert first["total"] == 5
+    assert first["has_more"] is True
+    assert first["next_offset"] == 2
+    assert len(first["sessions"]) == 2
+    assert second["next_offset"] == 4
+    assert len(second["sessions"]) == 2
+    assert {item["id"] for item in first["sessions"]}.isdisjoint(
+        {item["id"] for item in second["sessions"]}
+    )
+    assert reloaded._sessions == {}
+
+
+def test_session_list_uses_sqlite_page_query_instead_of_eager_summary_list(tmp_path, monkeypatch):
+    storage_path = tmp_path / "sessions"
+    manager = SessionManager(storage_path=storage_path)
+    for index in range(5):
+        session = manager.get_session("desktop", f"conv-{index}", "desktop_user")
+        session.add_message("user", f"catalog message {index}")
+    manager.persist()
+
+    reloaded = SessionManager(storage_path=storage_path)
+    monkeypatch.setattr(
+        reloaded,
+        "list_session_summaries",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("eager list used")),
+    )
+    app = FastAPI()
+    app.include_router(router)
+    app.state.session_manager = reloaded
+
+    body = TestClient(app).get("/api/sessions", params={"limit": 2}).json()
+
+    assert body["total"] == 5
+    assert len(body["sessions"]) == 2
+    assert reloaded._sessions == {}
+
+
+def test_session_list_merges_loaded_overrides_into_sqlite_pagination(tmp_path):
+    storage_path = tmp_path / "sessions"
+    manager = SessionManager(storage_path=storage_path)
+    for index in range(4):
+        session = manager.get_session("desktop", f"conv-{index}", "desktop_user")
+        session.add_message("user", f"catalog message {index}")
+        session.context.messages[-1]["timestamp"] = f"2026-01-0{index + 1}T00:00:00"
+    manager.persist()
+
+    reloaded = SessionManager(storage_path=storage_path)
+    promoted = reloaded.get_session("desktop", "conv-0", "desktop_user", create_if_missing=False)
+    assert promoted is not None
+    promoted.set_metadata("pinned", True)
+    new_session = reloaded.get_session("desktop", "new", "desktop_user")
+    new_session.add_message("user", "not persisted yet")
+
+    app = FastAPI()
+    app.include_router(router)
+    app.state.session_manager = reloaded
+    client = TestClient(app)
+
+    first = client.get("/api/sessions", params={"limit": 2, "offset": 0}).json()
+    second = client.get("/api/sessions", params={"limit": 2, "offset": 2}).json()
+
+    assert first["total"] == 5
+    assert first["sessions"][0]["id"] == "conv-0"
+    assert first["sessions"][0]["pinned"] is True
+    assert {item["id"] for item in first["sessions"]}.isdisjoint(
+        {item["id"] for item in second["sessions"]}
+    )
+
+
+def test_session_list_sqlite_filters_search_and_org_conversations(tmp_path):
+    storage_path = tmp_path / "sessions"
+    manager = SessionManager(storage_path=storage_path)
+    matching = manager.get_session("desktop", "matching", "desktop_user")
+    matching.add_message("user", "Unique MixedCase Phrase 中文会话")
+    unrelated = manager.get_session("desktop", "other", "desktop_user")
+    unrelated.add_message("user", "unrelated")
+    org_session = manager.get_session("desktop", "org_hidden", "desktop_user")
+    org_session.add_message("user", "Unique MixedCase Phrase")
+    manager.persist()
+
+    reloaded = SessionManager(storage_path=storage_path)
+    app = FastAPI()
+    app.include_router(router)
+    app.state.session_manager = reloaded
+
+    body = TestClient(app).get("/api/sessions", params={"q": "mixedcase phrase"}).json()
+    chinese = TestClient(app).get("/api/sessions", params={"q": "中文会"}).json()
+    short_query = TestClient(app).get("/api/sessions", params={"q": "中文"}).json()
+
+    assert body["total"] == 1
+    assert [item["id"] for item in body["sessions"]] == ["matching"]
+    assert [item["id"] for item in chinese["sessions"]] == ["matching"]
+    assert [item["id"] for item in short_query["sessions"]] == ["matching"]
+
+
+def test_session_list_includes_cold_catalog_entries_without_hydrating(tmp_path):
+    storage_path = tmp_path / "sessions"
+    manager = SessionManager(storage_path=storage_path)
+    session = manager.get_session("desktop", "cold", "desktop_user")
+    session.add_message("user", "old history")
+    session.last_active = datetime.now() - timedelta(days=90)
+    manager.persist()
+
+    reloaded = SessionManager(storage_path=storage_path)
+    app = FastAPI()
+    app.include_router(router)
+    app.state.session_manager = reloaded
+
+    body = TestClient(app).get("/api/sessions").json()
+
+    assert body["total"] == 1
+    assert body["sessions"][0]["id"] == "cold"
+    assert reloaded._sessions == {}
+
+
+def test_session_list_pages_put_old_pinned_sessions_first(tmp_path):
+    storage_path = tmp_path / "sessions"
+    manager = SessionManager(storage_path=storage_path)
+    old_pinned = manager.get_session("desktop", "old-pinned", "desktop_user")
+    old_pinned.add_message("user", "old but pinned")
+    old_pinned.context.messages[-1]["timestamp"] = "2020-01-01T00:00:00"
+    old_pinned.set_metadata("pinned", True)
+    recent = manager.get_session("desktop", "recent", "desktop_user")
+    recent.add_message("user", "recent")
+    recent.context.messages[-1]["timestamp"] = "2026-01-01T00:00:00"
+    manager.persist()
+
+    reloaded = SessionManager(storage_path=storage_path)
+    app = FastAPI()
+    app.include_router(router)
+    app.state.session_manager = reloaded
+
+    body = TestClient(app).get("/api/sessions", params={"limit": 1}).json()
+
+    assert body["sessions"][0]["id"] == "old-pinned"
+    assert body["sessions"][0]["pinned"] is True
+    assert reloaded._sessions == {}
+
+
+def test_session_list_searches_deferred_catalog_summaries(tmp_path):
+    storage_path = tmp_path / "sessions"
+    manager = SessionManager(storage_path=storage_path)
+    first = manager.get_session("desktop", "matching", "desktop_user")
+    first.add_message("user", "unique deferred phrase")
+    second = manager.get_session("desktop", "other", "desktop_user")
+    second.add_message("user", "unrelated")
+    manager.persist()
+
+    reloaded = SessionManager(storage_path=storage_path)
+    app = FastAPI()
+    app.include_router(router)
+    app.state.session_manager = reloaded
+
+    body = TestClient(app).get("/api/sessions", params={"q": "deferred phrase"}).json()
+
+    assert body["total"] == 1
+    assert [item["id"] for item in body["sessions"]] == ["matching"]
+    assert reloaded._sessions == {}
+
+
+def test_update_session_ui_state_persists_conversation_selection(tmp_path, monkeypatch):
     app = FastAPI()
     app.include_router(router)
     manager = SessionManager(storage_path=tmp_path)
     session = manager.get_session("desktop", "conv1", "desktop_user")
     session.add_message("user", "hello")
+    manager.persist()
     app.state.session_manager = manager
+
+    sessions_file = tmp_path / "sessions.json"
+    original_bytes = sessions_file.read_bytes()
+    original_mtime_ns = sessions_file.stat().st_mtime_ns
+
+    def unexpected_full_persist():
+        raise AssertionError("ui-state must not rewrite the full session document")
+
+    monkeypatch.setattr(manager, "persist", unexpected_full_persist)
 
     resp = TestClient(app).post(
         "/api/sessions/conv1/ui-state",
@@ -229,6 +421,46 @@ def test_update_session_ui_state_persists_conversation_selection(tmp_path):
         "orgId": "org_ops",
         "orgNodeId": "",
     }
+    summary = manager._catalog_store.get_entry(session.session_key).summary
+    assert summary["endpoint_id"] == "minimax"
+    assert summary["org_mode"] is True
+    assert summary["org_id"] == "org_ops"
+    assert sessions_file.read_bytes() == original_bytes
+    assert sessions_file.stat().st_mtime_ns == original_mtime_ns
+
+    reloaded = SessionManager(storage_path=tmp_path)
+    restored = reloaded.get_session("desktop", "conv1", "desktop_user", create_if_missing=False)
+    assert restored is not None
+    assert restored.context.messages[0]["content"] == "hello"
+    assert restored.get_metadata("selected_endpoint") == "minimax"
+    assert restored.get_metadata("ui_org_state") == {
+        "orgMode": True,
+        "orgId": "org_ops",
+        "orgNodeId": "",
+    }
+
+
+def test_create_session_dispatches_full_persistence_to_thread_pool(tmp_path, monkeypatch):
+    app = FastAPI()
+    app.include_router(router)
+    manager = SessionManager(storage_path=tmp_path)
+    app.state.session_manager = manager
+    dispatched = []
+    real_to_thread = asyncio.to_thread
+
+    async def recording_to_thread(func, *args, **kwargs):
+        dispatched.append(func)
+        return await real_to_thread(func, *args, **kwargs)
+
+    monkeypatch.setattr(sessions_routes.asyncio, "to_thread", recording_to_thread)
+
+    response = TestClient(app).post("/api/sessions", json={"conversationId": "threaded-save"})
+
+    assert response.status_code == 200
+    assert any(
+        getattr(func, "__self__", None) is manager and getattr(func, "__name__", "") == "persist"
+        for func in dispatched
+    )
 
 
 def test_update_session_ui_state_does_not_create_empty_session(tmp_path):

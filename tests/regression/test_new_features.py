@@ -151,7 +151,12 @@ class TestSessionManager:
 
         # 重新加载
         manager2 = SessionManager(storage_path=temp_storage)
-        assert len(manager2._sessions) >= 1
+        assert manager2._sessions == {}
+        restored = manager2.get_session(
+            "telegram", "chat_001", "user_001", create_if_missing=False
+        )
+        assert restored is not None
+        assert restored.context.messages[0]["content"] == "测试持久化"
 
         loaded = manager2.get_session("telegram", "chat_001", "user_001", create_if_missing=False)
         if loaded:

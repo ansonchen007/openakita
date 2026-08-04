@@ -12,6 +12,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import shutil
 import threading
 from datetime import datetime
 from pathlib import Path
@@ -19,6 +20,7 @@ from typing import Any
 
 from openakita.utils.atomic_io import atomic_json_write
 
+from .catalog import SessionCatalogIndexWriteError, SessionCatalogPage, SessionCatalogStore
 from .session import Session, SessionConfig, SessionState, is_duplicate_message
 from .user import UserManager
 
@@ -95,6 +97,7 @@ class SessionManager:
         self._sessions: dict[str, Session] = {}
         self._sessions_lock = threading.RLock()
         self._save_sessions_lock = threading.RLock()
+        self._catalog_store = SessionCatalogStore(self.storage_path / "sessions.json")
 
         # 通道注册表：记录每个 IM 通道最后已知的 chat_id / user_id
         # 不受 session 过期清理影响，用于定时任务等场景回溯通道目标
@@ -163,7 +166,7 @@ class SessionManager:
             should_backfill = _ff_enabled("session_backfill_on_start_v1")
         except Exception:
             should_backfill = False
-        if should_backfill and self._turn_loader is not None:
+        if should_backfill and self._turn_loader is not None and self._sessions:
             try:
                 import threading
 
@@ -198,6 +201,13 @@ class SessionManager:
         self._dirty = False
         if not self._save_sessions():
             self._dirty = True
+
+    def persist_summary(self, session: Session) -> bool:
+        """Persist a lightweight projection while leaving the history document untouched."""
+        return self._catalog_store.update_summary(
+            session.session_key,
+            self._catalog_summary_from_session(session),
+        )
 
     def _dispatch_hook_fire_and_forget(self, hook_name: str, **kwargs) -> None:
         """Dispatch a plugin hook from sync context (best-effort, non-blocking)."""
@@ -268,6 +278,33 @@ class SessionManager:
 
         if not self._turn_loader:
             return 0
+        # This explicit maintenance API keeps its historical eager semantics.
+        # Normal startup remains lazy; only callers that request a full
+        # backfill hydrate every currently visible catalog entry here.
+        for summary in self.list_session_summaries():
+            session_key = str(summary["session_key"])
+            with self._save_sessions_lock:
+                with self._sessions_lock:
+                    if session_key in self._sessions:
+                        continue
+                    entry = self._catalog_store.get_entry(session_key)
+                item = self._catalog_store.read_document(entry) if entry is not None else None
+            if item is None:
+                continue
+            try:
+                session = Session.from_dict(item)
+                self._apply_catalog_summary_to_session(session, entry.summary)
+                if session.state == SessionState.EXPIRED:
+                    session.mark_idle()
+                self._clean_large_content_in_messages(session.context.messages)
+            except Exception as exc:
+                logger.warning("Session backfill hydration failed for %s: %s", session_key, exc)
+                continue
+            with self._sessions_lock:
+                if session_key not in self._sessions:
+                    self._sessions[session_key] = session
+                    self._attach_manager(session)
+
         total_backfilled = 0
         for session in self._sessions.values():
             try:
@@ -426,11 +463,34 @@ class SessionManager:
             pass
 
     def _try_recover_session_from_disk(self, session_key: str) -> "Session | None":
-        """尝试从 sessions.json 中恢复指定 session_key 的会话。
+        """Load one indexed session document without parsing the full store.
 
         当会话已从内存中移除（如空闲清理、内存压力）但磁盘上仍有记录时，
         可以通过此方法恢复，避免创建空白会话导致上下文丢失。
         """
+        with self._save_sessions_lock:
+            entry = self._catalog_store.get_entry(session_key)
+            item = self._catalog_store.read_document(entry) if entry is not None else None
+        if entry is not None:
+            if item is None:
+                logger.warning("Failed to read indexed session document: %s", session_key)
+                return None
+            try:
+                session = Session.from_dict(item)
+                self._apply_catalog_summary_to_session(session, entry.summary)
+                if session.session_key != session_key or session.state == SessionState.CLOSED:
+                    return None
+                if session.state == SessionState.EXPIRED:
+                    session.mark_idle()
+                self._clean_large_content_in_messages(session.context.messages)
+                self._hydrate_from_store(session, max_turns=50)
+                return session
+            except Exception as exc:
+                logger.warning("Failed to hydrate indexed session %s: %s", session_key, exc)
+                return None
+
+        # Legacy fallback for a missing or invalid index. A successful startup
+        # migration normally makes this path unnecessary.
         sessions_file = self.storage_path / "sessions.json"
         data = self._try_load_sessions_file(sessions_file)
         if not data:
@@ -441,7 +501,9 @@ class SessionManager:
                 continue
             try:
                 session = Session.from_dict(item)
-                if session.session_key == session_key and not session.is_expired():
+                if session.session_key == session_key and session.state != SessionState.CLOSED:
+                    if session.state == SessionState.EXPIRED:
+                        session.mark_idle()
                     self._clean_large_content_in_messages(session.context.messages)
                     self._hydrate_from_store(session, max_turns=50)
                     return session
@@ -504,7 +566,19 @@ class SessionManager:
             for session in self._sessions.values():
                 if session.id == session_id:
                     return session
-        return None
+        entry = self._catalog_store.get_entry_by_session_id(session_id)
+        if entry is None:
+            return None
+        recovered = self._try_recover_session_from_disk(entry.session_key)
+        if recovered is None:
+            return None
+        with self._sessions_lock:
+            existing = self._sessions.get(entry.session_key)
+            if existing is not None:
+                return existing
+            self._sessions[entry.session_key] = recovered
+            self._attach_manager(recovered)
+        return recovered
 
     def _create_session(
         self,
@@ -549,13 +623,18 @@ class SessionManager:
     def close_session(self, session_key: str) -> bool:
         """关闭会话"""
         closed_session = None
+        removed = False
         with self._sessions_lock:
             if session_key in self._sessions:
                 closed_session = self._sessions[session_key]
                 closed_session.close()
                 del self._sessions[session_key]
-                self.mark_dirty()
-                logger.info(f"Closed session: {session_key}")
+                removed = True
+        if self._catalog_store.delete(session_key):
+            removed = True
+        if removed:
+            self.mark_dirty()
+            logger.info(f"Closed session: {session_key}")
         if closed_session is not None:
             self._dispatch_hook_fire_and_forget(
                 "on_session_end",
@@ -563,8 +642,7 @@ class SessionManager:
                 session_key=session_key,
                 reason="close",
             )
-            return True
-        return False
+        return removed
 
     def list_sessions(
         self,
@@ -580,56 +658,203 @@ class SessionManager:
             user_id: 过滤用户
             state: 过滤状态
         """
-        with self._sessions_lock:
-            sessions = list(self._sessions.values())
-
-        if channel:
-            sessions = [s for s in sessions if s.channel == channel]
-        if user_id:
-            sessions = [s for s in sessions if s.user_id == user_id]
-        if state:
-            sessions = [s for s in sessions if s.state == state]
+        summaries = self.list_session_summaries(channel=channel, user_id=user_id, state=state)
+        sessions: list[Session] = []
+        for summary in summaries:
+            session_key = str(summary["session_key"])
+            with self._sessions_lock:
+                existing = self._sessions.get(session_key)
+            if existing is not None:
+                sessions.append(existing)
+                continue
+            session = self._try_recover_session_from_disk(session_key)
+            if session is None:
+                continue
+            with self._sessions_lock:
+                existing = self._sessions.get(session_key)
+                if existing is None:
+                    self._sessions[session_key] = session
+                    self._attach_manager(session)
+                else:
+                    session = existing
+            sessions.append(session)
 
         return sessions
 
-    def get_session_count(self) -> dict[str, int]:
-        """获取会话统计"""
-        with self._sessions_lock:
-            all_sessions = list(self._sessions.values())
+    def list_session_summaries(
+        self,
+        channel: str | None = None,
+        user_id: str | None = None,
+        state: SessionState | None = None,
+    ) -> list[dict[str, Any]]:
+        """List all compact projections without hydrating message history.
 
-        stats = {
-            "total": len(all_sessions),
-            "active": 0,
-            "idle": 0,
-            "by_channel": {},
+        This eager compatibility API is reserved for maintenance callers. UI
+        requests should use :meth:`list_session_summaries_page` so SQLite can
+        apply filtering, ordering, and pagination before rows enter Python.
+        """
+        requested_state = state.value if state else None
+        catalog_page = self._catalog_store.list_summaries(
+            channel=channel,
+            user_id=user_id,
+            state=requested_state,
+        )
+        summaries = {
+            str(summary.get("session_key") or ""): summary for summary in catalog_page.summaries
+        }
+        loaded = self._loaded_summary_overrides()
+        for session_key, summary in loaded.items():
+            summaries.pop(session_key, None)
+            if self._catalog_store.summary_matches(
+                summary,
+                channel=channel,
+                user_id=user_id,
+                state=requested_state,
+            ):
+                summaries[session_key] = summary
+        return sorted(
+            summaries.values(),
+            key=self._catalog_store.summary_sort_key,
+            reverse=True,
+        )
+
+    def list_session_summaries_page(
+        self,
+        *,
+        channel: str | None = None,
+        user_id: str | None = None,
+        state: SessionState | None = None,
+        query: str = "",
+        exclude_org_chats: bool = False,
+        limit: int = 60,
+        offset: int = 0,
+    ) -> SessionCatalogPage:
+        """Return one ordered page while keeping the full catalog on disk."""
+        requested_state = state.value if state else None
+        loaded = self._loaded_summary_overrides()
+        loaded_keys = list(loaded)
+
+        # Replacing loaded rows can move at most len(loaded) records across the
+        # requested page boundary. Fetching that small prefix keeps offset
+        # pagination exact without materializing the complete SQLite catalog.
+        prefix_limit = max(0, int(offset)) + max(0, int(limit)) + len(loaded)
+        catalog_page = self._catalog_store.list_summaries(
+            channel=channel,
+            user_id=user_id,
+            state=requested_state,
+            query=query,
+            exclude_org_chats=exclude_org_chats,
+            limit=prefix_limit,
+            offset=0,
+        )
+        persisted_loaded = self._catalog_store.get_summaries(loaded_keys)
+
+        total = catalog_page.total
+        for session_key, summary in loaded.items():
+            old_summary = persisted_loaded.get(session_key)
+            if old_summary and self._catalog_store.summary_matches(
+                old_summary,
+                channel=channel,
+                user_id=user_id,
+                state=requested_state,
+                query=query,
+                exclude_org_chats=exclude_org_chats,
+            ):
+                total -= 1
+            if self._catalog_store.summary_matches(
+                summary,
+                channel=channel,
+                user_id=user_id,
+                state=requested_state,
+                query=query,
+                exclude_org_chats=exclude_org_chats,
+            ):
+                total += 1
+
+        candidates = [
+            summary
+            for summary in catalog_page.summaries
+            if str(summary.get("session_key") or "") not in loaded
+        ]
+        candidates.extend(
+            summary
+            for summary in loaded.values()
+            if self._catalog_store.summary_matches(
+                summary,
+                channel=channel,
+                user_id=user_id,
+                state=requested_state,
+                query=query,
+                exclude_org_chats=exclude_org_chats,
+            )
+        )
+        candidates.sort(key=self._catalog_store.summary_sort_key, reverse=True)
+        page_start = max(0, int(offset))
+        page_end = page_start + max(0, int(limit))
+        return SessionCatalogPage(candidates[page_start:page_end], max(0, total))
+
+    def _loaded_summary_overrides(self) -> dict[str, dict[str, Any]]:
+        with self._sessions_lock:
+            loaded_sessions = list(self._sessions.items())
+        return {
+            session_key: self._catalog_summary_from_session(session)
+            for session_key, session in loaded_sessions
         }
 
-        for session in all_sessions:
-            if session.state == SessionState.ACTIVE:
-                stats["active"] += 1
-            elif session.state == SessionState.IDLE:
-                stats["idle"] += 1
-
-            channel = session.channel
-            stats["by_channel"][channel] = stats["by_channel"].get(channel, 0) + 1
-
+    def get_session_count(self) -> dict[str, int]:
+        """获取会话统计"""
+        stats = self._catalog_store.counts()
+        loaded = self._loaded_summary_overrides()
+        persisted_loaded = self._catalog_store.get_summaries(list(loaded))
+        for session_key, summary in loaded.items():
+            old_summary = persisted_loaded.get(session_key)
+            if old_summary is not None:
+                self._adjust_session_counts(stats, old_summary, -1)
+            self._adjust_session_counts(stats, summary, 1)
         return stats
 
+    @staticmethod
+    def _adjust_session_counts(stats: dict[str, Any], summary: dict[str, Any], delta: int) -> None:
+        state = str(summary.get("state") or "")
+        if state == SessionState.EXPIRED.value:
+            state = SessionState.IDLE.value
+        if state == SessionState.CLOSED.value:
+            return
+        stats["total"] += delta
+        if state == SessionState.ACTIVE.value:
+            stats["active"] += delta
+        elif state == SessionState.IDLE.value:
+            stats["idle"] += delta
+        channel = str(summary.get("channel") or "")
+        new_count = stats["by_channel"].get(channel, 0) + delta
+        if new_count > 0:
+            stats["by_channel"][channel] = new_count
+        else:
+            stats["by_channel"].pop(channel, None)
+
     async def cleanup_expired(self) -> int:
-        """清理过期会话"""
+        """Evict reloadable cold sessions from memory without hiding or deleting them."""
+        if self._dirty:
+            await asyncio.to_thread(self.flush)
+            if self._dirty:
+                logger.warning("Skipped cold session eviction because persistence failed")
+                return 0
+
         with self._sessions_lock:
             expired_keys = [key for key, session in self._sessions.items() if session.is_expired()]
+        reloadable_keys = self._catalog_store.contains_many(expired_keys)
 
-            for key in expired_keys:
-                session = self._sessions[key]
-                session.mark_expired()
-                del self._sessions[key]
-                logger.debug(f"Cleaned up expired session: {key}")
+        with self._sessions_lock:
+            cold_keys = [key for key in expired_keys if key in reloadable_keys]
+            for key in cold_keys:
+                if key in self._sessions:
+                    del self._sessions[key]
+                    logger.debug("Evicted cold session from memory: %s", key)
 
-        if expired_keys:
-            logger.info(f"Cleaned up {len(expired_keys)} expired sessions")
+        if cold_keys:
+            logger.info("Evicted %d cold sessions from memory", len(cold_keys))
 
-        return len(expired_keys)
+        return len(cold_keys)
 
     def purge_channel(self, channel_name: str) -> int:
         """清理指定通道的所有会话和注册表数据。
@@ -640,11 +865,15 @@ class SessionManager:
             被清理的会话数量
         """
         with self._sessions_lock:
-            keys_to_remove = [
+            loaded_keys = [
                 key for key, session in self._sessions.items() if session.channel == channel_name
             ]
+        catalog_keys = self._catalog_store.keys_for_channel(channel_name)
+        keys_to_remove = set(loaded_keys) | set(catalog_keys)
+        with self._sessions_lock:
             for key in keys_to_remove:
-                del self._sessions[key]
+                self._sessions.pop(key, None)
+        self._catalog_store.delete_many(list(keys_to_remove))
 
         if channel_name in self._channel_registry:
             del self._channel_registry[channel_name]
@@ -660,7 +889,7 @@ class SessionManager:
         return len(keys_to_remove)
 
     async def _cleanup_loop(self) -> None:
-        """定期清理循环（每 24 小时清理 30 天未活跃的僵尸 session）"""
+        """Evict loaded sessions idle for 30 days from memory every 24 hours."""
         while self._running:
             try:
                 await asyncio.sleep(3600 * 24)
@@ -683,22 +912,135 @@ class SessionManager:
 
                 if self._dirty:
                     self._dirty = False
-                    if not self._save_sessions():
+                    if not await asyncio.to_thread(self._save_sessions):
                         self._dirty = True
 
             except asyncio.CancelledError:
                 # 退出前最后保存一次
                 if self._dirty:
-                    self._save_sessions()
+                    await asyncio.to_thread(self._save_sessions)
                 break
             except Exception as e:
                 logger.error(f"Error in save loop: {e}")
 
+    @staticmethod
+    def _catalog_summary_from_session(session: Session) -> dict[str, Any]:
+        truncation_prefixes = ("[用户规则（必须遵守）]", "[历史背景，非当前任务]")
+        visible: list[dict[str, Any]] = []
+        deduped: list[dict[str, Any]] = []
+        for message in session.context.messages:
+            content = message.get("content", "")
+            if (
+                message.get("role") == "system"
+                and isinstance(content, str)
+                and content.startswith(truncation_prefixes)
+            ):
+                continue
+            if not message.get("marker_type") and is_duplicate_message(deduped, message):
+                continue
+            visible.append(message)
+            deduped.append(message)
+
+        user_messages = [message for message in visible if message.get("role") == "user"]
+        first_content = user_messages[0].get("content", "") if user_messages else ""
+        fallback_title = first_content[:30] if isinstance(first_content, str) else ""
+        if session.channel == "desktop" and session.get_metadata("source_channel"):
+            fallback_title = session.chat_name or session.display_name or fallback_title
+
+        stored_title = session.get_metadata("conversation_title")
+        stored_title = stored_title.strip() if isinstance(stored_title, str) else ""
+        last_content = visible[-1].get("content", "") if visible else ""
+        last_message = last_content[:100] if isinstance(last_content, str) else ""
+
+        timestamp = int(session.last_active.timestamp() * 1000)
+        for message in reversed(visible):
+            raw_timestamp = message.get("timestamp")
+            if not raw_timestamp:
+                continue
+            try:
+                timestamp = int(datetime.fromisoformat(str(raw_timestamp)).timestamp() * 1000)
+                break
+            except (TypeError, ValueError):
+                continue
+
+        ui_org_state = session.get_metadata("ui_org_state")
+        if not isinstance(ui_org_state, dict):
+            ui_org_state = {}
+        selected_endpoint = session.get_metadata("selected_endpoint") or ""
+        return {
+            "session_key": session.session_key,
+            "session_id": session.id,
+            "channel": session.channel,
+            "bot_instance_id": session.bot_instance_id or session.channel,
+            "chat_id": session.chat_id,
+            "user_id": session.user_id,
+            "thread_id": session.thread_id,
+            "state": (
+                SessionState.IDLE.value
+                if session.state == SessionState.EXPIRED
+                else session.state.value
+            ),
+            "created_at": session.created_at.isoformat(),
+            "last_active": session.last_active.isoformat(),
+            "title": stored_title or fallback_title or "对话",
+            "conversation_title": stored_title or None,
+            "title_generated": bool(stored_title and session.get_metadata("title_generated")),
+            "title_manually_set": bool(stored_title and session.get_metadata("title_manually_set")),
+            "pinned": bool(session.get_metadata("pinned")),
+            "last_message": last_message,
+            "timestamp": timestamp,
+            "message_count": len(visible),
+            "agent_profile_id": session.context.agent_profile_id or "default",
+            "endpoint_id": selected_endpoint or None,
+            "endpoint_policy": (
+                session.get_metadata("endpoint_policy") or "prefer"
+                if selected_endpoint
+                else "prefer"
+            ),
+            "org_mode": bool(ui_org_state.get("orgMode") and ui_org_state.get("orgId")),
+            "org_id": ui_org_state.get("orgId") or None,
+            "org_node_id": ui_org_state.get("orgNodeId") or None,
+            "working_directory": session.working_directory,
+        }
+
+    @staticmethod
+    def _apply_catalog_summary_to_session(session: Session, summary: dict[str, Any]) -> None:
+        """Restore catalog metadata that may be newer than the history document."""
+        if "conversation_title" in summary:
+            conversation_title = summary.get("conversation_title")
+            if conversation_title:
+                session.set_metadata("conversation_title", conversation_title)
+            else:
+                session.metadata.pop("conversation_title", None)
+            session.set_metadata("title_generated", bool(summary.get("title_generated")))
+            session.set_metadata("title_manually_set", bool(summary.get("title_manually_set")))
+        session.set_metadata("pinned", bool(summary.get("pinned")))
+        session.set_metadata("selected_endpoint", summary.get("endpoint_id") or "")
+        session.set_metadata("endpoint_policy", summary.get("endpoint_policy") or "prefer")
+        session.set_metadata(
+            "ui_org_state",
+            {
+                "orgMode": bool(summary.get("org_mode") and summary.get("org_id")),
+                "orgId": summary.get("org_id") or "",
+                "orgNodeId": summary.get("org_node_id") or "",
+            },
+        )
+
     def _load_sessions(self) -> None:
-        """从文件加载会话，主文件失败时自动回退到 .tmp / .bak 备份。"""
+        """Load the compact catalog and defer full session hydration until use."""
         sessions_file = self.storage_path / "sessions.json"
         backup_file = self.storage_path / "sessions.json.bak"
         temp_file = self.storage_path / "sessions.json.tmp"
+
+        if self._catalog_store.load():
+            self._sessions_loaded = True
+            stats = self._catalog_store.counts()
+            logger.info(
+                "Indexed %d sessions from storage (%d currently visible; histories deferred)",
+                self._catalog_store.list_summaries(limit=0).total,
+                stats["total"],
+            )
+            return
 
         data = self._try_load_sessions_file(sessions_file)
 
@@ -718,15 +1060,22 @@ class SessionManager:
         if data is None and backup_file.exists():
             logger.warning("Main sessions.json failed or missing, trying .bak backup")
             data = self._try_load_sessions_file(backup_file)
+            if data is not None:
+                try:
+                    shutil.copy2(backup_file, sessions_file)
+                except OSError as exc:
+                    logger.warning("Failed to restore sessions.json backup: %s", exc)
 
         if data is None:
             self._sessions_loaded = True
             return
 
-        skipped_expired = 0
+        hidden_closed = 0
         skipped_error = 0
         skipped_invalid_id = 0
         invalid_id_samples: list[str] = []
+        documents: list[tuple[str, dict[str, Any], dict[str, Any]]] = []
+        fallback_loaded: dict[str, Session] = {}
         for item in data:
             try:
                 if not isinstance(item, dict):
@@ -744,18 +1093,15 @@ class SessionManager:
                         invalid_id_samples.append(_candidate_id[:64])
                     continue
                 session = Session.from_dict(item)
-                if not session.is_expired() and session.state != SessionState.CLOSED:
-                    msg_count = len(session.context.messages)
-                    self._clean_large_content_in_messages(session.context.messages)
-                    self._sessions[session.session_key] = session
-                    if msg_count > 0:
-                        logger.debug(
-                            f"Loaded session {session.session_key}: "
-                            f"{msg_count} messages preserved "
-                            f"(last_active: {session.last_active})"
-                        )
+                if session.state == SessionState.EXPIRED:
+                    session.mark_idle()
+                self._clean_large_content_in_messages(session.context.messages)
+                summary = self._catalog_summary_from_session(session)
+                documents.append((session.session_key, session.to_dict(), summary))
+                if session.state == SessionState.CLOSED:
+                    hidden_closed += 1
                 else:
-                    skipped_expired += 1
+                    fallback_loaded[session.session_key] = session
 
                 session_ts = session.last_active.isoformat()
                 existing = self._channel_registry.get(session.channel)
@@ -779,9 +1125,17 @@ class SessionManager:
         if self._channel_registry:
             self._save_channel_registry()
 
-        parts = [f"Loaded {len(self._sessions)} sessions from storage"]
-        if skipped_expired:
-            parts.append(f"skipped {skipped_expired} expired")
+        try:
+            self._catalog_store.write(documents)
+        except Exception as exc:
+            logger.error("Failed to build lazy session catalog: %s", exc, exc_info=True)
+            self._sessions = fallback_loaded
+            for session in self._sessions.values():
+                self._attach_manager(session)
+
+        parts = [f"Indexed {len(documents)} sessions from storage"]
+        if hidden_closed:
+            parts.append(f"hid {hidden_closed} closed")
         if skipped_error:
             parts.append(f"skipped {skipped_error} errors")
         if skipped_invalid_id:
@@ -991,27 +1345,99 @@ class SessionManager:
 
     def _save_sessions(self) -> bool:
         """
-        保存会话到文件（原子写入）
+        Persist loaded sessions while copying deferred documents unchanged.
 
-        使用临时文件 + 重命名的方式，确保写入过程中断不会损坏原文件。
-        返回 True 表示保存成功，False 表示失败（调用方应重试）。
+        The full JSON array remains backwards compatible. The adjacent catalog
+        is regenerated with byte offsets so future startups do not deserialize
+        every session and message.
         """
         with self._save_sessions_lock:
-            sessions_file = self.storage_path / "sessions.json"
             try:
                 with self._sessions_lock:
-                    sessions = list(self._sessions.values())
-                data = [session.to_dict() for session in sessions]
-                atomic_json_write(
-                    sessions_file,
-                    data,
-                    indent=None,
-                    fsync=True,
-                    allow_fallback=False,
+                    loaded = dict(self._sessions)
+
+                catalog_available = self._catalog_store.load()
+                fallback_documents: dict[
+                    str,
+                    tuple[dict[str, Any], dict[str, Any]],
+                ] = {}
+                sessions_file = self.storage_path / "sessions.json"
+                if sessions_file.exists() and not catalog_available:
+                    raw_sessions = self._try_load_sessions_file(sessions_file)
+                    if raw_sessions is None:
+                        raise OSError(
+                            "session catalog is unavailable and sessions.json is unreadable"
+                        )
+                    logger.warning(
+                        "Session catalog unavailable during save; rebuilding it from sessions.json"
+                    )
+                    for item in raw_sessions:
+                        if not isinstance(item, dict):
+                            continue
+                        candidate_id = str(item.get("session_key") or item.get("id") or "")
+                        if not _is_safe_session_id(candidate_id):
+                            continue
+                        session = Session.from_dict(item)
+                        if session.state == SessionState.EXPIRED:
+                            session.mark_idle()
+                        self._clean_large_content_in_messages(session.context.messages)
+                        fallback_documents[session.session_key] = (
+                            session.to_dict(),
+                            self._catalog_summary_from_session(session),
+                        )
+
+                persisted_count = 0
+
+                def iter_documents():
+                    nonlocal persisted_count
+                    if catalog_available:
+                        base_documents = (
+                            (entry.session_key, entry, entry.summary)
+                            for entry in self._catalog_store.iter_entries()
+                        )
+                    else:
+                        base_documents = (
+                            (session_key, document, summary)
+                            for session_key, (document, summary) in fallback_documents.items()
+                        )
+
+                    for session_key, document, summary in base_documents:
+                        session = loaded.pop(session_key, None)
+                        if session is not None:
+                            persisted_count += 1
+                            yield (
+                                session_key,
+                                session.to_dict(),
+                                self._catalog_summary_from_session(session),
+                            )
+                            continue
+                        if catalog_available:
+                            raw = self._catalog_store.read_raw_document(document)
+                            if raw is None:
+                                raise OSError(f"failed to read deferred session: {session_key}")
+                            document = raw
+                        persisted_count += 1
+                        yield (session_key, document, summary)
+
+                    for session_key, session in loaded.items():
+                        persisted_count += 1
+                        yield (
+                            session_key,
+                            session.to_dict(),
+                            self._catalog_summary_from_session(session),
+                        )
+
+                self._catalog_store.write(iter_documents())
+                logger.debug(
+                    "Saved %d sessions to storage (%d histories remain deferred)",
+                    persisted_count,
+                    max(0, persisted_count - len(self._sessions)),
                 )
-                logger.debug(f"Saved {len(data)} sessions to storage (atomic fsync)")
                 return True
 
+            except SessionCatalogIndexWriteError as exc:
+                logger.error("Error saving session catalog index: %s", exc)
+                return False
             except Exception as e:
                 logger.error(f"Failed to save sessions: {e}", exc_info=True)
                 return False

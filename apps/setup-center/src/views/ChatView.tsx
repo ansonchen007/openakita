@@ -4,6 +4,7 @@
 import { useEffect, useMemo, useRef, useState, useCallback, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
+import { Virtuoso } from "react-virtuoso";
 import { setLanguage } from "../i18n";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { ProviderIcon } from "../components/ProviderIcon";
@@ -93,6 +94,12 @@ import {
   restoreSessionsUntilReady,
   type SessionRestoreEvent,
 } from "./chat/utils/sessionRestore";
+import {
+  buildConversationListRows,
+  sessionListPageStateFromPayload,
+  sessionListPageUrl,
+  type SessionListPageState,
+} from "./chat/utils/sessionListPaging";
 import {
   isStorageQuotaExceededError,
   persistStorageValueWithMessageEviction,
@@ -865,6 +872,13 @@ function _isActiveSecurityConfirm(confirm: SecurityConfirmData | null): confirm 
 }
 
 const HISTORY_PAGE_LIMIT = 80;
+const EMPTY_SESSION_LIST_PAGE: SessionListPageState = {
+  query: "",
+  nextOffset: 0,
+  total: 0,
+  hasMore: false,
+  loading: false,
+};
 type EndpointPolicy = "prefer" | "require";
 type AskUserReplyBody = {
   kind: "normal";
@@ -1056,6 +1070,12 @@ export function ChatView({
     hasMoreBefore: false,
     loadingOlder: false,
   });
+  const [sessionListPage, setSessionListPageState] = useState<SessionListPageState>(EMPTY_SESSION_LIST_PAGE);
+  const sessionListPageRef = useRef<SessionListPageState>(EMPTY_SESSION_LIST_PAGE);
+  const updateSessionListPage = useCallback((next: SessionListPageState) => {
+    sessionListPageRef.current = next;
+    setSessionListPageState(next);
+  }, []);
 
   // ── Workspace switch: reload chat state from new scoped keys ──
   // Also performs one-time migration of legacy global keys into the first real
@@ -1083,6 +1103,7 @@ export function ChatView({
     } catch { convs = []; }
     latestConversationsRef.current = convs;
     convDispatch({ type: "SET_ALL", conversations: convs });
+    updateSessionListPage(EMPTY_SESSION_LIST_PAGE);
 
     // ── activeConvId ──
     let convId: string | null = null;
@@ -1147,9 +1168,8 @@ export function ChatView({
     setFileTrees({});
     setSidebarView("conversations");
   // eslint-disable-next-line react-hooks/exhaustive-deps -- STORAGE_KEY_*/OLD_KEY_* are
-  // derived from wsTag (or are constants); listing wsTag alone is sufficient and
-  // avoids re-running the migration on every render.
-  }, [wsTag]);
+  // derived from wsTag (or are constants); updateSessionListPage is stable.
+  }, [wsTag, updateSessionListPage]);
   const inputTextRef = useRef("");
   const [hasInputText, setHasInputText] = useState(false);
   const [selectedEndpoint, setSelectedEndpoint] = useState("auto");
@@ -2418,7 +2438,30 @@ export function ChatView({
   // 启动后后台对账会话列表：本地先展示，后端异步增量合并，避免"今天新会话缺失"。
   // 只有 SessionManager 明确 ready 后才标记完成；进程存活或 HTTP 可达都不够。
   const sessionRestoreCompletedScope = useRef<string | null>(null);
+  const sessionListRequestIdRef = useRef(0);
   const sessionRestoreScope = `${apiBaseUrl}|${wsTag}`;
+
+  const mergeRestoredSessionPayload = useCallback((rawSessions: unknown[]): ChatConversation[] => {
+    const restoredConvs = rawSessions
+      .map((session) => _sessionConversationFromPayload(session as Record<string, unknown>))
+      .filter((conversation): conversation is ChatConversation => Boolean(conversation));
+
+    if (restoredConvs.length === 0) return restoredConvs;
+    setConversations((prev) => {
+      const prevMap = new Map(prev.map((conversation) => [conversation.id, conversation]));
+      const mergedFromBackend = restoredConvs.map((backendConversation) => {
+        const local = prevMap.get(backendConversation.id);
+        if (!local) return backendConversation;
+        return _mergeSessionConversation(local, backendConversation, {
+          timestampMode: streamContexts.current.has(backendConversation.id) ? "max" : "backend",
+        });
+      });
+      const backendIds = new Set(restoredConvs.map((conversation) => conversation.id));
+      const localOnly = prev.filter((conversation) => !backendIds.has(conversation.id));
+      return [...mergedFromBackend, ...localOnly];
+    });
+    return restoredConvs;
+  }, [setConversations]);
 
   useEffect(() => {
     if (!serviceRunning) {
@@ -2464,10 +2507,11 @@ export function ChatView({
       }
     };
 
+    const restoreRequestId = ++sessionListRequestIdRef.current;
     void restoreSessionsUntilReady<Record<string, unknown>>({
       signal: controller.signal,
       request: async (attempt) => {
-        const res = await safeFetchResponse(`${apiBaseUrl}/api/sessions?channel=desktop`, {
+        const res = await safeFetchResponse(sessionListPageUrl(apiBaseUrl, 0), {
           signal: controller.signal,
         });
         const data = await res.json() as Record<string, unknown>;
@@ -2551,35 +2595,27 @@ export function ChatView({
               scope: sessionRestoreScope,
               workspace: wsTag,
             });
+            updateSessionListPage(EMPTY_SESSION_LIST_PAGE);
             return;
           }
         }
+        if (restoreRequestId !== sessionListRequestIdRef.current) return;
+        updateSessionListPage(sessionListPageStateFromPayload(
+          data,
+          0,
+          backendSessions.length,
+          "",
+        ));
         if (backendSessions.length === 0) return;
 
-        const restoredConvs: ChatConversation[] = backendSessions
-          .map((s) => _sessionConversationFromPayload(s as Record<string, unknown>))
-          .filter((c): c is ChatConversation => Boolean(c));
-
-        setConversations((prev) => {
-          const prevMap = new Map(prev.map((c) => [c.id, c]));
-          const mergedFromBackend: ChatConversation[] = restoredConvs.map((b) => {
-            const local = prevMap.get(b.id);
-            if (!local) return b;
-            // 后端时间戳现以"最后一条真实消息"为准（见后端 #628 修复），是列表
-            // 排序/显示的权威值。只有正在流式输出的会话保留本地乐观值，避免
-            // 对账瞬间把活跃会话往下挪。
-            return _mergeSessionConversation(local, b, {
-              timestampMode: streamContexts.current.has(b.id) ? "max" : "backend",
-            });
-          });
-          const backendIds = new Set(restoredConvs.map((c) => c.id));
-          const localOnly = prev.filter((c) => !backendIds.has(c.id));
-          return [...mergedFromBackend, ...localOnly];
-        });
+        const restoredConvs = mergeRestoredSessionPayload(backendSessions);
 
         // 没有活跃会话时，默认打开后端最新会话
         if (!activeConvIdRef.current) {
-          activateConversation(restoredConvs[0].id);
+          const latestConversation = restoredConvs.reduce((latest, conversation) => (
+            conversation.timestamp > latest.timestamp ? conversation : latest
+          ));
+          activateConversation(latestConversation.id);
         }
       },
       shouldRetryReconcileError: (error) => !isStorageQuotaExceededError(error),
@@ -2610,7 +2646,58 @@ export function ChatView({
     recoverChatStorageWrite,
     setConversations,
     setMessages,
+    updateSessionListPage,
+    mergeRestoredSessionPayload,
   ]);
+
+  const loadSessionListPage = useCallback(async (options?: { reset?: boolean; query?: string }) => {
+    if (!serviceRunning) return;
+    const current = sessionListPageRef.current;
+    const reset = options?.reset === true;
+    const query = (options?.query ?? current.query).trim();
+    if ((!reset && current.loading) || (!reset && !current.hasMore)) return;
+
+    const offset = reset ? 0 : current.nextOffset;
+    const requestId = ++sessionListRequestIdRef.current;
+    updateSessionListPage({
+      ...current,
+      query,
+      loading: true,
+      ...(reset ? { nextOffset: 0, total: 0, hasMore: false } : {}),
+    });
+    try {
+      const response = await safeFetchResponse(sessionListPageUrl(apiBaseUrl, offset, query));
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const data = await response.json() as Record<string, unknown>;
+      if (data.ready !== true) throw new Error("session manager not ready");
+      if (requestId !== sessionListRequestIdRef.current) return;
+      const rawSessions = Array.isArray(data.sessions) ? data.sessions : [];
+      mergeRestoredSessionPayload(rawSessions);
+      updateSessionListPage(sessionListPageStateFromPayload(
+        data,
+        offset,
+        rawSessions.length,
+        query,
+      ));
+    } catch (error) {
+      if (requestId !== sessionListRequestIdRef.current) return;
+      logger.warn("Chat.SessionList", "page request failed", {
+        offset,
+        query,
+        error: String(error),
+      });
+      updateSessionListPage({ ...sessionListPageRef.current, loading: false });
+    }
+  }, [apiBaseUrl, mergeRestoredSessionPayload, serviceRunning, updateSessionListPage]);
+
+  useEffect(() => {
+    const query = convSearchQuery.trim();
+    if (query === sessionListPageRef.current.query) return;
+    const timer = window.setTimeout(() => {
+      void loadSessionListPage({ reset: true, query });
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [convSearchQuery, loadSessionListPage]);
 
   // ── Multi-device busy state: poll + WS events ──
   useEffect(() => {
@@ -7112,6 +7199,14 @@ export function ChatView({
     filteredConversations.filter((c) => !c.pinned).sort((a, b) => b.timestamp - a.timestamp),
     [filteredConversations]
   );
+  const conversationListRows = useMemo(() => buildConversationListRows(
+    pinnedConvs,
+    agentConvs,
+    {
+      pinned: t("chat.pinnedSection"),
+      conversations: t("chat.conversationsLabel") || "会话",
+    },
+  ), [agentConvs, pinnedConvs, t]);
 
   const quickStartItems = useMemo<Array<{
     id: string;
@@ -8559,27 +8654,40 @@ export function ChatView({
           </div>
 
           {sidebarView === "conversations" ? (
-            <div className="convSidebarList" role="tabpanel">
-              {pinnedConvs.length > 0 && (
-                <>
-                  <div className="convSectionLabel">{t("chat.pinnedSection")}</div>
-                  {pinnedConvs.map(renderConvItem)}
-                </>
-              )}
-
-              {agentConvs.length > 0 && (
-                <>
-                  <div className="convSectionLabel">{t("chat.conversationsLabel") || "会话"}</div>
-                  {agentConvs.map(renderConvItem)}
-                </>
-              )}
-
-              {filteredConversations.length === 0 && (
+            conversationListRows.length > 0 ? (
+              <Virtuoso
+                className="convSidebarList"
+                role="tabpanel"
+                data={conversationListRows}
+                increaseViewportBy={240}
+                computeItemKey={(_index, row) => row.kind === "section"
+                  ? `section:${row.id}`
+                  : `conversation:${row.conversation.id}`}
+                endReached={() => { void loadSessionListPage(); }}
+                itemContent={(_index, row) => row.kind === "section"
+                  ? <div className="convSectionLabel">{row.label}</div>
+                  : renderConvItem(row.conversation)}
+                components={{
+                  Footer: () => sessionListPage.loading ? (
+                    <div className="convListLoading" aria-label={t("common.loading", "加载中...")}>
+                      <IconLoader size={13} />
+                    </div>
+                  ) : null,
+                }}
+              />
+            ) : (
+              <div className="convSidebarList" role="tabpanel">
+                {sessionListPage.loading ? (
+                  <div className="convListLoading" aria-label={t("common.loading", "加载中...")}>
+                    <IconLoader size={13} />
+                  </div>
+                ) : (
                 <div className="convEmpty">
                   {convSearchQuery ? t("common.noResults") || "无结果" : t("common.noData")}
                 </div>
-              )}
-            </div>
+                )}
+              </div>
+            )
           ) : (
             <div className="fileTreePanel" role="tabpanel">
               {!activeConvId ? (

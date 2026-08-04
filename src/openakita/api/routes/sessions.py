@@ -8,6 +8,7 @@ PATCH /api/sessions/{conversation_id}/title, POST /api/sessions/generate-title
 
 from __future__ import annotations
 
+import asyncio
 import copy
 import logging
 import mimetypes
@@ -269,6 +270,31 @@ def _session_list_item(
         "orgId": ui_org_state.get("orgId") or None,
         "orgNodeId": ui_org_state.get("orgNodeId") or None,
         "workingDirectory": str(session_working_directory(session)),
+    }
+
+
+def _session_list_item_from_summary(summary: dict) -> dict:
+    """Translate a persisted catalog projection to the desktop API shape."""
+    return {
+        "id": str(summary.get("chat_id") or ""),
+        "title": str(summary.get("title") or "对话"),
+        "titleGenerated": bool(summary.get("title_generated")),
+        "titleManuallySet": bool(summary.get("title_manually_set")),
+        "pinned": bool(summary.get("pinned")),
+        "lastMessage": str(summary.get("last_message") or ""),
+        "timestamp": int(summary.get("timestamp") or 0),
+        "messageCount": int(summary.get("message_count") or 0),
+        "agentProfileId": str(summary.get("agent_profile_id") or "default"),
+        "endpointId": summary.get("endpoint_id") or None,
+        "endpointPolicy": (
+            str(summary.get("endpoint_policy") or "prefer")
+            if summary.get("endpoint_id")
+            else "prefer"
+        ),
+        "orgMode": bool(summary.get("org_mode")),
+        "orgId": summary.get("org_id") or None,
+        "orgNodeId": summary.get("org_node_id") or None,
+        "workingDirectory": str(summary.get("working_directory") or ""),
     }
 
 
@@ -705,39 +731,107 @@ def _reconcile_history_todo_lifecycle(
 
 
 @router.get("/api/sessions")
-async def list_sessions(request: Request, channel: str = "desktop"):
+async def list_sessions(
+    request: Request,
+    channel: str = "desktop",
+    limit: int = Query(60, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    q: str = Query("", max_length=200),
+):
     """List sessions for a given channel (default: desktop).
 
-    Returns a list of conversations with metadata, ordered by last_active desc.
+    Returns a page of conversations with metadata, pinned first and then by activity.
     """
     _validate_id(channel, "channel")
     session_manager = getattr(request.app.state, "session_manager", None)
     if not session_manager or not getattr(session_manager, "_sessions_loaded", False):
         wac = getattr(request.app.state, "web_access_config", None)
-        return {"sessions": [], "data_epoch": wac.data_epoch if wac else "", "ready": False}
+        return {
+            "sessions": [],
+            "data_epoch": wac.data_epoch if wac else "",
+            "ready": False,
+            "total": 0,
+            "offset": offset,
+            "next_offset": None,
+            "has_more": False,
+        }
 
-    sessions = session_manager.list_sessions(channel=channel)
-    # org_* sessions belong to OrgChatPanel (指挥台), not the main chat UI.
-    sessions = [s for s in sessions if not s.chat_id.startswith("org_")]
+    if hasattr(session_manager, "list_session_summaries_page"):
+        catalog_page = session_manager.list_session_summaries_page(
+            channel=channel,
+            query=q,
+            exclude_org_chats=True,
+            limit=limit,
+            offset=offset,
+        )
+        total = catalog_page.total
+        result = [_session_list_item_from_summary(summary) for summary in catalog_page.summaries]
+    elif hasattr(session_manager, "list_session_summaries"):
+        summaries = session_manager.list_session_summaries(channel=channel)
+        summaries = [s for s in summaries if not str(s.get("chat_id") or "").startswith("org_")]
+        normalized_query = q.strip().casefold()
+        if normalized_query:
+            summaries = [
+                summary
+                for summary in summaries
+                if normalized_query in str(summary.get("title") or "").casefold()
+                or normalized_query in str(summary.get("last_message") or "").casefold()
+            ]
+        summaries.sort(
+            key=lambda summary: (
+                bool(summary.get("pinned")),
+                int(summary.get("timestamp") or 0),
+                str(summary.get("chat_id") or ""),
+            ),
+            reverse=True,
+        )
+        total = len(summaries)
+        result = [
+            _session_list_item_from_summary(summary)
+            for summary in summaries[offset : offset + limit]
+        ]
+    else:
+        sessions = session_manager.list_sessions(channel=channel)
+        sessions = [s for s in sessions if not s.chat_id.startswith("org_")]
+        prepared = []
+        for session in sessions:
+            visible_msgs = [m for _, m in _visible_history_messages(session)]
+            prepared.append((session, visible_msgs, _last_activity_ms(session, visible_msgs)))
+        prepared.sort(
+            key=lambda item: (bool(item[0].get_metadata("pinned")), item[2]), reverse=True
+        )
+        legacy_result = [
+            _session_list_item(session, visible_msgs, last_ms)
+            for session, visible_msgs, last_ms in prepared
+        ]
+        normalized_query = q.strip().casefold()
+        if normalized_query:
+            legacy_result = [
+                item
+                for item in legacy_result
+                if normalized_query in str(item.get("title") or "").casefold()
+                or normalized_query in str(item.get("lastMessage") or "").casefold()
+            ]
+        total = len(legacy_result)
+        result = legacy_result[offset : offset + limit]
 
-    # 先算出每个会话的可见消息与"最后活动时间"，再按真实活动时间排序。
-    # 不能直接用 s.last_active 排序：它会被纯读取访问污染（issue #628）。
-    prepared = []
-    for s in sessions:
-        visible_msgs = [m for _, m in _visible_history_messages(s)]
-        prepared.append((s, visible_msgs, _last_activity_ms(s, visible_msgs)))
-    prepared.sort(key=lambda item: item[2], reverse=True)
-
-    result = []
-    for s, visible_msgs, last_ms in prepared:
-        result.append(_session_list_item(s, visible_msgs, last_ms))
+    next_offset = offset + len(result)
+    has_more = next_offset < total
 
     data_epoch = ""
     wac = getattr(request.app.state, "web_access_config", None)
     if wac:
         data_epoch = wac.data_epoch
 
-    return {"sessions": result, "data_epoch": data_epoch, "ready": True}
+    return {
+        "sessions": result,
+        "data_epoch": data_epoch,
+        "ready": True,
+        "total": total,
+        "offset": offset,
+        "next_offset": next_offset if has_more else None,
+        "has_more": has_more,
+    }
 
 
 @router.post("/api/sessions")
@@ -818,7 +912,7 @@ async def create_session(
     )
     session_manager.mark_dirty()
     try:
-        session_manager.persist()
+        await asyncio.to_thread(session_manager.persist)
     except Exception as exc:
         logger.warning("[Sessions API] Failed to persist created session: %s", exc)
 
@@ -906,7 +1000,7 @@ async def update_session_ui_state(
     )
     session_manager.mark_dirty()
     try:
-        session_manager.persist()
+        await asyncio.to_thread(session_manager.persist_summary, session)
     except Exception as exc:
         logger.warning("[Sessions API] Failed to persist UI state: %s", exc)
     return {"ok": True}
@@ -948,7 +1042,7 @@ async def update_session_title(
     session.set_metadata(_META_TITLE_GENERATED, generated)
     session_manager.mark_dirty()
     try:
-        session_manager.persist()
+        await asyncio.to_thread(session_manager.persist)
     except Exception as exc:
         logger.warning("[Sessions API] Failed to persist title: %s", exc)
 
@@ -1000,7 +1094,7 @@ async def update_session_pin(
     session.set_metadata(_META_PINNED, pinned)
     session_manager.mark_dirty()
     try:
-        session_manager.persist()
+        await asyncio.to_thread(session_manager.persist)
     except Exception as exc:
         logger.warning("[Sessions API] Failed to persist pin state: %s", exc)
 
@@ -1615,7 +1709,7 @@ async def generate_title(request: Request, body: GenerateTitleRequest):
                 if session_manager:
                     session_manager.mark_dirty()
                     try:
-                        session_manager.persist()
+                        await asyncio.to_thread(session_manager.persist)
                     except Exception as exc:
                         logger.warning("[Sessions API] Failed to persist generated title: %s", exc)
                 summary = _session_list_item(session)

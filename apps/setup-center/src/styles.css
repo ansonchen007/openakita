@@ -5270,9 +5270,23 @@ button.btnPrimary:hover {
 
 .convSidebarList {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
   padding: 4px 6px;
+}
+
+.convListLoading {
+  min-height: 38px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: inherit;
+  opacity: 0.4;
+}
+
+.convListLoading svg {
+  animation: convSpin 1s linear infinite;
 }
 
 .fileTreeToolbar {
