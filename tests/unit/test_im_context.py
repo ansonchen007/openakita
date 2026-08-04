@@ -1,12 +1,11 @@
 """L1 Unit Tests: IM context variable management."""
 
-import pytest
-
 from openakita.core.im_context import (
-    get_im_session,
+    ensure_im_context,
     get_im_gateway,
-    set_im_context,
+    get_im_session,
     reset_im_context,
+    set_im_context,
 )
 
 
@@ -41,3 +40,14 @@ class TestIMContext:
         reset_im_context(t2)
         assert get_im_session() == "outer"
         reset_im_context(t1)
+
+    def test_ensure_reuses_matching_context(self):
+        session = object()
+        gateway = object()
+        tokens = set_im_context(session=session, gateway=gateway)
+        try:
+            assert ensure_im_context(session=session, gateway=gateway) is None
+            assert get_im_session() is session
+            assert get_im_gateway() is gateway
+        finally:
+            reset_im_context(tokens)
