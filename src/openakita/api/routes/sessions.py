@@ -8,6 +8,7 @@ PATCH /api/sessions/{conversation_id}/title, POST /api/sessions/generate-title
 
 from __future__ import annotations
 
+import asyncio
 import copy
 import logging
 import mimetypes
@@ -755,7 +756,17 @@ async def list_sessions(
             "has_more": False,
         }
 
-    if hasattr(session_manager, "list_session_summaries"):
+    if hasattr(session_manager, "list_session_summaries_page"):
+        catalog_page = session_manager.list_session_summaries_page(
+            channel=channel,
+            query=q,
+            exclude_org_chats=True,
+            limit=limit,
+            offset=offset,
+        )
+        total = catalog_page.total
+        result = [_session_list_item_from_summary(summary) for summary in catalog_page.summaries]
+    elif hasattr(session_manager, "list_session_summaries"):
         summaries = session_manager.list_session_summaries(channel=channel)
         summaries = [s for s in summaries if not str(s.get("chat_id") or "").startswith("org_")]
         normalized_query = q.strip().casefold()
@@ -775,8 +786,10 @@ async def list_sessions(
             reverse=True,
         )
         total = len(summaries)
-        page = summaries[offset : offset + limit]
-        result = [_session_list_item_from_summary(summary) for summary in page]
+        result = [
+            _session_list_item_from_summary(summary)
+            for summary in summaries[offset : offset + limit]
+        ]
     else:
         sessions = session_manager.list_sessions(channel=channel)
         sessions = [s for s in sessions if not s.chat_id.startswith("org_")]
@@ -899,7 +912,7 @@ async def create_session(
     )
     session_manager.mark_dirty()
     try:
-        session_manager.persist()
+        await asyncio.to_thread(session_manager.persist)
     except Exception as exc:
         logger.warning("[Sessions API] Failed to persist created session: %s", exc)
 
@@ -987,7 +1000,7 @@ async def update_session_ui_state(
     )
     session_manager.mark_dirty()
     try:
-        session_manager.persist()
+        await asyncio.to_thread(session_manager.persist_summary, session)
     except Exception as exc:
         logger.warning("[Sessions API] Failed to persist UI state: %s", exc)
     return {"ok": True}
@@ -1029,7 +1042,7 @@ async def update_session_title(
     session.set_metadata(_META_TITLE_GENERATED, generated)
     session_manager.mark_dirty()
     try:
-        session_manager.persist()
+        await asyncio.to_thread(session_manager.persist)
     except Exception as exc:
         logger.warning("[Sessions API] Failed to persist title: %s", exc)
 
@@ -1081,7 +1094,7 @@ async def update_session_pin(
     session.set_metadata(_META_PINNED, pinned)
     session_manager.mark_dirty()
     try:
-        session_manager.persist()
+        await asyncio.to_thread(session_manager.persist)
     except Exception as exc:
         logger.warning("[Sessions API] Failed to persist pin state: %s", exc)
 
@@ -1696,7 +1709,7 @@ async def generate_title(request: Request, body: GenerateTitleRequest):
                 if session_manager:
                     session_manager.mark_dirty()
                     try:
-                        session_manager.persist()
+                        await asyncio.to_thread(session_manager.persist)
                     except Exception as exc:
                         logger.warning("[Sessions API] Failed to persist generated title: %s", exc)
                 summary = _session_list_item(session)

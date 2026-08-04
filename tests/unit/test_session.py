@@ -1,6 +1,7 @@
 """L1 Unit Tests: Session state machine, message management."""
 
 import json
+import sqlite3
 import threading
 import time
 from datetime import datetime, timedelta
@@ -182,35 +183,106 @@ class TestAgentProfileScopedHistory:
 
 
 class TestSessionPersistence:
-    def test_save_sessions_uses_strict_atomic_writes(self, tmp_path, monkeypatch):
-        from openakita.sessions import catalog as catalog_module
-        from openakita.utils.atomic_io import safe_write as real_safe_write
-
+    def test_save_sessions_creates_queryable_sqlite_catalog(self, tmp_path):
         manager = SessionManager(storage_path=tmp_path / "sessions")
         session = manager.get_session("cli", "chat-1", "user-1")
         session.add_message("user", "hello")
-        calls = {}
-
-        def spy(path, content, **kwargs):
-            calls["path"] = path
-            calls["content"] = content
-            calls["kwargs"] = kwargs
-            real_safe_write(path, content, **kwargs)
-
-        monkeypatch.setattr(catalog_module, "safe_write", spy)
 
         assert manager._save_sessions() is True
 
-        assert calls["path"] == tmp_path / "sessions" / "sessions.json"
-        assert calls["kwargs"]["fsync"] is True
-        assert calls["kwargs"]["allow_fallback"] is False
-        assert json.loads(calls["content"])[0]["context"]["messages"][0]["content"] == "hello"
-        assert (tmp_path / "sessions" / "sessions.index.json").exists()
+        sessions_file = tmp_path / "sessions" / "sessions.json"
+        index_file = tmp_path / "sessions" / "sessions.index.sqlite3"
+        assert (
+            json.loads(sessions_file.read_text(encoding="utf-8"))[0]["context"]["messages"][0][
+                "content"
+            ]
+            == "hello"
+        )
+        assert index_file.exists()
+        with sqlite3.connect(index_file) as conn:
+            row = conn.execute(
+                "SELECT channel, chat_id, title, byte_offset, byte_length FROM sessions"
+            ).fetchone()
+        assert row[:3] == ("cli", "chat-1", "hello")
+        assert row[3] >= 1
+        assert row[4] > 0
+
+    def test_incremental_summary_update_preserves_history_document(self, tmp_path):
+        storage_path = tmp_path / "sessions"
+        manager = SessionManager(storage_path=storage_path)
+        session = manager.get_session("desktop", "chat-1", "desktop_user")
+        session.add_message("user", "history remains readable")
+        session.set_metadata("conversation_title", "Original title")
+        assert manager._save_sessions() is True
+
+        sessions_file = storage_path / "sessions.json"
+        original_bytes = sessions_file.read_bytes()
+        original_stat = sessions_file.stat()
+        original_entry = manager._catalog_store.get_entry(session.session_key)
+        assert original_entry is not None
+
+        session.set_metadata("conversation_title", "Updated searchable title")
+        session.set_metadata("selected_endpoint", "minimax")
+        session.set_metadata("endpoint_policy", "strict")
+        session.set_metadata(
+            "ui_org_state",
+            {"orgMode": True, "orgId": "org_ops", "orgNodeId": "pm"},
+        )
+
+        assert manager.persist_summary(session) is True
+
+        updated_entry = manager._catalog_store.get_entry(session.session_key)
+        assert updated_entry is not None
+        assert (updated_entry.offset, updated_entry.length) == (
+            original_entry.offset,
+            original_entry.length,
+        )
+        assert sessions_file.read_bytes() == original_bytes
+        assert sessions_file.stat().st_mtime_ns == original_stat.st_mtime_ns
+        assert (
+            manager._catalog_store.read_document(updated_entry)["context"]["messages"][0]["content"]
+            == "history remains readable"
+        )
+        assert manager._catalog_store.list_summaries(query="updated searchable").total == 1
+        assert manager._catalog_store.list_summaries(query="original title").total == 0
+
+        reloaded = SessionManager(storage_path=storage_path)
+        restored = reloaded.get_session(
+            "desktop", "chat-1", "desktop_user", create_if_missing=False
+        )
+        assert restored is not None
+        assert restored.context.messages[0]["content"] == "history remains readable"
+        assert restored.get_metadata("conversation_title") == "Updated searchable title"
+        assert restored.get_metadata("selected_endpoint") == "minimax"
+        assert restored.get_metadata("endpoint_policy") == "strict"
+        assert restored.get_metadata("ui_org_state") == {
+            "orgMode": True,
+            "orgId": "org_ops",
+            "orgNodeId": "pm",
+        }
+
+    def test_existing_catalog_schema_is_reused_on_full_save(self, tmp_path, monkeypatch):
+        manager = SessionManager(storage_path=tmp_path / "sessions")
+        session = manager.get_session("desktop", "chat-1", "desktop_user")
+        session.add_message("user", "first")
+
+        initialize_calls = 0
+        real_initialize = manager._catalog_store._initialize_schema
+
+        def recording_initialize(conn):
+            nonlocal initialize_calls
+            initialize_calls += 1
+            return real_initialize(conn)
+
+        monkeypatch.setattr(manager._catalog_store, "_initialize_schema", recording_initialize)
+
+        assert manager._save_sessions() is True
+        session.add_message("assistant", "second")
+        assert manager._save_sessions() is True
+
+        assert initialize_calls == 1
 
     def test_save_sessions_serializes_concurrent_writes(self, tmp_path, monkeypatch):
-        from openakita.sessions import catalog as catalog_module
-        from openakita.utils.atomic_io import safe_write as real_safe_write
-
         manager = SessionManager(storage_path=tmp_path / "sessions")
         session = manager.get_session("cli", "chat-1", "user-1")
         session.add_message("user", "hello")
@@ -221,14 +293,16 @@ class TestSessionPersistence:
         active_writes = 0
         max_active_writes = 0
 
-        def spy(path, content, **kwargs):
+        real_write = manager._catalog_store.write
+
+        def spy(documents):
             nonlocal active_writes, max_active_writes
             with counter_lock:
                 active_writes += 1
                 max_active_writes = max(max_active_writes, active_writes)
             try:
                 time.sleep(0.001)
-                real_safe_write(path, content, **kwargs)
+                return real_write(documents)
             finally:
                 with counter_lock:
                     active_writes -= 1
@@ -239,7 +313,7 @@ class TestSessionPersistence:
                 if not manager._save_sessions():
                     failures.append((worker_id, i))
 
-        monkeypatch.setattr(catalog_module, "safe_write", spy)
+        monkeypatch.setattr(manager._catalog_store, "write", spy)
         threads = [threading.Thread(target=worker, args=(i,)) for i in range(8)]
         for thread in threads:
             thread.start()
@@ -267,9 +341,6 @@ class TestSessionPersistence:
     def test_index_write_failure_keeps_deferred_offsets_aligned_for_retry(
         self, tmp_path, monkeypatch
     ):
-        from openakita.sessions import catalog as catalog_module
-        from openakita.utils.atomic_io import atomic_json_write as real_atomic_json_write
-
         storage_path = tmp_path / "sessions"
         manager = SessionManager(storage_path=storage_path)
         first = manager.get_session("desktop", "first", "desktop_user")
@@ -284,18 +355,28 @@ class TestSessionPersistence:
         )
         assert restored_first is not None
         restored_first.add_message("assistant", "a much longer response that moves later offsets")
-        old_second_offset = reloaded._session_catalog["desktop:second:desktop_user"].offset
+        second_key = "desktop:second:desktop_user"
+        old_entry = reloaded._catalog_store.get_entry(second_key)
+        assert old_entry is not None
 
-        def fail_index_write(*_args, **_kwargs):
-            raise OSError("index unavailable")
+        real_replace = reloaded._catalog_store._replace_with_retry
+        failed = False
 
-        monkeypatch.setattr(catalog_module, "atomic_json_write", fail_index_write)
+        def fail_primary_install(source, target, retries=3):
+            nonlocal failed
+            if source == reloaded._catalog_store.building_index_file and not failed:
+                failed = True
+                raise PermissionError("index unavailable")
+            return real_replace(source, target, retries)
+
+        monkeypatch.setattr(reloaded._catalog_store, "_replace_with_retry", fail_primary_install)
 
         assert reloaded._save_sessions() is False
-        new_second_offset = reloaded._session_catalog["desktop:second:desktop_user"].offset
-        assert new_second_offset > old_second_offset
+        new_entry = reloaded._catalog_store.get_entry(second_key)
+        assert new_entry is not None
+        assert new_entry.offset > old_entry.offset
 
-        monkeypatch.setattr(catalog_module, "atomic_json_write", real_atomic_json_write)
+        monkeypatch.setattr(reloaded._catalog_store, "_replace_with_retry", real_replace)
         assert reloaded._save_sessions() is True
 
         retried = SessionManager(storage_path=storage_path)
@@ -326,6 +407,7 @@ class TestSessionPersistence:
         reloaded = SessionManager(storage_path=storage_path)
 
         assert reloaded._sessions == {}
+        assert not hasattr(reloaded, "_session_catalog")
         assert hydration_calls == 0
         assert {item["chat_id"] for item in reloaded.list_session_summaries()} == {
             "first",
@@ -431,7 +513,7 @@ class TestSessionPersistence:
         session.add_message("user", "fallback history")
         session.last_active = datetime.now() - timedelta(days=90)
         assert manager._save_sessions() is True
-        (storage_path / "sessions.index.json").unlink()
+        (storage_path / "sessions.index.sqlite3").unlink()
 
         def fail_catalog_write(*_args, **_kwargs):
             raise OSError("index unavailable")
@@ -442,6 +524,56 @@ class TestSessionPersistence:
         restored = reloaded.get_session("desktop", "cold", "desktop_user", create_if_missing=False)
         assert restored is not None
         assert restored.context.messages[0]["content"] == "fallback history"
+
+    def test_legacy_json_index_is_removed_when_sqlite_catalog_is_built(self, tmp_path):
+        storage_path = tmp_path / "sessions"
+        manager = SessionManager(storage_path=storage_path)
+        session = manager.get_session("desktop", "legacy", "desktop_user")
+        session.add_message("user", "legacy catalog")
+        assert manager._save_sessions() is True
+
+        sqlite_index = storage_path / "sessions.index.sqlite3"
+        legacy_index = storage_path / "sessions.index.json"
+        sqlite_index.unlink()
+        legacy_index.write_text('{"version":1,"sessions":[]}', encoding="utf-8")
+
+        reloaded = SessionManager(storage_path=storage_path)
+
+        assert sqlite_index.exists()
+        assert not legacy_index.exists()
+        assert [summary["chat_id"] for summary in reloaded.list_session_summaries()] == ["legacy"]
+
+    def test_save_rebuilds_corrupt_sqlite_catalog_without_dropping_deferred_sessions(
+        self, tmp_path
+    ):
+        storage_path = tmp_path / "sessions"
+        manager = SessionManager(storage_path=storage_path)
+        first = manager.get_session("desktop", "first", "desktop_user")
+        first.add_message("user", "first history")
+        second = manager.get_session("desktop", "second", "desktop_user")
+        second.add_message("user", "second history")
+        assert manager._save_sessions() is True
+
+        reloaded = SessionManager(storage_path=storage_path)
+        restored_first = reloaded.get_session(
+            "desktop", "first", "desktop_user", create_if_missing=False
+        )
+        assert restored_first is not None
+        restored_first.add_message("assistant", "updated first history")
+        (storage_path / "sessions.index.sqlite3").write_bytes(b"not a sqlite database")
+
+        assert reloaded._save_sessions() is True
+
+        restarted = SessionManager(storage_path=storage_path)
+        restored_second = restarted.get_session(
+            "desktop", "second", "desktop_user", create_if_missing=False
+        )
+        assert restored_second is not None
+        assert restored_second.context.messages[0]["content"] == "second history"
+        assert {item["chat_id"] for item in restarted.list_session_summaries()} == {
+            "first",
+            "second",
+        }
 
 
 class TestSessionState:

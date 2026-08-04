@@ -394,7 +394,7 @@ async def _handle_pending_risk_answer(
                         session,
                         operation=classification.get("operation_kind"),
                     )
-                    session_manager.persist()
+                    await asyncio.to_thread(session_manager.persist)
                     logger.info(
                         "[RiskGate] Session trust granted (operation=%s, session=%s, "
                         "confirmation=%s)",
@@ -471,7 +471,7 @@ async def _handle_pending_risk_answer(
                                 )
                         except Exception as exc:
                             logger.warning("[Chat API] Failed to derive AuthorizedIntent: %s", exc)
-                        session_manager.persist()
+                        await asyncio.to_thread(session_manager.persist)
                 except Exception as exc:
                     logger.warning("[Chat API] Failed to persist risk_authorized_replay: %s", exc)
             logger.info(
@@ -528,7 +528,7 @@ async def _handle_pending_risk_answer(
                         "result": result,
                     },
                 )
-                session_manager.persist()
+                await asyncio.to_thread(session_manager.persist)
         except Exception as exc:
             logger.warning("[Chat API] Failed to persist controlled confirmation: %s", exc)
 
@@ -1245,7 +1245,7 @@ def _schedule_background_save(
                 )
                 session.add_message("assistant", bg_reply, **meta)
                 if session_manager:
-                    session_manager.persist()
+                    await asyncio.to_thread(session_manager.persist)
                 logger.info(
                     "[Chat API] Background save: %d chars (conv=%s)",
                     len(bg_reply),
@@ -1825,7 +1825,7 @@ async def _stream_chat(
                             },
                         )
                         if session_manager is not None:
-                            session_manager.persist()
+                            await asyncio.to_thread(session_manager.persist)
             elif event_type == "pending_approval":
                 _pending_approval = True
             elif event_type == "plan_ready_for_approval":
@@ -2049,7 +2049,7 @@ async def _stream_chat(
                     _msg_meta["stream_error"] = _agent_error_msg
                 session.add_message("assistant", assistant_text_to_save, **_msg_meta)
                 if session_manager:
-                    session_manager.persist()
+                    await asyncio.to_thread(session_manager.persist)
             except Exception as e:
                 logger.error(
                     f"[Chat API] Failed to save assistant message to session: {e}", exc_info=True
@@ -2188,7 +2188,7 @@ async def _stream_chat(
                     )
                     session.add_message("assistant", _deferred_text, **_deferred_meta)
                     if session_manager:
-                        session_manager.persist()
+                        await asyncio.to_thread(session_manager.persist)
                     logger.info(
                         f"[Chat API] Deferred save: {len(_deferred_text)} chars "
                         f"(client_disconnected={_client_disconnected})"
@@ -2373,7 +2373,7 @@ async def _stream_org_command_chat(
     _BUSY_REFRESH_INTERVAL = 60.0
     _last_busy_refresh_ts = 0.0
 
-    def _persist_org_error(message: str, *, error_code: str, org_status: str | None) -> None:
+    async def _persist_org_error(message: str, *, error_code: str, org_status: str | None) -> None:
         if session_manager is None:
             return
         try:
@@ -2395,7 +2395,7 @@ async def _stream_org_command_chat(
                     "org_status": org_status,
                 },
             )
-            session_manager.persist()
+            await asyncio.to_thread(session_manager.persist)
         except Exception:
             logger.warning("[Chat API] failed to persist org command error", exc_info=True)
 
@@ -2447,7 +2447,7 @@ async def _stream_org_command_chat(
 
         if svc is None:
             message = "OrgCommandService not initialized"
-            _persist_org_error(
+            await _persist_org_error(
                 message,
                 error_code="org_command_service_unavailable",
                 org_status=None,
@@ -2491,7 +2491,7 @@ async def _stream_org_command_chat(
         except OrgCommandError as exc:
             error_code = getattr(exc, "error_code", "org_command_error")
             org_status = getattr(exc, "org_status", None)
-            _persist_org_error(
+            await _persist_org_error(
                 str(exc),
                 error_code=error_code,
                 org_status=org_status,
@@ -2510,7 +2510,7 @@ async def _stream_org_command_chat(
         except Exception:
             logger.exception("[Chat API] failed to submit org command (org=%s)", org_id)
             message = "组织命令提交失败，请重试。"
-            _persist_org_error(
+            await _persist_org_error(
                 message,
                 error_code="org_command_submit_failed",
                 org_status=None,
