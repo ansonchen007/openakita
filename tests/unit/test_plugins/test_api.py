@@ -224,6 +224,33 @@ class TestGetBrain:
         assert api.get_brain() is fake_brain
 
 
+class TestGetLlm:
+    def test_requires_brain_access(self, tmp_path):
+        api = _make_api(tmp_path, granted=list(BASIC_PERMISSIONS))
+
+        assert api.get_llm() is None
+        assert "brain.access" in api._pending_permissions
+
+    def test_returns_cached_facade_when_brain_is_available(self, tmp_path):
+        fake_brain = MagicMock()
+        granted = list(BASIC_PERMISSIONS) + ["brain.access"]
+        api = _make_api(tmp_path, granted=granted, host_refs={"brain": fake_brain})
+
+        first = api.get_llm()
+
+        assert first is not None
+        assert api.get_llm() is first
+
+    def test_returns_none_until_late_wired_brain_is_available(self, tmp_path):
+        host_refs = {"brain": None}
+        granted = list(BASIC_PERMISSIONS) + ["brain.access"]
+        api = _make_api(tmp_path, granted=granted, host_refs=host_refs)
+
+        assert api.get_llm() is None
+        host_refs["brain"] = MagicMock()
+        assert api.get_llm() is not None
+
+
 # ---------- UI events ----------
 
 

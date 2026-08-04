@@ -251,6 +251,7 @@ api.register_llm_registry("ollama", OllamaRegistry(ProviderRegistryInfo(
 ### 宿主服务访问 / Host Service Access
 
 ```python
+llm = api.get_llm()                  # 权限 / perm: brain.access (recommended)
 brain = api.get_brain()              # 权限 / perm: brain.access
 memory = api.get_memory_manager()    # 权限 / perm: memory.read
 vector = api.get_vector_store()      # 权限 / perm: vector.access
@@ -260,6 +261,51 @@ settings = api.get_settings()        # 权限 / perm: settings.read
 > 权限不足时返回 `None`。请先做 `None` 检查再使用。
 >
 > Returns `None` when permission is denied. Always check for `None` before use.
+
+新插件应优先使用 `get_llm()`。它只暴露脱敏的模型信息和请求级模型选择，
+不会修改用户的全局或会话模型。`get_brain()` 为已有插件保留，但不应使用
+`switch_model()` 实现插件自己的模型选择。
+
+New plugins should prefer `get_llm()`. It exposes only sanitized model metadata
+and request-scoped selection, and never changes the user's global or conversation
+model. `get_brain()` remains for compatibility; plugins must not use
+`switch_model()` for per-plugin selection.
+
+```python
+from openakita_plugin_sdk import LLMSelectionPolicy
+
+llm = api.get_llm()
+if llm:
+    models = llm.list_models(capabilities=["text"])
+    if not models:
+        raise RuntimeError("No configured text model")
+    selected = models[0].endpoint
+    result = await llm.complete(
+        prompt="Summarize this report",
+        system="Return concise plain text.",
+        endpoint=selected,
+        policy=LLMSelectionPolicy.PREFER,
+        max_tokens=1000,
+    )
+    text = result.text
+    actual_endpoint = result.endpoint
+```
+
+选择策略 / Selection policies:
+
+- `inherit`: 使用 OpenAkita 的正常路由和故障切换；不能指定 `endpoint`。
+- `prefer`: 优先使用指定端点，不健康或能力不匹配时允许安全降级。
+- `require`: 只使用指定端点；能力不匹配时直接报错。
+
+- `inherit`: Use OpenAkita's normal routing and failover; no `endpoint` may be supplied.
+- `prefer`: Prefer the endpoint and safely fall back when unhealthy or incompatible.
+- `require`: Use only the endpoint and fail on capability mismatch.
+
+`list_models()` 只返回 `endpoint`, `model`, `provider`, `priority`, `healthy`,
+`current`, `capabilities`, `note`，永远不返回 API Key 或 Base URL。
+
+`list_models()` returns only `endpoint`, `model`, `provider`, `priority`, `healthy`,
+`current`, `capabilities`, and `note`; it never returns API keys or base URLs.
 
 ```python
 brain = api.get_brain()

@@ -11,7 +11,10 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from .llm import PluginLLM
 
 
 @dataclass
@@ -116,6 +119,15 @@ class PluginAPI(ABC):
     def register_llm_registry(self, slug: str, registry: Any) -> None: ...
 
     # --- Host service access ---
+
+    def get_llm(self) -> PluginLLM | None:
+        """Return the stable host LLM facade, or ``None`` when unavailable.
+
+        Requires ``brain.access``. This non-abstract default preserves binary
+        compatibility with custom PluginAPI test doubles built against older
+        SDK releases.
+        """
+        return None
 
     @abstractmethod
     def get_brain(self) -> Any: ...

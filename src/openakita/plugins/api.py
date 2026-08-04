@@ -120,6 +120,7 @@ class PluginAPI:
         self._pending_permissions: set[str] = set()
         # Background tasks scheduled via spawn_task — cancelled on unload.
         self._spawned_tasks: set[asyncio.Task[Any]] = set()
+        self._llm_facade: Any = None
 
         self._logger = logging.getLogger(f"openakita.plugin.{plugin_id}")
         if self._logger.level == logging.NOTSET:
@@ -670,6 +671,21 @@ class PluginAPI:
             self.log("No external_retrieval_sources list available", "warning")
 
     # --- Host access (advanced) ---
+
+    def get_llm(self):
+        """Return a plugin-scoped, request-safe facade over configured LLMs."""
+        if not self._check_permission("brain.access"):
+            return None
+        if self._host.get("brain") is None:
+            return None
+        if self._llm_facade is None:
+            from .llm_facade import PluginLLMFacade
+
+            self._llm_facade = PluginLLMFacade(
+                self._plugin_id,
+                brain_resolver=lambda: self._host.get("brain"),
+            )
+        return self._llm_facade
 
     def get_brain(self):
         if not self._check_permission("brain.access"):

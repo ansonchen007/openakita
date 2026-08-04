@@ -12,6 +12,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from openakita.llm.types import is_local_endpoint_config
+
 
 class EndpointFailoverView:
     """Failover/endpoint-management surface over an LLMClient.
@@ -71,12 +73,23 @@ class EndpointFailoverView:
 
     def list_models(self) -> list[dict[str, Any]]:
         """Dict-shape rendering of every available ``ModelInfo``."""
+        endpoints_by_name = {
+            getattr(endpoint, "name", ""): endpoint for endpoint in self._client.endpoints
+        }
         return [
             {
                 "name": getattr(m, "name", ""),
                 "model": getattr(m, "model", ""),
                 "provider": getattr(m, "provider", ""),
                 "priority": getattr(m, "priority", 0),
+                "local": is_local_endpoint_config(
+                    getattr(m, "provider", ""),
+                    getattr(
+                        endpoints_by_name.get(getattr(m, "name", "")),
+                        "base_url",
+                        "",
+                    ),
+                ),
                 "is_healthy": getattr(m, "is_healthy", False),
                 "is_current": getattr(m, "is_current", False),
                 "is_override": getattr(m, "is_override", False),

@@ -8,6 +8,54 @@ from pathlib import Path
 from typing import Any
 
 from .core import PluginAPI, PluginBase
+from .llm import LLMCompletion, LLMModel, LLMUsage
+
+
+class MockPluginLLM:
+    """Small programmable stand-in for the host's plugin LLM facade."""
+
+    def __init__(self, models: list[LLMModel] | None = None) -> None:
+        self.models = list(models or [])
+        self.calls: list[dict[str, Any]] = []
+        self.responses: list[LLMCompletion] = []
+
+    def list_models(self, *, capabilities: list[str] | tuple[str, ...] = ()) -> list[LLMModel]:
+        required = {str(item).strip().lower() for item in capabilities if str(item).strip()}
+        if not required:
+            return list(self.models)
+        return [model for model in self.models if required.issubset(set(model.capabilities))]
+
+    def queue_response(
+        self,
+        text: str,
+        *,
+        endpoint: str = "mock",
+        model: str = "mock-model",
+        input_tokens: int = 0,
+        output_tokens: int = 0,
+    ) -> None:
+        self.responses.append(
+            LLMCompletion(
+                text=text,
+                endpoint=endpoint,
+                model=model,
+                usage=LLMUsage(
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                ),
+            )
+        )
+
+    async def complete(
+        self,
+        messages: list[dict[str, Any]] | None = None,
+        **kwargs: Any,
+    ) -> LLMCompletion:
+        self.calls.append({"messages": messages, **kwargs})
+        if self.responses:
+            return self.responses.pop(0)
+        endpoint = str(kwargs.get("endpoint") or "mock")
+        return LLMCompletion(text="", endpoint=endpoint, model="mock-model")
 
 
 class MockPluginAPI(PluginAPI):
@@ -17,6 +65,7 @@ class MockPluginAPI(PluginAPI):
         self,
         plugin_id: str = "test-plugin",
         granted_permissions: list[str] | None = None,
+        llm: MockPluginLLM | None = None,
     ) -> None:
         self.plugin_id = plugin_id
         self.logs: list[tuple[str, str]] = []
@@ -40,6 +89,7 @@ class MockPluginAPI(PluginAPI):
         self._granted_permissions: set[str] | None = (
             set(granted_permissions) if granted_permissions is not None else None
         )
+        self.llm = llm
 
     def log(self, msg: str, level: str = "info") -> None:
         self.logs.append((level, msg))
@@ -91,6 +141,11 @@ class MockPluginAPI(PluginAPI):
 
     def get_brain(self) -> Any:
         return None
+
+    def get_llm(self) -> MockPluginLLM | None:
+        if not self.has_permission("brain.access"):
+            return None
+        return self.llm
 
     def get_memory_manager(self) -> Any:
         return None
