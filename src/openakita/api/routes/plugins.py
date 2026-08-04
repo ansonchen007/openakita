@@ -1147,6 +1147,20 @@ async def get_plugin_config(plugin_id: str) -> dict[str, Any]:
     return {"ok": True, "data": _read_plugin_config(plugin_id)}
 
 
+@router.get("/{plugin_id}/_admin/llm-models")
+async def get_plugin_llm_models(plugin_id: str, request: Request) -> dict[str, Any]:
+    """Return the sanitized host text-model catalog for a loaded plugin UI."""
+    _check_plugin_id(plugin_id)
+    manager = _require_manager(request)
+    loaded = manager.loaded_plugins.get(plugin_id)
+    if loaded is None:
+        raise HTTPException(status_code=404, detail=make_error_response(PluginErrorCode.NOT_FOUND))
+    from openakita.plugins.llm_support import llm_catalog_payload
+
+    selected = str(_read_plugin_config(plugin_id).get("llm_endpoint") or "")
+    return {"ok": True, "data": llm_catalog_payload(loaded.api, selected_endpoint=selected)}
+
+
 @router.put("/{plugin_id}/_admin/config")
 async def update_plugin_config(
     plugin_id: str,
@@ -1161,6 +1175,23 @@ async def update_plugin_config(
             detail=make_error_response(PluginErrorCode.NOT_FOUND),
         )
     schema = _read_config_schema(plugin_dir)
+
+    if "llm_endpoint" in body:
+        manager = _require_manager(request)
+        loaded = manager.loaded_plugins.get(plugin_id)
+        if loaded is None:
+            raise HTTPException(
+                status_code=404, detail=make_error_response(PluginErrorCode.NOT_FOUND)
+            )
+        from openakita.plugins.llm_support import validate_llm_endpoint
+
+        try:
+            body["llm_endpoint"] = validate_llm_endpoint(loaded.api, body["llm_endpoint"])
+        except (RuntimeError, ValueError) as exc:
+            raise HTTPException(
+                status_code=400,
+                detail=make_error_response(PluginErrorCode.CONFIG_INVALID, detail=str(exc)),
+            ) from exc
 
     def _validate_config(current: dict[str, Any]) -> None:
         if schema is None:

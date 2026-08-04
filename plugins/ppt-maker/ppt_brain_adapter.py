@@ -250,6 +250,10 @@ class PptBrainAdapter:
         return llm
 
     def _endpoint(self) -> str:
+        get_config = getattr(self._api, "get_config", None)
+        config = get_config() if callable(get_config) else {}
+        if isinstance(config, dict) and "llm_endpoint" in config:
+            return str(config.get("llm_endpoint") or "").strip()
         path = self._data_root / "settings.json"
         if not path.exists():
             return ""

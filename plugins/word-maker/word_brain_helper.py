@@ -105,6 +105,8 @@ class WordBrainHelper:
 
     def _endpoint(self) -> str:
         config = self._api.get_config() if callable(getattr(self._api, "get_config", None)) else {}
+        if isinstance(config, dict) and "llm_endpoint" in config:
+            return str(config.get("llm_endpoint") or "").strip()
         settings = config.get("word_maker_settings", {}) if isinstance(config, dict) else {}
         return str(settings.get("llm_endpoint") or "").strip()
 

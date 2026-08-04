@@ -443,7 +443,7 @@ const I18N_DICT = {
     "mediaPost.tabs.settings.sub": "API Key / VLM 参数 / 章节卡 / 成本控制 / 协同",
     // Global API-key banner (shown above the tab content when key missing)
     "mediaPost.banner.noKey.title": "尚未配置 DashScope API Key",
-    "mediaPost.banner.noKey.desc": "所有创建任务都会失败。请前往设置页填入阿里云百炼 DashScope API Key。",
+    "mediaPost.banner.noKey.desc": "封面挑选与智能构图会失败；SEO 文本仍使用所选 OpenAkita 模型。请为视觉任务配置 DashScope API Key。",
     "mediaPost.banner.noKey.cta": "前往配置",
     // Empty-state titles/hints for the right preview pane and list panes.
     "mediaPost.preview.empty.title": "等待运行任务",
@@ -699,7 +699,7 @@ const I18N_DICT = {
     "mediaPost.tabs.library.sub": "Covers / aspects / SEO copy / chapter cards",
     "mediaPost.tabs.settings.sub": "API Key / VLM / Chapters / Cost / Cross-plugin",
     "mediaPost.banner.noKey.title": "DashScope API Key not configured",
-    "mediaPost.banner.noKey.desc": "All create tasks will fail. Open Settings and paste your Aliyun Bailian DashScope API key.",
+    "mediaPost.banner.noKey.desc": "Cover and vision tasks will fail; SEO text still uses the selected OpenAkita model. Configure this key for vision tasks.",
     "mediaPost.banner.noKey.cta": "Open Settings",
     "mediaPost.preview.empty.title": "Waiting for a task",
     "mediaPost.preview.empty.hint": "Pick a mode → upload video → tune params → run",
@@ -2577,5 +2577,6 @@ if (window.OpenAkita && typeof window.OpenAkita.ready === "function") {
   }
 })();
 </script>
+<script src="./_assets/openakita-llm-selector.js" data-plugin-id="media-post"></script>
 </body>
 </html>

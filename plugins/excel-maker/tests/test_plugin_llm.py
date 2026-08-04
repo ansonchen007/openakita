@@ -17,9 +17,16 @@ class FakeLLM:
 
 
 class FakeAPI:
-    def __init__(self, llm: FakeLLM, endpoint: str = "") -> None:
+    def __init__(
+        self,
+        llm: FakeLLM,
+        endpoint: str = "",
+        central_endpoint: str | None = None,
+    ) -> None:
         self.llm = llm
         self.config = {"excel_maker_settings": {"llm_endpoint": endpoint}}
+        if central_endpoint is not None:
+            self.config["llm_endpoint"] = central_endpoint
 
     def get_llm(self):
         return self.llm
@@ -53,3 +60,20 @@ async def test_clarification_uses_inherit_when_endpoint_is_empty(tmp_path):
 
     assert llm.calls[0]["policy"] == "inherit"
     assert "endpoint" not in llm.calls[0]
+
+
+@pytest.mark.asyncio
+async def test_central_selector_endpoint_overrides_legacy_nested_setting(tmp_path):
+    llm = FakeLLM({"questions": ["统计周期是什么？"]})
+    plugin = Plugin()
+    plugin._api = FakeAPI(
+        llm,
+        endpoint="legacy-model",
+        central_endpoint="selected-model",
+    )
+    plugin._data_dir = tmp_path
+
+    await plugin._clarify_questions(ClarifyRequest(goal="生成月报"))
+
+    assert llm.calls[0]["endpoint"] == "selected-model"
+    assert llm.calls[0]["policy"] == "require"

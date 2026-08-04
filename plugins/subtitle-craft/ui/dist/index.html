@@ -853,13 +853,13 @@ const I18N_DICT = {
     "tabs.settings": "设置",
     // banner (no API key)
     "banner.noKey.title": "尚未配置 DashScope API Key",
-    "banner.noKey.desc": "Paraformer 听写 与 Qwen-MT 翻译均会失败。请前往设置页填入阿里云百炼 DashScope API Key。",
+    "banner.noKey.desc": "Paraformer 听写会失败；翻译仍使用所选 OpenAkita 文本模型。请为 ASR 配置 DashScope API Key。",
     "banner.noKey.cta": "前往配置",
     // modes
     "modes.auto_subtitle": "自动字幕",
     "modes.auto_subtitle.desc": "视频/音频 → Paraformer-v2 词级听写 → SRT/VTT,可选烧制",
     "modes.translate": "字幕翻译",
-    "modes.translate.desc": "现有 SRT → Qwen-MT 多语言翻译,支持双语字幕",
+    "modes.translate.desc": "现有 SRT → OpenAkita 文本模型多语言翻译,支持双语字幕",
     "modes.repair": "字幕修复",
     "modes.repair.desc": "时间轴对齐、断行重排、消除重叠",
     "modes.burn": "字幕烧制",
@@ -933,7 +933,7 @@ const I18N_DICT = {
     "create.cost.refresh": "刷新预估",
     "create.cost.total": "合计",
     "create.cost.itemAsr": "Paraformer-v2 听写",
-    "create.cost.itemMt": "Qwen-MT 翻译",
+    "create.cost.itemMt": "OpenAkita 文本翻译",
     "create.cost.itemVl": "Qwen-VL 角色识别",
     "create.cost.itemBurn": "本地烧制 (无 API 费用)",
     "create.cost.unitMin": "{n} 分钟",
@@ -955,7 +955,7 @@ const I18N_DICT = {
     "create.preview.section.cost": "费用明细",
     "create.preview.section.notes": "计费说明",
     "create.cost.note.asr": "Paraformer-v2 听写: ¥0.0008 / 秒(按音频时长)",
-    "create.cost.note.mt": "Qwen-MT Flash / Plus / Lite: 按 Token 计费(中文 ≈ 0.7 token/字)",
+    "create.cost.note.mt": "文本费用由所选 OpenAkita 端点决定",
     "create.cost.note.vl": "Qwen-VL Max 角色识别: 仅在角色分离 + 角色识别同时开启时计费",
     "create.cost.note.burn": "本地烧制(FFmpeg / Playwright HTML): 不消耗 API,免费",
     // tasks tab
@@ -994,7 +994,7 @@ const I18N_DICT = {
     // create tab features (rendered as feature cards in the empty preview)
     "create.feature.asr.title": "Paraformer-v2 词级听写",
     "create.feature.asr.desc": "中英日韩等 11 种语言,自动断句 + 时间戳",
-    "create.feature.mt.title": "Qwen-MT 多语言翻译",
+    "create.feature.mt.title": "OpenAkita 多语言翻译",
     "create.feature.mt.desc": "Flash / Plus / Lite 三档,支持双语字幕",
     "create.feature.repair.title": "时间轴修复",
     "create.feature.repair.desc": "重叠剔除、断行重排、短 cue 合并",
@@ -1092,7 +1092,7 @@ const I18N_DICT = {
     "settings.system.health.browserInstalled": "Playwright Chromium 安装成功",
     "settings.system.health.browserInstallFailed": "Playwright Chromium 安装失败:{msg}",
     "settings.system.health.playwrightRequired": "需要先安装 Playwright 包",
-    "settings.system.health.intro": "HTML 字幕渲染使用 Playwright 专用 Chromium;系统 Chromium 单独显示用于环境诊断。DashScope API Key 用于 ASR 与翻译。",
+    "settings.system.health.intro": "HTML 字幕渲染使用 Playwright 专用 Chromium；DashScope API Key 仅用于 ASR，文本任务使用 OpenAkita 模型。",
     "settings.storage.title": "存储统计",
     "settings.storage.totalFiles": "文件总数",
     "settings.storage.totalSize": "总大小",
@@ -1130,7 +1130,7 @@ const I18N_DICT = {
     "common.refresh": "刷新",
     // hook_picker (v1.1) — mode tile + tag
     "modes.hook_picker": "AI 选 Hook",
-    "modes.hook_picker.desc": "Qwen-Plus 智能挑选短视频开场金句,输出 hook.srt + 时间码",
+    "modes.hook_picker.desc": "OpenAkita 文本模型挑选短视频开场金句,输出 hook.srt + 时间码",
     "modes.tag.hook_picker": "AI 选段",
     // hook_picker — left pane source picker
     "hook.source.label": "字幕来源",
@@ -1163,11 +1163,11 @@ const I18N_DICT = {
     "create.summary.hook.window": "窗口策略",
     "create.summary.hook.model": "AI 模型",
     "create.preview.hook.empty.title": "AI 选 Hook 等待启动",
-    "create.preview.hook.empty.hint": "上传或挑选已有 SRT 后,Qwen-Plus 会用三轮窗口策略锁定最佳开场金句。",
+    "create.preview.hook.empty.hint": "上传或挑选已有 SRT 后，所选 OpenAkita 模型会用三轮窗口策略锁定最佳开场金句。",
     "create.hookFeature.load.title": "加载 SRT",
     "create.hookFeature.load.desc": "支持新上传或复用已有任务的字幕",
     "create.hookFeature.ai.title": "AI 选段",
-    "create.hookFeature.ai.desc": "Qwen-Plus 三轮窗口策略,带模糊匹配回退",
+    "create.hookFeature.ai.desc": "OpenAkita 模型三轮窗口策略,带模糊匹配回退",
     "create.hookFeature.duration.title": "时长校验",
     "create.hookFeature.duration.desc": "自动落入目标 ±5s 区间,不达标自动重选",
     "create.hookFeature.timecode.title": "导出时间码",
@@ -1202,12 +1202,12 @@ const I18N_DICT = {
     "tabs.library": "Library",
     "tabs.settings": "Settings",
     "banner.noKey.title": "DashScope API Key not configured",
-    "banner.noKey.desc": "Paraformer ASR and Qwen-MT translation will both fail. Please configure your DashScope API key in Settings.",
+    "banner.noKey.desc": "Paraformer ASR will fail; translation still uses the selected OpenAkita text model. Configure this key for ASR.",
     "banner.noKey.cta": "Open Settings",
     "modes.auto_subtitle": "Auto Subtitle",
     "modes.auto_subtitle.desc": "Video/audio → Paraformer-v2 word-level ASR → SRT/VTT, optional burn",
     "modes.translate": "Translate",
-    "modes.translate.desc": "Existing SRT → Qwen-MT multilingual translation, optional bilingual",
+    "modes.translate.desc": "Existing SRT → OpenAkita text model translation, optional bilingual",
     "modes.repair": "Repair",
     "modes.repair.desc": "Timeline alignment, line wrapping, overlap removal",
     "modes.burn": "Burn",
@@ -1278,7 +1278,7 @@ const I18N_DICT = {
     "create.cost.refresh": "Refresh estimate",
     "create.cost.total": "Total",
     "create.cost.itemAsr": "Paraformer-v2 ASR",
-    "create.cost.itemMt": "Qwen-MT translation",
+    "create.cost.itemMt": "OpenAkita text translation",
     "create.cost.itemVl": "Qwen-VL identification",
     "create.cost.itemBurn": "Local burn (no API cost)",
     "create.cost.unitMin": "{n} min",
@@ -1300,7 +1300,7 @@ const I18N_DICT = {
     "create.preview.section.cost": "Cost breakdown",
     "create.preview.section.notes": "Pricing notes",
     "create.cost.note.asr": "Paraformer-v2 ASR: ¥0.0008 / sec of audio",
-    "create.cost.note.mt": "Qwen-MT Flash / Plus / Lite: per input token (~0.7 token / Chinese char)",
+    "create.cost.note.mt": "Text billing is determined by the selected OpenAkita endpoint",
     "create.cost.note.vl": "Qwen-VL Max character ID: charged only when diarization AND character-ID are both on",
     "create.cost.note.burn": "Local burn (FFmpeg / Playwright HTML): no API cost",
     "tasks.filter.status": "Status",
@@ -1337,7 +1337,7 @@ const I18N_DICT = {
     "create.feature.asr.title": "Word-level ASR",
     "create.feature.asr.desc": "Paraformer-v2, 11 languages, auto sentence + timestamps",
     "create.feature.mt.title": "Multi-lingual MT",
-    "create.feature.mt.desc": "Qwen-MT Flash / Plus / Lite, optional bilingual subs",
+    "create.feature.mt.desc": "Selected OpenAkita text model, optional bilingual subs",
     "create.feature.repair.title": "Timeline repair",
     "create.feature.repair.desc": "Overlap removal, line wrapping, short cue merging",
     "create.feature.burn.title": "Local burn",
@@ -1466,7 +1466,7 @@ const I18N_DICT = {
     "common.refresh": "Refresh",
     // hook_picker (v1.1) — mode tile + tag
     "modes.hook_picker": "AI Hook Picker",
-    "modes.hook_picker.desc": "Qwen-Plus selects the strongest opening dialogue, returns hook.srt + timecode",
+    "modes.hook_picker.desc": "The selected OpenAkita model finds the strongest opening dialogue and returns hook.srt + timecode",
     "modes.tag.hook_picker": "AI Hook",
     // hook_picker — left pane source picker
     "hook.source.label": "Subtitle source",
@@ -1499,11 +1499,11 @@ const I18N_DICT = {
     "create.summary.hook.window": "Window strategy",
     "create.summary.hook.model": "AI model",
     "create.preview.hook.empty.title": "AI Hook Picker is ready",
-    "create.preview.hook.empty.hint": "Upload or pick an existing SRT — Qwen-Plus will run a 3-window strategy to find the strongest opener.",
+    "create.preview.hook.empty.hint": "Upload or pick an existing SRT — the selected OpenAkita model will run a 3-window strategy.",
     "create.hookFeature.load.title": "Load SRT",
     "create.hookFeature.load.desc": "Upload new file or reuse an existing task's subtitle",
     "create.hookFeature.ai.title": "AI selection",
-    "create.hookFeature.ai.desc": "Qwen-Plus 3-window strategy with fuzzy-match fallback",
+    "create.hookFeature.ai.desc": "OpenAkita model 3-window strategy with fuzzy-match fallback",
     "create.hookFeature.duration.title": "Duration check",
     "create.hookFeature.duration.desc": "Auto-rejects clips outside target ±5s and retries",
     "create.hookFeature.timecode.title": "Export timecode",
@@ -2133,14 +2133,8 @@ function CreateTab({ apiReady, goToTasks }) {
                 </select>
               </div>
             </div>
-            <div className="form-row">
-              <div className="label">{t("create.translation.model")}</div>
-              <select className="input select" value={translationModel}
-                      onChange={e => setTranslationModel(e.target.value)}>
-                <option value="qwen-mt-flash">{t("create.translation.flash")}</option>
-                <option value="qwen-mt-plus">{t("create.translation.plus")}</option>
-                <option value="qwen-mt-lite">{t("create.translation.lite")}</option>
-              </select>
+            <div className="text-xs text-dim">
+              翻译使用右下角“AI 模型”选择器中的 OpenAkita 文本端点。
             </div>
             <div className="form-row">
               <div className="switch-row">
@@ -2331,14 +2325,8 @@ function CreateTab({ apiReady, goToTasks }) {
                          value={randomAttempts}
                          onChange={e => setRandomAttempts(parseInt(e.target.value, 10))} />
                 </div>
-                <div className="form-row">
-                  <div className="label">{t("hook.model.label")}</div>
-                  <select className="input select" value={hookModel}
-                          onChange={e => setHookModel(e.target.value)}>
-                    <option value="qwen-plus">Qwen-Plus (¥0.005/次)</option>
-                    <option value="qwen-plus-2025-09-11">Qwen-Plus snapshot</option>
-                    <option value="qwen-max">Qwen-Max (¥0.13/次)</option>
-                  </select>
+                <div className="text-xs text-dim">
+                  Hook 分析使用右下角“AI 模型”选择器中的 OpenAkita 文本端点。
                 </div>
               </details>
             </div>
@@ -2448,7 +2436,7 @@ function CreateTab({ apiReady, goToTasks }) {
                   </div>
                   <div className="oa-summary-pill">
                     <div className="oa-summary-pill__label">{t("create.summary.translate.model")}</div>
-                    <div className="oa-summary-pill__value">{translationModel.replace("qwen-mt-", "")}</div>
+                    <div className="oa-summary-pill__value">OpenAkita</div>
                   </div>
                 </>
               )}
@@ -4053,5 +4041,6 @@ if (window.OpenAkita && typeof window.OpenAkita.ready === "function") {
   }
 })();
 </script>
+<script src="./_assets/openakita-llm-selector.js" data-plugin-id="subtitle-craft"></script>
 </body>
 </html>

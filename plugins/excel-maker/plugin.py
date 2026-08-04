@@ -1085,13 +1085,19 @@ class Plugin(PluginBase):
     def _settings(self) -> Settings:
         if self._data_dir is None:
             return Settings()
+        config: dict[str, Any] = {}
         if self._api is not None:
-            config = self._api.get_config()
+            raw_config = self._api.get_config()
+            config = raw_config if isinstance(raw_config, dict) else {}
             if isinstance(config, dict) and isinstance(config.get(SETTINGS_KEY), dict):
-                return Settings(**config[SETTINGS_KEY])
+                settings = Settings(**config[SETTINGS_KEY])
+            else:
+                settings = None
+        else:
+            settings = None
         path = self._settings_path()
-        if not path.exists():
-            return Settings(
+        if settings is None and not path.exists():
+            settings = Settings(
                 data_dir=str(self._data_dir),
                 uploads_dir=str(self._data_dir / "uploads"),
                 workbooks_dir=str(self._data_dir / "workbooks"),
@@ -1100,8 +1106,14 @@ class Plugin(PluginBase):
                 templates_dir=str(self._data_dir / "templates"),
                 cache_dir=str(self._data_dir / "cache"),
             )
-        data = json.loads(path.read_text(encoding="utf-8"))
-        return Settings(**data)
+        elif settings is None:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            settings = Settings(**data)
+        if "llm_endpoint" in config:
+            settings = settings.model_copy(
+                update={"llm_endpoint": str(config.get("llm_endpoint") or "").strip()}
+            )
+        return settings
 
     def _save_settings(self, settings: Settings) -> None:
         data = settings.model_dump(mode="json")
