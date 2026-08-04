@@ -703,9 +703,12 @@ class IMChannelHandler:
 
         artifacts = self._normalize_artifacts(params.get("artifacts"))
         receipts = []
+        desktop_mirror_artifacts: list[dict] = []
 
         # 会话内去重（仅运行时有效，不落盘）
-        session = getattr(self.agent, "_current_session", None)
+        from ...core.im_context import get_im_session
+
+        session = get_im_session() or getattr(self.agent, "_current_session", None)
         dedupe_set: set[str] = set()
         try:
             if session and hasattr(session, "get_metadata"):
@@ -748,6 +751,7 @@ class IMChannelHandler:
                 "status": "failed",
                 "error_code": "",
                 "name": name,
+                "caption": caption,
                 "mime": mime,
                 "size": size,
                 "sha256": sha256,
@@ -806,6 +810,17 @@ class IMChannelHandler:
 
             if receipt.get("status") == "delivered" and dedupe_key:
                 dedupe_set.add(dedupe_key)
+            if receipt.get("status") == "delivered" and path:
+                desktop_mirror_artifacts.append(
+                    {
+                        "artifact_type": art_type,
+                        "path": path,
+                        "name": name or Path(path).name,
+                        "caption": caption,
+                        "size": size,
+                        "sha256": sha256,
+                    }
+                )
 
         # 保存回 session metadata（下划线开头：不落盘，仅运行时）
         try:
@@ -813,6 +828,32 @@ class IMChannelHandler:
                 session.set_metadata("_delivered_dedupe_keys", list(dedupe_set))
         except Exception:
             pass
+
+        # The IM adapter owns remote delivery, while the desktop chat mirrors
+        # the same turn from the local file. Keep this private and transient;
+        # MessageGateway consumes it when it writes the assistant mirror turn.
+        if session and desktop_mirror_artifacts:
+            try:
+                pending = list(session.get_metadata("_pending_desktop_artifacts") or [])
+                seen = {
+                    (
+                        str(item.get("artifact_type") or item.get("type") or ""),
+                        str(item.get("path") or "").lower().replace("\\", "/"),
+                    )
+                    for item in pending
+                    if isinstance(item, dict)
+                }
+                for item in desktop_mirror_artifacts:
+                    key = (
+                        str(item.get("artifact_type") or item.get("type") or ""),
+                        str(item.get("path") or "").lower().replace("\\", "/"),
+                    )
+                    if key not in seen:
+                        pending.append(item)
+                        seen.add(key)
+                session.set_metadata("_pending_desktop_artifacts", pending)
+            except Exception as exc:
+                logger.warning("Failed to queue desktop artifact mirror: %s", exc)
 
         ok = (
             all(r.get("status") in ("delivered", "skipped") for r in receipts)

@@ -1557,6 +1557,7 @@ class MessageGateway:
         source_message_id: str | None = None,
         chain_summary: list | None = None,
         tool_summary: str | None = None,
+        artifacts: list[dict] | None = None,
     ) -> None:
         """Mirror IM turns into the normal desktop chat list.
 
@@ -1580,6 +1581,8 @@ class MessageGateway:
             chat_name=label,
         )
         mirror.context.agent_profile_id = session.context.agent_profile_id
+        if session.working_directory:
+            mirror.working_directory = session.working_directory
         mirror.set_metadata("source_channel", session.channel)
         mirror.set_metadata("source_bot_instance_id", session.bot_instance_id or session.channel)
         mirror.set_metadata("source_chat_id", session.chat_id)
@@ -1605,8 +1608,20 @@ class MessageGateway:
             meta["chain_summary"] = chain_summary
         if tool_summary:
             meta["tool_summary"] = tool_summary
+        if artifacts:
+            prepared_artifacts = self._prepare_desktop_mirror_artifacts(
+                mirror,
+                artifacts,
+            )
+            if prepared_artifacts:
+                meta["artifacts"] = prepared_artifacts
 
         added = mirror.add_message(role=role, content=mirrored_content, **meta)
+        if not added and meta.get("artifacts"):
+            # Text-only dedup must not discard a newly delivered attachment
+            # when consecutive image generations use the same final wording.
+            mirror.append_marker(role=role, content=mirrored_content, **meta)
+            added = True
         if not added:
             return
         self.session_manager.mark_dirty()
@@ -1622,6 +1637,82 @@ class MessageGateway:
                 "source_session_id": session.session_key,
             },
         )
+
+    @staticmethod
+    def _prepare_desktop_mirror_artifacts(
+        mirror: Session,
+        artifacts: list[dict],
+    ) -> list[dict]:
+        """Create desktop-safe artifact projections for an IM mirror turn."""
+        import shutil
+        import urllib.parse
+
+        from ..core.working_directory import session_working_directory
+
+        try:
+            workspace_root = session_working_directory(mirror, require_available=True).resolve()
+        except Exception as exc:
+            logger.warning("Failed to resolve desktop mirror workspace: %s", exc)
+            return []
+
+        prepared: list[dict] = []
+        seen: set[tuple[str, str]] = set()
+        for raw in artifacts:
+            if not isinstance(raw, dict):
+                continue
+            raw_path = str(raw.get("path") or "").strip()
+            if not raw_path:
+                continue
+            try:
+                source = Path(raw_path).resolve(strict=True)
+                if not source.is_file():
+                    continue
+                projected = source
+                if not source.is_relative_to(workspace_root):
+                    output_dir = workspace_root / "data" / "output"
+                    output_dir.mkdir(parents=True, exist_ok=True)
+                    digest = str(raw.get("sha256") or "").strip()[:12]
+                    filename = (
+                        f"{source.stem}_{digest}{source.suffix}" if digest else source.name
+                    )
+                    projected = output_dir / filename
+                    if projected.exists() and digest:
+                        pass
+                    elif projected.exists():
+                        counter = 1
+                        while projected.exists():
+                            projected = output_dir / f"{source.stem}_{counter}{source.suffix}"
+                            counter += 1
+                        shutil.copy2(source, projected)
+                    else:
+                        shutil.copy2(source, projected)
+                    projected = projected.resolve()
+            except Exception as exc:
+                logger.warning("Failed to prepare mirrored artifact %s: %s", raw_path, exc)
+                continue
+
+            artifact_type = str(raw.get("artifact_type") or raw.get("type") or "file")
+            key = (artifact_type, str(projected).lower().replace("\\", "/"))
+            if key in seen:
+                continue
+            seen.add(key)
+            file_url = (
+                "/api/files?path="
+                + urllib.parse.quote(str(projected), safe="")
+                + "&conversation_id="
+                + urllib.parse.quote(mirror.chat_id, safe="")
+            )
+            prepared.append(
+                {
+                    "artifact_type": artifact_type,
+                    "file_url": file_url,
+                    "path": str(projected),
+                    "name": str(raw.get("name") or projected.name),
+                    "caption": str(raw.get("caption") or ""),
+                    "size": projected.stat().st_size,
+                }
+            )
+        return prepared
 
     # ==================== 自然语言意图检测 ====================
 
@@ -4531,6 +4622,9 @@ class MessageGateway:
                         logger.debug(f"[Gateway] Tool trace summary ({len(_tool_summary)} chars)")
             except Exception:
                 pass
+            _desktop_artifacts = list(
+                session.get_metadata("_pending_desktop_artifacts") or []
+            )
             _msg_meta: dict = {"bot_instance_id": bot_namespace}
             if _chain_summary:
                 _msg_meta["chain_summary"] = _chain_summary
@@ -4543,7 +4637,10 @@ class MessageGateway:
                 content=response_text,
                 chain_summary=_chain_summary,
                 tool_summary=_tool_summary,
+                artifacts=_desktop_artifacts,
             )
+            if _desktop_artifacts:
+                session.set_metadata("_pending_desktop_artifacts", [])
             self.session_manager.persist()
             _notify_im_event(
                 "im:new_message",

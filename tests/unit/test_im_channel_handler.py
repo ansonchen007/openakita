@@ -1,5 +1,7 @@
 import json
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -10,6 +12,17 @@ from openakita.tools.handlers.im_channel import IMChannelHandler
 class _FakeAgent:
     def __init__(self, workspace_dir):
         self.workspace_dir = str(workspace_dir)
+
+
+class _MetadataSession:
+    def __init__(self):
+        self.metadata = {}
+
+    def get_metadata(self, key, default=None):
+        return self.metadata.get(key, default)
+
+    def set_metadata(self, key, value):
+        self.metadata[key] = value
 
 
 def test_normalize_delivery_params_accepts_legacy_recipients():
@@ -131,3 +144,60 @@ async def test_deliver_artifacts_desktop_reports_missing_artifacts(tmp_path):
     assert payload["ok"] is False
     assert payload["error_code"] == "missing_artifacts"
     assert payload["receipts"] == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "channel",
+    [
+        "wechat:customer",
+        "telegram:customer",
+        "feishu:customer",
+        "dingtalk:customer",
+        "wework_ws:customer",
+        "qqbot:customer",
+        "onebot:customer",
+    ],
+)
+async def test_successful_im_image_delivery_queues_desktop_mirror(tmp_path, channel):
+    image = tmp_path / "generated.png"
+    image.write_bytes(b"image-data")
+    session = _MetadataSession()
+    agent = _FakeAgent(tmp_path)
+    agent._current_session = session
+    handler = IMChannelHandler(agent)
+    handler._get_adapter_and_chat_id = lambda: (
+        SimpleNamespace(),
+        "chat-1",
+        channel,
+        "reply-1",
+        "user-1",
+    )
+    handler._send_image = AsyncMock(return_value="✅ 已发送图片 (message_id=media-1)")
+
+    result = await handler._deliver_artifacts(
+        {
+            "artifacts": [
+                {
+                    "type": "image",
+                    "path": str(image),
+                    "caption": "海景图",
+                }
+            ]
+        }
+    )
+
+    payload = json.loads(result)
+    assert payload["ok"] is True
+    assert payload["receipts"][0]["status"] == "delivered"
+    handler._send_image.assert_awaited_once()
+    assert session.get_metadata("_pending_desktop_artifacts") == [
+        {
+            "artifact_type": "image",
+            "path": str(image),
+            "name": "generated.png",
+            "caption": "海景图",
+            "size": len(b"image-data"),
+            "sha256": payload["receipts"][0]["sha256"],
+        }
+    ]

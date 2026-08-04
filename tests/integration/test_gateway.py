@@ -551,6 +551,65 @@ class TestMessageGatewayDesktopMirror:
         assert mirror.context.messages[1]["role"] == "assistant"
         assert mirror.context.messages[1]["tool_summary"] == "checked"
 
+    def test_mirrors_im_artifact_into_desktop_conversation(self, tmp_path):
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        image = workspace / "generated.png"
+        image.write_bytes(b"image-data")
+        session_manager = SessionManager(storage_path=tmp_path / "sessions")
+        gateway = MessageGateway(session_manager=session_manager)
+        im_session = session_manager.get_session(
+            "wechat:customer",
+            "chat-1",
+            "user-1",
+            bot_instance_id="wechat:customer",
+        )
+        im_session.working_directory = str(workspace)
+
+        gateway._mirror_im_message_to_desktop(
+            im_session,
+            role="assistant",
+            content="图片已发送",
+            artifacts=[
+                {
+                    "artifact_type": "image",
+                    "path": str(image),
+                    "name": "海景图.png",
+                    "caption": "有花有草的海景图",
+                }
+            ],
+        )
+
+        mirror_id = gateway._desktop_mirror_id_for_im(im_session)
+        mirror = session_manager.get_session(
+            "desktop",
+            mirror_id,
+            "desktop_user",
+            create_if_missing=False,
+        )
+        assert mirror is not None
+        artifact = mirror.context.messages[-1]["artifacts"][0]
+        assert artifact["artifact_type"] == "image"
+        assert artifact["path"] == str(image.resolve())
+        assert artifact["name"] == "海景图.png"
+        assert artifact["caption"] == "有花有草的海景图"
+        assert artifact["size"] == len(b"image-data")
+        assert "conversation_id=" + mirror_id in artifact["file_url"]
+
+        second_image = workspace / "generated-2.png"
+        second_image.write_bytes(b"second-image")
+        gateway._mirror_im_message_to_desktop(
+            im_session,
+            role="assistant",
+            content="图片已发送",
+            artifacts=[{"artifact_type": "image", "path": str(second_image)}],
+        )
+
+        assert len(mirror.context.messages) == 2
+        assert mirror.context.messages[-1]["artifacts"][0]["path"] == str(
+            second_image.resolve()
+        )
+
     def test_desktop_mirror_splits_same_chat_by_bot_instance(self, tmp_path):
         session_manager = SessionManager(storage_path=tmp_path / "sessions")
         gateway = MessageGateway(session_manager=session_manager)
