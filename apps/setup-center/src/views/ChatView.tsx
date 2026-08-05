@@ -2749,9 +2749,15 @@ export function ChatView({
             .then((d2) => {
               if (!d2?.messages?.length || activeConvIdRef.current !== convId) return;
               if (displayedMessagesConvIdRef.current !== convId) return;
+              const isImMirrorUpdate = d.source === "im_mirror";
+              const backendMessages = isImMirrorUpdate
+                ? mapBackendHistoryToMessages(d2.messages)
+                : null;
               renderConversationMessages(
                 convId,
-                patchMessagesWithBackend(latestMessagesRef.current, d2.messages),
+                backendMessages
+                  ? chooseHydratedMessages(latestMessagesRef.current, backendMessages)
+                  : patchMessagesWithBackend(latestMessagesRef.current, d2.messages),
               );
             })
             .catch(() => {});
