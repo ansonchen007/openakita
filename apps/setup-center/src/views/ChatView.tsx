@@ -105,6 +105,13 @@ import {
   persistStorageValueWithMessageEviction,
   retryStorageWriteAfterMessageEviction,
 } from "./chat/utils/storageRecovery";
+import {
+  clearActiveOrgCommand,
+  getActiveOrgCommand,
+  setActiveOrgCommand,
+  type ActiveOrgCommand,
+  type ActiveOrgCommandsByConversation,
+} from "./chat/utils/orgCommandState";
 import { useMdModules } from "./chat/hooks/useMdModules";
 import { useMessageReducer, useConversationReducer } from "./chat/hooks/useMessages";
 import { useQueryGuard } from "./chat/hooks/useQueryGuard";
@@ -1355,9 +1362,32 @@ export function ChatView({
   const [orgMenuOpen, setOrgMenuOpen] = useState(false);
   const orgMenuRef = useRef<HTMLDivElement | null>(null);
   const isOrgConvSwitchRef = useRef(false);
-  const [orgCommandPending, setOrgCommandPending] = useState(false);
-  const orgCommandPendingRef = useRef(false);
-  const activeOrgCommandRef = useRef<{ orgId: string; commandId: string } | null>(null);
+  // Organization commands are independent turns, just like ordinary streams.
+  // Keep their synchronous guard/cancel target scoped to the owning conversation
+  // so one long-running organization cannot lock every other chat tab.
+  const [activeOrgCommandsByConversation, setActiveOrgCommandsByConversation] =
+    useState<ActiveOrgCommandsByConversation>(() => new Map());
+  const activeOrgCommandsRef = useRef<ActiveOrgCommandsByConversation>(
+    activeOrgCommandsByConversation,
+  );
+  const updateActiveOrgCommand = useCallback((
+    conversationId: string,
+    command: ActiveOrgCommand | null,
+    expectedCommandId?: string,
+  ) => {
+    const current = activeOrgCommandsRef.current;
+    const next = command
+      ? setActiveOrgCommand(current, conversationId, command)
+      : clearActiveOrgCommand(current, conversationId, expectedCommandId);
+    if (next === current) return;
+    activeOrgCommandsRef.current = next;
+    setActiveOrgCommandsByConversation(next);
+  }, []);
+  const activeOrgCommand = getActiveOrgCommand(
+    activeOrgCommandsByConversation,
+    activeConvId,
+  );
+  const orgCommandPending = activeOrgCommand !== null;
 
   useEffect(() => {
     if (!orgMenuOpen) return;
@@ -3692,9 +3722,8 @@ export function ChatView({
       notifyError(t("chat.uploadFailedRetry", "有附件处理失败，请重新选择或稍后重试"));
       return;
     }
-    if (orgCommandPendingRef.current) return;
-
     const resolvedConvId = targetConvId || activeConvIdRef.current;
+    if (getActiveOrgCommand(activeOrgCommandsRef.current, resolvedConvId)) return;
     const targetIsStreaming = resolvedConvId ? !!streamContexts.current.get(resolvedConvId)?.isStreaming : false;
     if (targetIsStreaming) return;
 
@@ -4370,7 +4399,7 @@ export function ChatView({
       let resumeAttempts = 0;
       const MAX_RESUME_ATTEMPTS = 3;
       const tryAttachLiveResume = async () => {
-        if (!thisConvId || orgCommandPendingRef.current) return null;
+        if (!thisConvId || getActiveOrgCommand(activeOrgCommandsRef.current, thisConvId)) return null;
         if (abort.signal.aborted || sctx.userStopped || gracefulDone) return null;
         if (resumeAttempts >= MAX_RESUME_ATTEMPTS) return null;
         resumeAttempts++;
@@ -4487,9 +4516,7 @@ export function ChatView({
                 const orgId = (event as any).org_id as string | undefined;
                 const commandId = (event as any).command_id as string | undefined;
                 if (orgId && commandId) {
-                  activeOrgCommandRef.current = { orgId, commandId };
-                  orgCommandPendingRef.current = true;
-                  setOrgCommandPending(true);
+                  updateActiveOrgCommand(thisConvId, { orgId, commandId });
                 }
                 currentStreamStatus = t("chat.orgProcessing", "组织正在处理中...");
                 // 把"命令已下发"写进 timeline 而不是 currentContent，
@@ -4524,9 +4551,8 @@ export function ChatView({
                 break;
               }
               case "org_command_done": {
-                activeOrgCommandRef.current = null;
-                orgCommandPendingRef.current = false;
-                setOrgCommandPending(false);
+                const commandId = (event as any).command_id as string | undefined;
+                updateActiveOrgCommand(thisConvId, null, commandId);
                 currentOrgTimeline = [
                   ...currentOrgTimeline,
                   {
@@ -5833,7 +5859,7 @@ export function ChatView({
         return updated;
       });
     }
-  }, [pendingAttachments, isCurrentConvStreaming, activeConvId, chatMode, selectedEndpoint, selectedEndpointPolicy, apiBase, slashCommands, endpoints.length, thinkingMode, thinkingDepth, t, setInputValue]);
+  }, [pendingAttachments, isCurrentConvStreaming, activeConvId, chatMode, selectedEndpoint, selectedEndpointPolicy, apiBase, slashCommands, endpoints.length, thinkingMode, thinkingDepth, t, setInputValue, updateActiveOrgCommand]);
 
   const startupReattachDoneRef = useRef(false);
   useEffect(() => {
@@ -6102,8 +6128,10 @@ export function ChatView({
   const closeLightbox = useCallback(() => setLightbox(null), []);
 
   const handleCancelTask = useCallback(() => {
-    if (orgCommandPendingRef.current && activeOrgCommandRef.current) {
-      const { orgId, commandId } = activeOrgCommandRef.current;
+    const conversationId = activeConvIdRef.current;
+    const command = getActiveOrgCommand(activeOrgCommandsRef.current, conversationId);
+    if (command) {
+      const { orgId, commandId } = command;
       safeFetch(`${apiBaseRef.current}/api/v2/orgs/${orgId}/commands/${commandId}/cancel`, {
         method: "POST",
       }).catch(() => {
