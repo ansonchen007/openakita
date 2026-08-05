@@ -73,7 +73,8 @@ Five required fields, each with both `answer` and `reason`:
 }
 ```
 
-Parsing is strict; `runtime/ledger.py` retries up to 10 times on bad JSON
+Parsing is strict; the supervisor makes one initial attempt plus at most two
+retries on bad JSON
 before falling through to a single hard error. We use the model's
 `structured_output=True` mode when the provider supports it.
 
