@@ -91,3 +91,42 @@ describe("completion action hydration", () => {
     ]);
   });
 });
+
+describe("IM mirror hydration", () => {
+  it("appends a backend-only assistant message with its delivered image", () => {
+    const local: ChatMessage[] = [
+      {
+        id: "user-local",
+        historyIndex: 0,
+        role: "user",
+        content: "[来自微信] 生成一张海景图",
+        timestamp: 1,
+      },
+    ];
+    const backend: ChatMessage[] = [
+      local[0],
+      {
+        id: "assistant-backend",
+        historyIndex: 1,
+        role: "assistant",
+        content: "[回复到微信] 已生成并发送海景图",
+        timestamp: 2,
+        artifacts: [
+          {
+            artifact_type: "image",
+            file_url: "/api/files?path=generated.png&conversation_id=wechat-mirror",
+            path: "C:/workspace/generated.png",
+            name: "generated.png",
+            caption: "海景图",
+          },
+        ],
+      },
+    ];
+
+    const hydrated = chooseHydratedMessages(local, backend);
+
+    expect(hydrated).toHaveLength(2);
+    expect(hydrated[1].content).toContain("已生成并发送海景图");
+    expect(hydrated[1].artifacts).toEqual(backend[1].artifacts);
+  });
+});
