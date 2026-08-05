@@ -1,6 +1,6 @@
 """manga-studio script writer — LLM-driven story → panel breakdown.
 
-Calls the host's ``brain.access`` to expand a free-form story into a
+Calls the host's safe Plugin LLM facade to expand a free-form story into a
 strict storyboard JSON: ``{episode_title, summary, panels: [{idx,
 narration, dialogue, characters_in_scene, camera, action, mood,
 background}]}``.
@@ -9,8 +9,8 @@ Design parallels ``plugins/word-maker/word_brain_helper.py`` and
 ``plugins/ppt-maker/ppt_brain_adapter.py``:
 
 - A small ``BrainResult`` envelope so the caller knows whether the
-  brain was even reachable, plus the parsed dict and a fallback-when-
-  brain-unavailable.
+  OpenAkita text model was reachable, plus the parsed dict and a
+  deterministic fallback.
 - Permission check via ``api.has_permission("brain.access")`` so the
   pipeline degrades gracefully when the user revokes the permission.
 - ``parse_llm_json_object`` from ``manga_inline.llm_json_parser`` does
@@ -22,28 +22,27 @@ Why a dedicated module instead of inlining into the pipeline:
 1. The same writer is reused by ``manga_quick_drama`` (one-shot tool)
    and ``manga_split_script`` (re-roll script only). Both want the
    exact same prompt + parsing semantics.
-2. Tests can hand a fake ``brain`` (a single coroutine method
-   ``think``) and exercise every fallback path without booting the
-   plugin host.
+2. Tests can hand in a fake Plugin API and exercise every fallback path
+   without booting the plugin host.
 
 Anti-pattern guardrails
 -----------------------
 - Pixelle C3: the prompt is small + JSON-only. We never ask the LLM
   for narrative prose that we'll later regex out.
 - Pixelle C5: the deterministic ``_fallback_panels`` is *not* a stub.
-  When the brain is unavailable, the pipeline can still produce a
+  When the Plugin LLM is unavailable, the pipeline can still produce a
   valid storyboard from the user's story — we splice the story into
   ``n_panels`` slices and let DashScope generate something reasonable
   from the slice text alone.
-- Pixelle C7: this module never reads ENV. The api_key for the brain
-  is owned by the host; we just call the brain interface.
+- Pixelle C7: this module never reads ENV. Credentials stay in the host;
+  the plugin only calls ``api.get_llm()``.
 """
 
 from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any
 
 from manga_inline.llm_json_parser import parse_llm_json_object
 
@@ -69,18 +68,6 @@ class BrainResult:
             "error": self.error,
             "used_brain": self.used_brain,
         }
-
-
-class _BrainLike(Protocol):
-    """Minimal duck-type contract.
-
-    The host's brain may expose ``think_lightweight`` (cheap model),
-    ``think`` (default model), or ``chat`` (raw chat-completion). We
-    fall back through them in that order so the manga writer always
-    works on the cheapest reachable channel.
-    """
-
-    async def think(self, *args: Any, **kwargs: Any) -> Any: ...
 
 
 # ─── Public class ─────────────────────────────────────────────────────────
@@ -161,8 +148,7 @@ class MangaScriptWriter:
     """LLM-backed storyboard writer.
 
     Args:
-        api: The host ``PluginAPI`` (provides ``has_permission`` and
-            ``get_brain``). Pass a stub in tests.
+        api: The host ``PluginAPI`` (provides ``get_llm``). Pass a stub in tests.
     """
 
     def __init__(self, api: Any) -> None:
@@ -171,62 +157,25 @@ class MangaScriptWriter:
     # ── Capability probe ──────────────────────────────────────────
 
     def is_available(self) -> bool:
-        has_permission = getattr(self._api, "has_permission", None)
-        if callable(has_permission) and not has_permission("brain.access"):
-            return False
-        get_brain = getattr(self._api, "get_brain", None)
-        return callable(get_brain) and get_brain() is not None
-
-    def _get_brain(self) -> _BrainLike | None:
-        has_permission = getattr(self._api, "has_permission", None)
-        if callable(has_permission) and not has_permission("brain.access"):
-            return None
-        get_brain = getattr(self._api, "get_brain", None)
-        if not callable(get_brain):
-            return None
-        return get_brain()
+        get_llm = getattr(self._api, "get_llm", None)
+        return callable(get_llm) and get_llm() is not None
 
     # ── Brain dispatch ────────────────────────────────────────────
 
     async def _ask_llm(self, *, system_prompt: str, user_prompt: str) -> str:
-        brain = self._get_brain()
-        if brain is None:
-            raise RuntimeError("brain.access not granted or no brain configured")
+        from openakita.plugins.llm_support import complete_text
 
-        # Walk the brain's surfaces in cost order.
-        if hasattr(brain, "think_lightweight"):
-            try:
-                result = await brain.think_lightweight(  # type: ignore[attr-defined]
-                    prompt=user_prompt, system=system_prompt, max_tokens=2000
-                )
-                text = _extract_text(result)
-                if text.strip():
-                    return text
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("manga-studio: think_lightweight failed: %s", exc)
-
-        if hasattr(brain, "think"):
-            result = await brain.think(  # type: ignore[attr-defined]
-                prompt=user_prompt, system=system_prompt, max_tokens=2000
-            )
-            text = _extract_text(result)
-            if text.strip():
-                return text
-            raise RuntimeError("brain.think returned empty content")
-
-        if hasattr(brain, "chat"):
-            result = await brain.chat(  # type: ignore[attr-defined]
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ]
-            )
-            text = _extract_text(result)
-            if text.strip():
-                return text
-            raise RuntimeError("brain.chat returned empty content")
-
-        raise RuntimeError("brain has no think_lightweight / think / chat surface")
+        result = await complete_text(
+            self._api,
+            endpoint=str(self._api.get_config().get("llm_endpoint") or ""),
+            prompt=user_prompt,
+            system=system_prompt,
+            max_tokens=2000,
+        )
+        text = str(result.text or "").strip()
+        if not text:
+            raise RuntimeError("plugin_llm_empty_response")
+        return text
 
     # ── Public: write_storyboard ──────────────────────────────────
 

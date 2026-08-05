@@ -33,14 +33,22 @@ async def test_decompose_storyboard_handles_missing_brain():
 @pytest.mark.asyncio
 async def test_decompose_storyboard_parses_fenced_json(monkeypatch):
     class FakeBrain:
-        async def chat(self, messages):
-            return {
-                "content": (
+        def get_config(self):
+            return {"llm_endpoint": ""}
+
+        def get_llm(self):
+            return self
+
+        async def complete(self, **kwargs):
+            return type(
+                "Completion",
+                (),
+                {"text": (
                     "好的。\n```json\n"
                     '{"segments": [{"index": 1, "duration": 5, "prompt": "x"}]}\n'
                     "```"
-                )
-            }
+                )},
+            )()
 
     result = await decompose_storyboard(brain=FakeBrain(), story="测试故事")
     assert "error" not in result

@@ -16,6 +16,24 @@ from openakita_plugin_sdk.testing import MockPluginAPI, assert_plugin_loads
 
 `MockPluginAPI` is an in-memory mock of `PluginAPI` that records all registration calls for assertions.
 
+### 宿主 LLM 测试 / Testing Host LLM Usage
+
+```python
+from openakita_plugin_sdk import LLMModel
+from openakita_plugin_sdk.testing import MockPluginAPI, MockPluginLLM
+
+llm = MockPluginLLM([
+    LLMModel(
+        endpoint="test",
+        model="test-model",
+        healthy=True,
+        capabilities=("text",),
+    ),
+])
+llm.queue_response("mock response", endpoint="test", model="test-model")
+api = MockPluginAPI(granted_permissions=["brain.access"], llm=llm)
+```
+
 ### 基本用法 / Basic Usage
 
 ```python
@@ -258,4 +276,3 @@ def test_plugin_routes():
 - [getting-started.md](getting-started.md) — 第一个测试示例 / First test example
 - [api-reference.md](api-reference.md) — `MockPluginAPI` 模拟的所有方法 / All methods mocked by MockPluginAPI
 - [plugin-ui.md](plugin-ui.md) — UI 插件开发指南 / UI plugin development guide
-

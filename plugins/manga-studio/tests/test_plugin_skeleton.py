@@ -48,7 +48,17 @@ class _StubAPI:
         self.routers.append(router)
 
     def spawn_task(self, coro: Any, name: str | None = None) -> asyncio.Task:
-        loop = asyncio.get_event_loop()
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            task = loop.create_task(coro, name=name or "anon")
+            self.spawned.append(task)
+            try:
+                loop.run_until_complete(task)
+            finally:
+                loop.close()
+            return task
         task = loop.create_task(coro, name=name or "anon")
         self.spawned.append(task)
         return task

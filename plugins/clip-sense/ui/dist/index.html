@@ -2626,7 +2626,6 @@ function SettingsTab({ storageRefreshTick, onApiKeyChange, onFfmpegChange }) {
   const [storage, setStorage] = useState(null);
   const [permsStatus, setPermsStatus] = useState(null);
   const [keyVisible, setKeyVisible] = useState(false);
-  const [analysisKeyVisible, setAnalysisKeyVisible] = useState(false);
   const [saving, setSaving] = useState(false);
   const [folderPicker, setFolderPicker] = useState(null);
 
@@ -2760,7 +2759,7 @@ function SettingsTab({ storageRefreshTick, onApiKeyChange, onFfmpegChange }) {
                    onBlur={e => save({ dashscope_relay_endpoint: e.target.value.trim() })}
                    placeholder="例如: yunwu-audio" />
             <div className="text-xs text-dim" style={{marginTop: 4}}>
-              来自 LLM 配置页 relay_endpoints；填写后 ASR/Qwen 请求优先走该中转站。
+               来自 LLM 配置页 relay_endpoints；仅影响 Paraformer ASR 请求，文本分析使用 OpenAkita 模型选择器。
             </div>
           </div>
           <div className="form-row">
@@ -2773,49 +2772,9 @@ function SettingsTab({ storageRefreshTick, onApiKeyChange, onFfmpegChange }) {
             </select>
           </div>
         </div>
-        <details style={{marginTop: 12}}>
-          <summary className="text-sm" style={{cursor: "pointer", color: "var(--text-muted)"}}>
-            {t("settings.api.analysis.advanced")}
-          </summary>
-          <div style={{marginTop: 12, padding: 12, border: "1px solid var(--border)", borderRadius: 8, background: "var(--bg)"}}>
-            <div className="form-row">
-              <div className="label">{t("settings.api.analysis.provider")}</div>
-              <select className="input select"
-                      value={config.analysis_provider || "host"}
-                      onChange={e => {
-                        const v = e.target.value;
-                        updateField("analysis_provider", v);
-                        save({ analysis_provider: v });
-                      }}>
-                <option value="host">{t("settings.api.analysis.host")}</option>
-                <option value="dashscope">{t("settings.api.analysis.dashscope")}</option>
-              </select>
-            </div>
-            {(config.analysis_provider || "host") === "dashscope" && (
-              <div className="form-row" style={{marginBottom: 0}}>
-                <div className="label">{t("settings.api.analysis.key.label")}</div>
-                <div className="flex gap-2">
-                  <input className="input flex-1" type={analysisKeyVisible ? "text" : "password"}
-                         value={config.dashscope_analysis_api_key || ""}
-                         onChange={e => updateField("dashscope_analysis_api_key", e.target.value)}
-                         placeholder="sk-..." />
-                  <button className="btn btn-sm" onClick={() => setAnalysisKeyVisible(!analysisKeyVisible)}>
-                    {analysisKeyVisible ? t("settings.api.key.hide") : t("settings.api.key.show")}
-                  </button>
-                  <button className="btn btn-sm btn-primary"
-                          onClick={() => save({
-                            analysis_provider: "dashscope",
-                            dashscope_analysis_api_key: config.dashscope_analysis_api_key || "",
-                          })}
-                          disabled={saving}>{t("settings.api.key.save")}</button>
-                </div>
-                <div className="text-xs text-dim" style={{marginTop: 4}}>
-                  {t("settings.api.analysis.key.help")}
-                </div>
-              </div>
-            )}
-          </div>
-        </details>
+        <div className="text-xs text-dim" style={{marginTop: 12}}>
+          内容分析统一使用右下角“AI 模型”选择器；旧版独立 Qwen Key 仅保留在配置文件中，不再调用。
+        </div>
       </div>
 
       {/* ── 2. 插件权限 ── */}
@@ -3086,5 +3045,6 @@ if (window.OpenAkita && typeof window.OpenAkita.ready === "function") {
   }
 })();
 </script>
+<script src="./_assets/openakita-llm-selector.js" data-plugin-id="clip-sense"></script>
 </body>
 </html>

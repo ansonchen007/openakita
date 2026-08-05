@@ -234,7 +234,25 @@ async def run_seo_pack(ctx: MediaPostContext) -> None:
     chapters = ctx.params.get("chapters") or []
 
     async def _qwen_plus(**kwargs: Any) -> str:
-        return await ctx.vlm_client.qwen_plus_call(**kwargs)
+        from openakita.plugins.llm_support import complete_text
+
+        messages = list(kwargs.get("messages") or [])
+        completion = await complete_text(
+            ctx.api,
+            endpoint=str(ctx.api.get_config().get("llm_endpoint") or ""),
+            prompt="\n\n".join(
+                str(item.get("content") or "")
+                for item in messages
+                if item.get("role") != "system"
+            ),
+            system="\n\n".join(
+                str(item.get("content") or "")
+                for item in messages
+                if item.get("role") == "system"
+            ),
+            max_tokens=int(kwargs.get("max_tokens") or 2000),
+        )
+        return str(completion.text or "")
 
     async def _on_progress(progress: float, label: str) -> None:
         await _broadcast_progress(ctx, progress, label)

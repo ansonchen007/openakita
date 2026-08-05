@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import json
 import logging
 import shutil
 import string
@@ -237,7 +236,7 @@ async def resolve_assets(asset_params: dict, task_manager: Any) -> dict:
 
 
 async def _persist_api_result(
-    ctx: "ExecutionContext",
+    ctx: ExecutionContext,
     api_result: dict,
     *,
     prompt: str,
@@ -296,6 +295,24 @@ def _extract_text(result: Any) -> str:
     if isinstance(result, dict):
         return result.get("content", "")
     return getattr(result, "content", "") or str(result)
+
+
+async def _plugin_complete(
+    ctx: ExecutionContext, *, prompt: str, system: str, max_tokens: int = 2048
+) -> str:
+    from openakita.plugins.llm_support import complete_text
+
+    result = await complete_text(
+        ctx.plugin_api,
+        endpoint=str(ctx.plugin_api.get_config().get("llm_endpoint") or ""),
+        prompt=prompt,
+        system=system,
+        max_tokens=max_tokens,
+    )
+    text = str(result.text or "").strip()
+    if not text:
+        raise RuntimeError("plugin_llm_empty_response")
+    return text
 
 
 # ---------------------------------------------------------------------------
@@ -392,9 +409,7 @@ class AgentStrategy(ExecutionStrategy):
         prompt = (text_params.get("prompt") or "").strip()
         if not prompt:
             cfg = ctx.feature.execution_config or {}
-            if cfg.get("fallback_to_template") and ctx.feature.prompt_template:
-                prompt = safe_format(ctx.feature.prompt_template, text_params)
-            elif ctx.feature.prompt_template:
+            if cfg.get("fallback_to_template") and ctx.feature.prompt_template or ctx.feature.prompt_template:
                 prompt = safe_format(ctx.feature.prompt_template, text_params)
         if not prompt:
             raise RuntimeError("提示词为空，请先填写或点击「AI 优化」生成提示词")
@@ -525,7 +540,7 @@ class AgentStrategy(ExecutionStrategy):
         resolved: dict,
         params: dict,
         text_params: dict,
-        ctx: "ExecutionContext",
+        ctx: ExecutionContext,
     ) -> dict:
         """Generate one image per prompt entry from parsed JSON, using parent-child tasks."""
         chosen_model = resolve_model(params, ctx)
@@ -608,7 +623,7 @@ class AgentStrategy(ExecutionStrategy):
         text_params: dict,
         resolved: dict,
         params: dict,
-        ctx: "ExecutionContext",
+        ctx: ExecutionContext,
     ) -> dict:
         """Generate N images using prompt_template with scene_index 1..N, using parent-child tasks."""
         chosen_model = resolve_model(params, ctx)
@@ -780,17 +795,8 @@ class OptimizePromptStep:
     async def run(self, input_data: dict, config: dict, ctx: ExecutionContext) -> StepResult:
         system = config.get("system_prompt", "你是电商内容创意专家，请优化以下提示词。")
         user_msg = input_data.get("prompt", "")
-        if ctx.brain is None:
-            logger.info(
-                "optimize_prompt skipped: brain.access not granted, keeping original prompt"
-            )
-            return {"status": "ok", "data": dict(input_data), "artifacts": [], "error": ""}
         try:
-            if hasattr(ctx.brain, "think_lightweight"):
-                result = await ctx.brain.think_lightweight(prompt=user_msg, system=system)
-            else:
-                result = await ctx.brain.think(prompt=user_msg, system=system)
-            optimized = _extract_text(result).strip() or user_msg
+            optimized = await _plugin_complete(ctx, prompt=user_msg, system=system)
             return {
                 "status": "ok",
                 "data": {**input_data, "prompt": optimized},
@@ -798,8 +804,7 @@ class OptimizePromptStep:
                 "error": "",
             }
         except Exception as e:
-            logger.warning("optimize_prompt failed (%s); falling back to original prompt", e)
-            return {"status": "ok", "data": dict(input_data), "artifacts": [], "error": ""}
+            return {"status": "error", "data": input_data, "artifacts": [], "error": str(e)}
 
 
 @register_step("generate_image")
@@ -959,9 +964,10 @@ class GenerateVideoStep:
 @register_step("stitch_images")
 class StitchImagesStep:
     async def run(self, input_data: dict, config: dict, ctx: ExecutionContext) -> StepResult:
-        from PIL import Image
         import io
+
         import httpx
+        from PIL import Image
 
         urls = input_data.get("image_urls", [])
         if not urls:
@@ -1066,18 +1072,6 @@ class DecomposeStoryboardStep:
         total_duration = int(input_data.get("total_duration", 60))
         segment_duration = int(config.get("segment_duration", 10))
 
-        if ctx.brain is None:
-            logger.info("decompose_storyboard: brain unavailable, creating single segment")
-            segments = [
-                {"prompt": script.strip(), "duration": min(total_duration, segment_duration)}
-            ]
-            return {
-                "status": "ok",
-                "data": {**input_data, "segments": segments},
-                "artifacts": [],
-                "error": "",
-            }
-
         system_prompt = (
             f"你是专业的 AI 视频分镜师。将故事拆解为多段视频分镜脚本，"
             f"每段约 {segment_duration} 秒，总时长约 {total_duration} 秒。\n"
@@ -1086,20 +1080,12 @@ class DecomposeStoryboardStep:
             f'{{"segments": [{{"prompt": "...", "duration": {segment_duration}}}]}}'
         )
         try:
-            if hasattr(ctx.brain, "think_lightweight"):
-                result = await ctx.brain.think_lightweight(
-                    prompt=script,
-                    system=system_prompt,
-                    max_tokens=4096,
-                )
-            else:
-                result = await ctx.brain.think(prompt=script, system=system_prompt)
             import json
             import re
 
-            text = _extract_text(result).strip()
-            if not text:
-                raise ValueError("LLM 返回空内容")
+            text = await _plugin_complete(
+                ctx, prompt=script, system=system_prompt, max_tokens=4096
+            )
             fence = re.search(r"```(?:json)?\s*\n?([\s\S]*?)```", text)
             if fence:
                 text = fence.group(1).strip()
@@ -1186,24 +1172,9 @@ class LlmTranslateStep:
                 "error": "",
             }
 
-        if ctx.brain is None:
-            logger.info(
-                "llm_translate: brain.access not granted, passing source_text through unchanged"
-            )
-            return {
-                "status": "ok",
-                "data": {**input_data, "prompt": source_text, "translated_text": source_text},
-                "artifacts": [],
-                "error": "",
-            }
-
         system = f"将用户输入的文本翻译为{lang_label}，只输出译文，不要解释。"
         try:
-            if hasattr(ctx.brain, "think_lightweight"):
-                result = await ctx.brain.think_lightweight(prompt=source_text, system=system)
-            else:
-                result = await ctx.brain.think(prompt=source_text, system=system)
-            translated = _extract_text(result).strip() or source_text
+            translated = await _plugin_complete(ctx, prompt=source_text, system=system)
             return {
                 "status": "ok",
                 "data": {**input_data, "prompt": translated, "translated_text": translated},
@@ -1211,12 +1182,11 @@ class LlmTranslateStep:
                 "error": "",
             }
         except Exception as e:
-            logger.warning("llm_translate failed (%s); falling back to source text", e)
             return {
-                "status": "ok",
-                "data": {**input_data, "prompt": source_text, "translated_text": source_text},
+                "status": "error",
+                "data": input_data,
                 "artifacts": [],
-                "error": "",
+                "error": str(e),
             }
 
 

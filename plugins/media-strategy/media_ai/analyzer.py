@@ -223,38 +223,19 @@ async def call_brain(
     max_tokens: int = 1800,
     temperature: float = 0.2,
 ) -> str:
-    if brain is None:
-        raise RuntimeError("brain.access not granted")
+    from openakita.plugins.llm_support import complete_text
 
-    # OpenAkita's host Brain exposes think()/messages_create_async(); older
-    # plugin-facing adapters may expose chat(). Try host-native APIs first so
-    # reports use the configured main model instead of silently falling back.
-    if hasattr(brain, "think"):
-        response = await brain.think(
-            prompt,
-            system=EDITORIAL_SYSTEM_ZH,
-            max_tokens=max_tokens,
-            enable_thinking=False,
-        )
-        return _brain_content(response).strip()
-
-    messages = [{"role": "user", "content": prompt}]
-    if hasattr(brain, "messages_create_async"):
-        response = await brain.messages_create_async(
-            messages=messages,
-            system=EDITORIAL_SYSTEM_ZH,
-            max_tokens=max_tokens,
-            use_thinking=False,
-        )
-        return _brain_content(response).strip()
-
-    response = await brain.chat(
-        messages=messages,
+    get_config = getattr(brain, "get_config", None)
+    config = get_config() if callable(get_config) else {}
+    response = await complete_text(
+        brain,
+        endpoint=str(config.get("llm_endpoint") or "") if isinstance(config, dict) else "",
+        prompt=prompt,
         system=EDITORIAL_SYSTEM_ZH,
         temperature=temperature,
         max_tokens=max_tokens,
     )
-    return _brain_content(response).strip()
+    return str(response.text or "").strip()
 
 
 async def build_brief(
@@ -266,11 +247,8 @@ async def build_brief(
     temperature: float = 0.2,
 ) -> tuple[str, str]:
     prompt = brief_prompt(items, session=session)
-    try:
-        md = await call_brain(brain, prompt, temperature=temperature)
-        return md or fallback_brief(items, title=title), "brain"
-    except Exception:
-        return fallback_brief(items, title=title), "fallback"
+    md = await call_brain(brain, prompt, temperature=temperature)
+    return md, "openakita_llm"
 
 
 async def build_verify_pack(
@@ -280,11 +258,8 @@ async def build_verify_pack(
     topic: str,
     temperature: float = 0.2,
 ) -> tuple[str, str]:
-    try:
-        md = await call_brain(brain, verify_prompt(items, topic=topic), temperature=temperature)
-        return md or fallback_brief(items, title=f"{topic or '热点'}信源复核"), "brain"
-    except Exception:
-        return fallback_brief(items, title=f"{topic or '热点'}信源复核"), "fallback"
+    md = await call_brain(brain, verify_prompt(items, topic=topic), temperature=temperature)
+    return md, "openakita_llm"
 
 
 async def build_topic_analysis(
@@ -293,16 +268,10 @@ async def build_topic_analysis(
     *,
     temperature: float = 0.2,
 ) -> tuple[str, str]:
-    try:
-        md = await call_brain(
-            brain,
-            topic_analysis_prompt(topics),
-            max_tokens=2800,
-            temperature=temperature,
-        )
-        return md or _fallback_topic_analysis(topics), "brain"
-    except Exception:
-        return _fallback_topic_analysis(topics), "fallback"
+    md = await call_brain(
+        brain, topic_analysis_prompt(topics), max_tokens=2800, temperature=temperature
+    )
+    return md, "openakita_llm"
 
 
 async def build_replicate_plan(
@@ -317,24 +286,21 @@ async def build_replicate_plan(
     current_draft: str = "",
     temperature: float = 0.2,
 ) -> tuple[str, str]:
-    try:
-        md = await call_brain(
-            brain,
-            replicate_prompt(
-                items,
-                topic=topic,
-                target_format=target_format,
-                tone=tone,
-                revision_instructions=revision_instructions,
-                annotations=annotations,
-                current_draft=current_draft,
-            ),
-            max_tokens=2600,
-            temperature=temperature,
-        )
-        return md or _fallback_plan(items, topic=topic, target_format=target_format), "brain"
-    except Exception:
-        return _fallback_plan(items, topic=topic, target_format=target_format), "fallback"
+    md = await call_brain(
+        brain,
+        replicate_prompt(
+            items,
+            topic=topic,
+            target_format=target_format,
+            tone=tone,
+            revision_instructions=revision_instructions,
+            annotations=annotations,
+            current_draft=current_draft,
+        ),
+        max_tokens=2600,
+        temperature=temperature,
+    )
+    return md, "openakita_llm"
 
 
 def _fallback_plan(items: list[dict[str, Any]], *, topic: str, target_format: str) -> str:

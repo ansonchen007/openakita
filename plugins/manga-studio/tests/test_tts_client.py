@@ -83,7 +83,7 @@ async def test_edge_path_surfaces_install_hint_when_pkg_missing(
             output_path=tmp_path / "out.mp3",
         )
     assert exc.value.kind == "dependency"
-    assert "pip install edge-tts" in str(exc.value)
+    assert "OpenAkita Setup Center" in str(exc.value)
 
 
 # ─── CosyVoice dependency surface ───────────────────────────────────────
@@ -121,7 +121,7 @@ async def test_cosyvoice_path_surfaces_install_hint_when_sdk_missing(
             api_key="sk-x",
         )
     assert exc.value.kind == "dependency"
-    assert "pip install dashscope" in str(exc.value)
+    assert "OpenAkita Setup Center" in str(exc.value)
 
 
 # ─── Hot-reload settings ────────────────────────────────────────────────

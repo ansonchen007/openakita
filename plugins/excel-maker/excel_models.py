@@ -225,6 +225,7 @@ class Settings(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     data_dir: str = ""
+    llm_endpoint: str = ""
     uploads_dir: str = ""
     workbooks_dir: str = ""
     projects_dir: str = ""

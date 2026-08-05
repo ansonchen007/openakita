@@ -3,7 +3,7 @@
 Backend entry point providing REST API endpoints for the frontend UI.
 Supports 4 editing modes: highlight extraction, silence removal,
 topic splitting, and talking-head polish. Uses DashScope Paraformer
-for ASR, Qwen for content analysis, and local ffmpeg for execution.
+for ASR, OpenAkita Plugin LLM for content analysis, and local ffmpeg.
 """
 
 from __future__ import annotations
@@ -212,8 +212,8 @@ class Plugin(PluginBase):
     async def _ensure_client_from_config(self) -> None:
         cfg = await self._tm.get_all_config()
         api_key, base_url = self._resolve_asr_endpoint(cfg)
-        analysis_provider = cfg.get("analysis_provider") or "host"
-        analysis_api_key = cfg.get("dashscope_analysis_api_key") or ""
+        analysis_provider = "host"
+        analysis_api_key = ""
         brain = self._get_host_brain()
         if api_key:
             # Always rebuild on endpoint changes so switching relay -> official
@@ -289,11 +289,7 @@ class Plugin(PluginBase):
         return (merged.get("api_key") or "").strip(), (merged.get("base_url") or "").strip()
 
     def _get_host_brain(self) -> Any:
-        try:
-            return self._api.get_brain()
-        except Exception as exc:
-            logger.debug("clip-sense host brain unavailable: %s", exc)
-            return None
+        return self._api
 
     async def on_unload(self) -> None:
         if self._poll_task and not self._poll_task.done():

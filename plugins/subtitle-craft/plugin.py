@@ -363,8 +363,8 @@ class Plugin(PluginBase):
         # through because the client's keyword default is the official
         # URL and forwarding "" would silently strip that.
         if base_url:
-            return SubtitleAsrClient(api_key, base_url=base_url)
-        return SubtitleAsrClient(api_key)
+            return SubtitleAsrClient(api_key, base_url=base_url, plugin_api=self._api)
+        return SubtitleAsrClient(api_key, plugin_api=self._api)
 
     # ------------------------------------------------------------------
     # Tool handler — 4 tools per plugin.json provides.tools

@@ -1308,15 +1308,9 @@ class Plugin(PluginBase):
                         "勾选并保存后重试。"
                     ),
                 }
-            brain = self._api.get_brain()
-            if not brain:
-                return {
-                    "ok": False,
-                    "error": "LLM 不可用：主进程未注入 brain（请确认 OpenAkita 已正常启动）。",
-                }
             try:
                 result = await optimize_prompt(
-                    brain=brain,
+                    brain=self._api,
                     user_prompt=body.prompt,
                     model=body.model,
                     size=body.size,

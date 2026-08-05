@@ -31,8 +31,9 @@ import logging
 import os
 import random
 import time
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable, Literal, Protocol
+from typing import Any, Protocol
 
 from .desensitizer import SensitivityLevel
 
@@ -246,22 +247,21 @@ class MockLLMResponder:
 
 
 class HostBrainResponder:
-    """Adapter that satisfies :class:`LLMResponder` by calling the host's
-    ``Brain.think_lightweight`` one-shot completion.
+    """Adapter that satisfies :class:`LLMResponder` via Plugin LLM facade.
 
     This is how the plugin reuses OpenAkita's already-configured LLM
     provider (the same model picker / API keys the user set up in the
     host) instead of asking the user to wire a second set of credentials
     inside the plugin. The host grants access via the ``brain.access``
-    permission; ``plugin.py`` fetches the brain with ``api.get_brain()``
+    permission; ``plugin.py`` provides the scoped ``PluginAPI``
     and hands it to :class:`FinanceAutoService`. When the permission is
     absent the service keeps a ``None`` brain and the scenarios fall back
     to :class:`MockLLMResponder` (so the offline acceptance suite is
     unaffected).
     """
 
-    def __init__(self, brain: Any) -> None:
-        self._brain = brain
+    def __init__(self, api: Any) -> None:
+        self._api = api
 
     @staticmethod
     def _extract_text(response: Any) -> str:
@@ -290,25 +290,19 @@ class HostBrainResponder:
             "in the user message exactly. When asked for JSON, return "
             "strict JSON with no commentary."
         )
-        response = await self._brain.think_lightweight(
+        from openakita.plugins.llm_support import complete_text
+
+        response = await complete_text(
+            self._api,
+            endpoint=str(self._api.get_config().get("llm_endpoint") or ""),
             prompt=prompt,
             system=system,
             max_tokens=2048,
         )
-        text = self._extract_text(response)
-        model_id = ""
-        provider = ""
-        try:
-            info = self._brain.get_current_endpoint_info()
-            if isinstance(info, dict):
-                model_id = str(info.get("model") or "")
-                provider = str(info.get("name") or "")
-        except Exception:  # noqa: BLE001 — endpoint introspection is best-effort
-            pass
         return LLMResponse(
-            text=text,
-            model_id=model_id or "host-brain",
-            provider=provider or "openakita-host",
+            text=str(response.text),
+            model_id=str(response.model),
+            provider=str(response.endpoint),
             is_local=False,
             duration_ms=int((time.perf_counter() - started) * 1000),
             raw=None,
@@ -366,10 +360,7 @@ def collect_endpoints_from_host_client(host_client: Any) -> list[EndpointDescrip
         return out
     iterable: list[Any]
     try:
-        if isinstance(candidates, dict):
-            iterable = list(candidates.values())
-        else:
-            iterable = list(candidates)
+        iterable = list(candidates.values()) if isinstance(candidates, dict) else list(candidates)
     except Exception:
         return out
     seen: set[str] = set()

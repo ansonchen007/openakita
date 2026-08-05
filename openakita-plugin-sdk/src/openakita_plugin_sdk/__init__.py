@@ -21,6 +21,16 @@ See ``docs/getting-started.md`` for the full walkthrough.
 
 from .core import PluginAPI, PluginBase, PluginManifest
 from .hooks import HOOK_NAMES, HOOK_SIGNATURES
+from .llm import (
+    LLMCompletion,
+    LLMModel,
+    LLMSelectionPolicy,
+    LLMUsage,
+    PluginLLM,
+    PluginLLMError,
+    PluginLLMSelectionError,
+    PluginLLMUnavailableError,
+)
 from .protocols import MemoryBackendProtocol, RetrievalSource, SearchBackend
 from .tools import ToolHandler, tool_definition
 from .version import (
@@ -39,6 +49,14 @@ __all__ = [
     "MIN_OPENAKITA_VERSION",
     "PLUGIN_API_VERSION",
     "PLUGIN_UI_API_VERSION",
+    "LLMCompletion",
+    "LLMModel",
+    "LLMSelectionPolicy",
+    "LLMUsage",
+    "PluginLLM",
+    "PluginLLMError",
+    "PluginLLMSelectionError",
+    "PluginLLMUnavailableError",
     "PluginAPI",
     "PluginBase",
     "PluginManifest",

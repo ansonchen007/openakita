@@ -36,7 +36,7 @@ import hashlib
 import logging
 import mimetypes
 import tempfile
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -80,7 +80,7 @@ MAX_UPLOAD_BYTES = 64 * 1024 * 1024
 
 
 def _utcnow_iso() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _maybe_unpack(
@@ -264,7 +264,7 @@ class FinanceAutoService:
         self.plugin_api: Any | None = None
 
     def get_host_brain(self) -> Any | None:
-        """Resolve the host Brain on demand (needs ``brain.access``).
+        """Compatibility accessor returning PluginAPI for facade-backed calls.
 
         Returns ``None`` when the permission is absent or the host has not
         wired a brain yet, in which case the AI scenarios fall back to the
@@ -273,10 +273,7 @@ class FinanceAutoService:
         api = self.plugin_api
         if api is None:
             return None
-        try:
-            return api.get_brain()
-        except Exception:  # noqa: BLE001 — brain.access may be absent
-            return None
+        return api
 
     # Convenience: True when the manager is unlocked AND we should write
     # encrypted payloads on new inserts.

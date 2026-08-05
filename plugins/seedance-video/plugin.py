@@ -1860,16 +1860,9 @@ class Plugin(PluginBase):
                         "或到「设置中心 → 插件管理 → 即梦工作室 → 权限」勾选保存。"
                     ),
                 }
-            brain = self._api.get_brain()
-            if not brain:
-                return {
-                    "ok": False,
-                    "error": "brain_unavailable",
-                    "message": "LLM 不可用：主进程未注入 brain（请确认 OpenAkita 已正常配置 LLM）。",
-                }
             try:
                 result = await optimize_prompt(
-                    brain=brain,
+                    brain=self._api,
                     user_prompt=body.prompt,
                     mode=body.mode,
                     duration=body.duration,
@@ -2300,11 +2293,8 @@ class Plugin(PluginBase):
 
         @router.post("/long-video/storyboard")
         async def decompose_storyboard_ep(body: StoryboardDecomposeBody) -> dict:
-            brain = self._api.get_brain()
-            if not brain:
-                return {"ok": False, "error": "LLM not available"}
             result = await decompose_storyboard(
-                brain=brain,
+                brain=self._api,
                 story=body.story,
                 total_duration=body.total_duration,
                 segment_duration=body.segment_duration,

@@ -1,10 +1,10 @@
-"""Tests for clip_asr_client.py — mock httpx for Paraformer + Qwen."""
+"""Tests for ClipSense ASR and OpenAkita-hosted transcript analysis."""
 
 from __future__ import annotations
 
 import asyncio
 import json
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock
 
 import pytest
 from clip_asr_client import (
@@ -17,6 +17,23 @@ from clip_asr_client import (
 
 def run(coro):
     return asyncio.get_event_loop().run_until_complete(coro)
+
+
+class ScriptedAnalysisAPI:
+    def __init__(self, *responses: str) -> None:
+        self.responses = list(responses)
+        self.calls: list[dict] = []
+
+    def get_config(self):
+        return {"llm_endpoint": ""}
+
+    def get_llm(self):
+        return self
+
+    async def complete(self, **kwargs):
+        self.calls.append(kwargs)
+        text = self.responses.pop(0) if self.responses else "not json"
+        return type("Completion", (), {"text": text})()
 
 
 class TestFlattenSentences:
@@ -119,105 +136,81 @@ class TestClipAsrClient:
             run(c.transcribe(""))
 
 
-class TestQwenAnalysis:
-    """Test Qwen analysis with mocked httpx."""
+class TestTranscriptAnalysis:
+    """Test transcript analysis through the Plugin LLM facade."""
 
-    @patch("clip_asr_client.ClipAsrClient._ensure_client")
-    def test_analyze_highlights_success(self, mock_ensure):
-        mock_client = AsyncMock()
-        mock_ensure.return_value = mock_client
-
+    def test_analyze_highlights_success(self):
         highlights = [{"start_sec": 10, "end_sec": 40, "reason": "funny", "score": 8}]
-        mock_resp = MagicMock()
-        mock_resp.status_code = 200
-        mock_resp.json.return_value = {
-            "choices": [{"message": {"content": json.dumps(highlights)}}]
-        }
-        mock_client.post.return_value = mock_resp
-
+        api = ScriptedAnalysisAPI(json.dumps(highlights))
         c = ClipAsrClient(
             "sk-test",
-            analysis_provider="dashscope",
-            analysis_api_key="sk-analysis",
+            analysis_brain=api,
         )
         sentences = [{"start": 0, "end": 60, "text": "test content"}]
         result = run(c.analyze_highlights("test", sentences))
         assert len(result) == 1
         assert result[0]["start_sec"] == 10
+        assert api.calls[0]["policy"] == "inherit"
 
-    @patch("clip_asr_client.ClipAsrClient._ensure_client")
-    def test_analyze_with_markdown_fence(self, mock_ensure):
-        mock_client = AsyncMock()
-        mock_ensure.return_value = mock_client
-
+    def test_analyze_with_markdown_fence(self):
         topics = [{"title": "Intro", "start_sec": 0, "end_sec": 60, "summary": "intro"}]
         fenced = f"```json\n{json.dumps(topics)}\n```"
-        mock_resp = MagicMock()
-        mock_resp.status_code = 200
-        mock_resp.json.return_value = {"choices": [{"message": {"content": fenced}}]}
-        mock_client.post.return_value = mock_resp
-
         c = ClipAsrClient(
             "sk-test",
-            analysis_provider="dashscope",
-            analysis_api_key="sk-analysis",
+            analysis_brain=ScriptedAnalysisAPI(fenced),
         )
         sentences = [{"start": 0, "end": 60, "text": "test"}]
         result = run(c.analyze_topics("test", sentences))
         assert len(result) == 1
         assert result[0]["title"] == "Intro"
 
-    @patch("clip_asr_client.ClipAsrClient._ensure_client")
-    def test_analyze_retry_on_bad_json(self, mock_ensure):
-        mock_client = AsyncMock()
-        mock_ensure.return_value = mock_client
-
-        bad_resp = MagicMock()
-        bad_resp.status_code = 200
-        bad_resp.json.return_value = {"choices": [{"message": {"content": "not json at all"}}]}
-
+    def test_analyze_retry_on_bad_json(self):
         good_data = [{"start_sec": 1, "end_sec": 2, "type": "filler", "content": "um"}]
-        good_resp = MagicMock()
-        good_resp.status_code = 200
-        good_resp.json.return_value = {"choices": [{"message": {"content": json.dumps(good_data)}}]}
-
-        mock_client.post.side_effect = [bad_resp, good_resp]
-
+        api = ScriptedAnalysisAPI("not json at all", json.dumps(good_data))
         c = ClipAsrClient(
             "sk-test",
-            analysis_provider="dashscope",
-            analysis_api_key="sk-analysis",
+            analysis_brain=api,
         )
-        c._client = mock_client
         sentences = [{"start": 0, "end": 5, "text": "um test"}]
         result = run(c.analyze_filler("um test", sentences))
         assert len(result) == 1
+        assert len(api.calls) == 2
 
-    @patch("clip_asr_client.ClipAsrClient._ensure_client")
-    def test_analyze_all_retries_exhausted(self, mock_ensure):
-        mock_client = AsyncMock()
-        mock_ensure.return_value = mock_client
-
-        bad_resp = MagicMock()
-        bad_resp.status_code = 200
-        bad_resp.json.return_value = {"choices": [{"message": {"content": "not json"}}]}
-        mock_client.post.return_value = bad_resp
-
+    def test_analyze_all_retries_exhausted(self):
         c = ClipAsrClient(
             "sk-test",
-            analysis_provider="dashscope",
-            analysis_api_key="sk-analysis",
+            analysis_brain=ScriptedAnalysisAPI("not json", "not json", "not json"),
         )
         sentences = [{"start": 0, "end": 5, "text": "test"}]
         result = run(c.analyze_highlights("test", sentences))
         assert result == []
 
-    def test_host_brain_analysis_default(self):
-        class StubBrain:
-            async def chat(self, **kwargs):
-                return json.dumps([{"start_sec": 1, "end_sec": 3, "reason": "ok", "score": 8}])
+    def test_private_analysis_provider_cannot_bypass_openakita_llm(self):
+        class StubAPI:
+            def get_config(self):
+                return {"llm_endpoint": ""}
 
-        c = ClipAsrClient("sk-test", analysis_brain=StubBrain())
+            def get_llm(self):
+                return self
+
+            async def complete(self, **kwargs):
+                return type(
+                    "Completion",
+                    (),
+                    {
+                        "text": json.dumps(
+                            [{"start_sec": 1, "end_sec": 3, "reason": "ok", "score": 8}]
+                        )
+                    },
+                )()
+
+        c = ClipAsrClient(
+            "sk-test",
+            analysis_provider="dashscope",
+            analysis_api_key="private-text-key",
+            analysis_brain=StubAPI(),
+        )
+        c._ensure_client = AsyncMock(side_effect=AssertionError("private text API used"))
         sentences = [{"start": 0, "end": 5, "text": "test content"}]
         result = run(c.analyze_highlights("test", sentences))
         assert result[0]["start_sec"] == 1

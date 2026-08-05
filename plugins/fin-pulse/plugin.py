@@ -27,7 +27,7 @@ import json
 import logging
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Final
 
@@ -47,7 +47,7 @@ RADAR_FORCE_FETCH_MIN_INTERVAL_S = 300
 
 
 def _utcnow_iso() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _default_report_plans() -> dict[str, Any]:
@@ -315,7 +315,7 @@ class Plugin(PluginBase):
             )
         try:
             await asyncio.wait_for(asyncio.shield(task), timeout=timeout)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             return False, "init_in_progress"
         except Exception as exc:  # noqa: BLE001
             return False, f"init_failed: {exc}"
@@ -1146,8 +1146,8 @@ class Plugin(PluginBase):
             if not url:
                 raise HTTPException(status_code=400, detail="url_required")
             try:
-                from finpulse_fetchers.rss import parse_feed  # type: ignore
                 import httpx
+                from finpulse_fetchers.rss import parse_feed  # type: ignore
             except ImportError as exc:
                 raise HTTPException(status_code=500, detail="rss_module_unavailable") from exc
             try:
@@ -1427,14 +1427,6 @@ class Plugin(PluginBase):
                     items.append({"id": item_id, "title": title, "summary": summary})
             if not items:
                 return {"ok": False, "error": "no translatable items"}
-            try:
-                brain = self._api.get_brain() if self._api is not None else None
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("translate brain access failed: %s", exc)
-                brain = None
-            if brain is None:
-                return {"ok": False, "error": "brain.access not granted"}
-
             user_payload = json.dumps(
                 {"target_language": target_language, "items": items},
                 ensure_ascii=False,
@@ -1447,37 +1439,20 @@ class Plugin(PluginBase):
                 "Do not add commentary."
             )
             try:
-                if hasattr(brain, "think_lightweight"):
-                    response = await brain.think_lightweight(
-                        prompt=user_payload,
-                        system=system_prompt,
-                        max_tokens=1800,
-                    )
-                elif hasattr(brain, "think"):
-                    response = await brain.think(
-                        prompt=user_payload,
-                        system=system_prompt,
-                        max_tokens=1800,
-                    )
-                elif hasattr(brain, "chat"):
-                    response = await brain.chat(
-                        messages=[{"role": "user", "content": user_payload}],
-                        system=system_prompt,
-                        temperature=0.1,
-                        max_tokens=1800,
-                    )
-                else:
-                    return {
-                        "ok": False,
-                        "error": "brain has no think_lightweight/think/chat method",
-                    }
+                from openakita.plugins.llm_support import complete_text
+
+                response = await complete_text(
+                    self._api,
+                    endpoint=str(self._api.get_config().get("llm_endpoint") or ""),
+                    prompt=user_payload,
+                    system=system_prompt,
+                    temperature=0.1,
+                    max_tokens=1800,
+                )
             except Exception as exc:  # noqa: BLE001
                 logger.warning("translate brain call failed: %s", exc)
                 return {"ok": False, "error": f"brain error: {exc}"}
-            raw_text = response if isinstance(response, str) else getattr(response, "content", None)
-            if raw_text is None and isinstance(response, dict):
-                raw_text = response.get("content")
-            text = str(raw_text or "").strip()
+            text = str(response.text or "").strip()
             if text.startswith("```"):
                 text = text.strip("`")
                 if text.lower().startswith("json"):
@@ -1531,13 +1506,13 @@ class Plugin(PluginBase):
                 top_k_int = max(1, min(int(top_k), 60))
             except (TypeError, ValueError) as exc:
                 raise HTTPException(status_code=400, detail=f"invalid numeric arg: {exc}") from exc
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
             since_iso = datetime.fromtimestamp(
-                now.timestamp() - since_hours_int * 3600, tz=timezone.utc
+                now.timestamp() - since_hours_int * 3600, tz=UTC
             ).strftime("%Y-%m-%dT%H:%M:%SZ")
             freshness_hours = min(2, since_hours_int)
             fresh_since_iso = datetime.fromtimestamp(
-                now.timestamp() - freshness_hours * 3600, tz=timezone.utc
+                now.timestamp() - freshness_hours * 3600, tz=UTC
             ).strftime("%Y-%m-%dT%H:%M:%SZ")
             if source_ids:
                 window_total = 0
@@ -1708,13 +1683,8 @@ class Plugin(PluginBase):
                 raise HTTPException(
                     status_code=500, detail=f"ai_module_unavailable: {exc}"
                 ) from exc
-            brain: Any = None
-            try:
-                brain = self._api.get_brain() if self._api is not None else None
-            except Exception:  # noqa: BLE001 — brain.access may be absent
-                brain = None
             return await suggest_rules_text(
-                brain,
+                self._api,
                 description=description,
                 existing=existing if isinstance(existing, str) else "",
                 lang=lang,
@@ -2229,7 +2199,7 @@ class Plugin(PluginBase):
             names: list[str] = []
             adapters = getattr(gateway, "_adapters", None)
             if isinstance(adapters, dict):
-                names = [str(k) for k in adapters.keys()]
+                names = [str(k) for k in adapters]
             else:
                 probe = [
                     "feishu",
@@ -2292,10 +2262,7 @@ _FINPULSE_NAME_PREFIXES: Final[tuple[str, ...]] = ("fin-pulse ", "fin-pulse:")
 def _task_name_is_finpulse(name: str) -> bool:
     if not name:
         return False
-    for prefix in _FINPULSE_NAME_PREFIXES:
-        if name.startswith(prefix):
-            return True
-    return False
+    return any(name.startswith(prefix) for prefix in _FINPULSE_NAME_PREFIXES)
 
 
 def _is_finpulse_schedule(**kwargs: Any) -> bool:
@@ -2393,7 +2360,7 @@ def _radar_key(rules_text: str) -> str:
 
 
 def _today_utc_ymd() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    return datetime.now(UTC).strftime("%Y-%m-%d")
 
 
 __all__ = ["Plugin", "PLUGIN_ID", "PLUGIN_VERSION"]

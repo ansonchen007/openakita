@@ -2822,12 +2822,7 @@ class Plugin(PluginBase):
                 {"ok": False, "error": "missing brain.access permission", "terminal": True},
                 ensure_ascii=False,
             )
-        brain = self._api.get_brain()
-        if not brain:
-            return json.dumps(
-                {"ok": False, "error": "brain unavailable", "terminal": True},
-                ensure_ascii=False,
-            )
+        brain = self._api
         try:
             body = StoryboardDecomposeBody(**args)
         except ValidationError as exc:
@@ -3676,9 +3671,7 @@ class Plugin(PluginBase):
         async def storyboard_decompose(body: StoryboardDecomposeBody) -> dict:
             if not self._api.has_permission("brain.access"):
                 return {"ok": False, "error": "missing brain.access permission"}
-            brain = self._api.get_brain()
-            if not brain:
-                return {"ok": False, "error": "brain unavailable"}
+            brain = self._api
             if self._storyboard_decompose_running or self._storyboard_decompose_lock.locked():
                 logger.info(
                     "happyhorse-video: storyboard decompose rejected because previous request is running",
@@ -4473,12 +4466,9 @@ class Plugin(PluginBase):
         async def prompt_optimize_route(body: PromptOptimizeBody) -> dict:
             if not self._api.has_permission("brain.access"):
                 return {"ok": False, "error": "missing brain.access permission"}
-            brain = self._api.get_brain()
-            if not brain:
-                return {"ok": False, "error": "brain unavailable"}
             try:
                 result = await optimize_prompt(
-                    brain=brain,
+                    brain=self._api,
                     user_prompt=body.prompt,
                     mode=body.mode,
                     model_id=body.model_id,

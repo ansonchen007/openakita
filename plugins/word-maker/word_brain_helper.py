@@ -4,18 +4,14 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any
 
 from word_maker_inline.llm_json_parser import parse_llm_json_object
 from word_models import DOC_TYPES
 
-
-class _BrainLike(Protocol):
-    async def think_lightweight(self, prompt: str, **kwargs: Any) -> Any: ...
-
+from openakita.plugins.llm_support import complete_text
 
 _BRAIN_SYSTEM_PROMPT = "You are assisting word-maker, an OpenAkita plugin for guided Word document generation."
-_SUPPORTED_BRAIN_METHODS = ("think_lightweight", "think", "compiler_think", "access")
 
 
 def _extract_response_text(response: Any) -> str:
@@ -70,13 +66,13 @@ class WordBrainHelper:
             status["message"] = "brain.access is not granted"
             return status, None
 
-        get_brain = getattr(self._api, "get_brain", None)
-        if not callable(get_brain):
+        get_llm = getattr(self._api, "get_llm", None)
+        if not callable(get_llm):
             status["reason"] = "host_brain_unavailable"
-            status["message"] = "OpenAkita host does not expose get_brain"
+            status["message"] = "OpenAkita host does not expose get_llm"
             return status, None
         try:
-            brain = get_brain()
+            brain = get_llm()
         except Exception as exc:  # noqa: BLE001 - status should explain host failures.
             status["reason"] = "host_brain_error"
             status["message"] = f"OpenAkita Brain lookup failed: {exc}"
@@ -107,42 +103,22 @@ class WordBrainHelper:
         _status, brain = self._brain_state()
         return brain
 
-    async def _call_brain(self, brain: _BrainLike, prompt: str) -> str:
-        last_type_error: TypeError | None = None
-        for method_name in _SUPPORTED_BRAIN_METHODS:
-            method = getattr(brain, method_name, None)
-            if not callable(method):
-                continue
-            for kwargs in (
-                {"prompt": prompt, "system": _BRAIN_SYSTEM_PROMPT, "max_tokens": 1200},
-                {"prompt": prompt, "max_tokens": 1200},
-            ):
-                try:
-                    return _extract_response_text(await method(**kwargs))
-                except TypeError as exc:
-                    last_type_error = exc
-            try:
-                return _extract_response_text(await method(prompt))
-            except TypeError as exc:
-                last_type_error = exc
-        chat = getattr(brain, "chat", None)
-        if callable(chat):
-            messages = [
-                {"role": "system", "content": _BRAIN_SYSTEM_PROMPT},
-                {"role": "user", "content": prompt},
-            ]
-            for kwargs in (
-                {"messages": messages, "system": _BRAIN_SYSTEM_PROMPT, "max_tokens": 1200},
-                {"messages": messages, "max_tokens": 1200},
-                {"messages": messages},
-            ):
-                try:
-                    return _extract_response_text(await chat(**kwargs))
-                except TypeError as exc:
-                    last_type_error = exc
-        if last_type_error is not None:
-            raise RuntimeError(f"Brain has no supported think method: {last_type_error}") from last_type_error
-        raise RuntimeError("Brain has no supported think method")
+    def _endpoint(self) -> str:
+        config = self._api.get_config() if callable(getattr(self._api, "get_config", None)) else {}
+        if isinstance(config, dict) and "llm_endpoint" in config:
+            return str(config.get("llm_endpoint") or "").strip()
+        settings = config.get("word_maker_settings", {}) if isinstance(config, dict) else {}
+        return str(settings.get("llm_endpoint") or "").strip()
+
+    async def _call_brain(self, _llm: Any, prompt: str) -> str:
+        response = await complete_text(
+            self._api,
+            endpoint=self._endpoint(),
+            prompt=prompt,
+            system=_BRAIN_SYSTEM_PROMPT,
+            max_tokens=1200,
+        )
+        return _extract_response_text(getattr(response, "text", response))
 
     async def _ask_json(
         self,
@@ -384,4 +360,3 @@ class WordBrainHelper:
             fallback=fallback,
             required={"summary_md", "slide_outline", "key_messages"},
         )
-

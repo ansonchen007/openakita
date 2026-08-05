@@ -11,9 +11,8 @@ import asyncio
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
-
-import pytest
 
 PLUGIN_DIR = Path(__file__).resolve().parent.parent
 if str(PLUGIN_DIR) not in sys.path:
@@ -49,13 +48,25 @@ class _StubBrain:
         body = self.replies.pop(0) if self.replies else ""
         return _BrainResponse(content=body)
 
+    def get_config(self) -> dict[str, str]:
+        return {"llm_endpoint": ""}
+
+    def get_llm(self) -> _StubBrain:
+        return self
+
+    async def complete(self, *, prompt: str, system: str, **kw: Any) -> Any:
+        response = await self.chat(
+            messages=[{"role": "user", "content": prompt}], system=system, **kw
+        )
+        return SimpleNamespace(text=response.content)
+
 
 class TestSuggestRulesHappyPath:
     def test_brain_rules_passthrough(self) -> None:
         brain = _StubBrain(replies=["+美联储\n+降息\n!传闻\n"])
         out = _run(suggest_rules_text(brain, description="美联储政策", lang="zh"))
         assert out["ok"] is True
-        assert out["source"] == "brain"
+        assert out["source"] == "openakita_llm"
         assert "+美联储" in out["rules_text"]
         assert "!传闻" in out["rules_text"]
 
@@ -63,7 +74,7 @@ class TestSuggestRulesHappyPath:
         brain = _StubBrain(replies=["```\n+降息\n+加息\n```"])
         out = _run(suggest_rules_text(brain, description="利率", lang="zh"))
         assert out["ok"] is True
-        assert out["source"] == "brain"
+        assert out["source"] == "openakita_llm"
         assert "```" not in out["rules_text"]
         assert "+降息" in out["rules_text"]
 
@@ -92,28 +103,24 @@ class TestSuggestRulesGuardRails:
 
 
 class TestSuggestRulesFallback:
-    def test_none_brain_falls_back(self) -> None:
+    def test_none_brain_reports_unavailable(self) -> None:
         out = _run(suggest_rules_text(None, description="美联储, 降息, 排除传闻"))
-        assert out["source"] == "fallback"
-        assert "+美联储" in out["rules_text"]
-        # "排除传闻" should become "!传闻"
-        assert "!传闻" in out["rules_text"]
+        assert out["source"] == "openakita_llm"
+        assert out["ok"] is False
 
-    def test_brain_exception_falls_back(self) -> None:
+    def test_brain_exception_is_reported(self) -> None:
         brain = _StubBrain(replies=[], exceptions={0: RuntimeError("boom")})
         out = _run(suggest_rules_text(brain, description="央行, 利率"))
-        assert out["source"] == "fallback"
-        assert "+央行" in out["rules_text"]
-        assert out["message"].startswith("brain error")
+        assert out["source"] == "openakita_llm"
+        assert out["ok"] is False
 
-    def test_brain_empty_body_falls_back(self) -> None:
+    def test_brain_empty_body_is_reported(self) -> None:
         brain = _StubBrain(replies=[""])
         out = _run(suggest_rules_text(brain, description="美联储, 降息"))
-        assert out["source"] == "fallback"
-        assert out["rules_text"].count("+") >= 2
+        assert out["ok"] is False
 
     def test_all_junk_description_yields_empty_not_ok(self) -> None:
         out = _run(suggest_rules_text(None, description="的 了 在 是"))
         # Heuristic dropped everything as too short / filler -> ok=False
-        assert out["source"] == "fallback"
-        assert out["ok"] is False or out["rules_text"] == ""
+        assert out["source"] == "openakita_llm"
+        assert out["ok"] is False

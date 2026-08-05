@@ -64,8 +64,14 @@ async def test_optimize_prompt_raises_when_no_brain_methods():
 @pytest.mark.asyncio
 async def test_optimize_prompt_uses_chat_when_only_chat_present():
     class _Brain:
-        async def chat(self, messages):
-            return {"content": "OK 优化结果"}
+        def get_config(self):
+            return {"llm_endpoint": ""}
+
+        def get_llm(self):
+            return self
+
+        async def complete(self, **kwargs):
+            return type("Completion", (), {"text": "OK 优化结果"})()
 
     out = await optimize_prompt(brain=_Brain(), user_prompt="x", mode="t2v")
     assert "OK" in out

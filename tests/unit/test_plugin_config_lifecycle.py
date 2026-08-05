@@ -3,6 +3,7 @@ import threading
 from types import SimpleNamespace
 
 import pytest
+from fastapi import HTTPException
 
 from openakita.api.routes import plugins as plugin_routes
 
@@ -168,3 +169,66 @@ def test_plugin_config_updates_serialize_the_complete_read_modify_write(
     assert not first.is_alive()
     assert not second.is_alive()
     assert json.loads(canonical.read_text(encoding="utf-8")) == {"first": 1, "second": 2}
+
+
+@pytest.mark.asyncio
+async def test_plugin_llm_catalog_is_sanitized_and_reports_saved_selection(plugin_workspace):
+    canonical = plugin_workspace / "data" / "plugin_data" / "demo" / "config.json"
+    canonical.parent.mkdir(parents=True)
+    canonical.write_text(json.dumps({"llm_endpoint": "primary"}), encoding="utf-8")
+
+    model = SimpleNamespace(
+        endpoint="primary",
+        model="model-a",
+        provider="openai-compatible",
+        priority=1,
+        local=False,
+        healthy=True,
+        current=True,
+        capabilities=("text",),
+        note="",
+    )
+    llm = SimpleNamespace(list_models=lambda **_kwargs: [model])
+    api = SimpleNamespace(get_llm=lambda: llm)
+    manager = SimpleNamespace(
+        loaded_plugins={"demo": SimpleNamespace(api=api)},
+    )
+    agent = SimpleNamespace(_plugin_manager=manager)
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(agent=agent)))
+
+    response = await plugin_routes.get_plugin_llm_models("demo", request)
+
+    assert response["data"]["selected_endpoint"] == "primary"
+    assert response["data"]["models"] == [
+        {
+            "endpoint": "primary",
+            "model": "model-a",
+            "provider": "openai-compatible",
+            "priority": 1,
+            "local": False,
+            "healthy": True,
+            "current": True,
+            "capabilities": ["text"],
+            "note": "",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_plugin_config_rejects_unknown_llm_endpoint(plugin_workspace):
+    llm = SimpleNamespace(
+        list_models=lambda **_kwargs: [SimpleNamespace(endpoint="primary")]
+    )
+    api = SimpleNamespace(get_llm=lambda: llm)
+    manager = SimpleNamespace(
+        loaded_plugins={"demo": SimpleNamespace(api=api)},
+    )
+    agent = SimpleNamespace(_plugin_manager=manager)
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(agent=agent)))
+
+    with pytest.raises(HTTPException) as exc_info:
+        await plugin_routes.update_plugin_config(
+            "demo", {"llm_endpoint": "missing"}, request
+        )
+
+    assert getattr(exc_info.value, "status_code", None) == 400

@@ -9,7 +9,8 @@ Three call surfaces, all 1:1 with ``docs/media-post-plan.md`` §6.1:
   through an :class:`asyncio.Semaphore`, results flattened back into
   the original frame order with failed slots set to ``None``. Ports
   CutClaw ``Reviewer.py:656-737`` (``get_protagonist_frame_data``).
-- :func:`MediaPostVlmClient.qwen_plus_call` — text-only Qwen-Plus call
+- :func:`MediaPostVlmClient.qwen_plus_call` — legacy compatibility helper;
+  active text workflows use the OpenAkita Plugin LLM facade
   used by the SEO generator (Phase 3 ``mediapost_seo_generator``).
 
 All three classify HTTP / transport failures into the canonical 9-key
@@ -348,7 +349,7 @@ class MediaPostVlmClient:
         return flat
 
     # ------------------------------------------------------------------
-    # Qwen-Plus text-only call (used by mediapost_seo_generator)
+    # Legacy text-only helper (not used by active plugin workflows)
     # ------------------------------------------------------------------
 
     async def qwen_plus_call(
@@ -360,7 +361,9 @@ class MediaPostVlmClient:
         temperature: float = 0.7,
         timeout: float | None = None,
     ) -> str:
-        """Run a text-only Qwen-Plus chat completion and return the raw content.
+        """Run the legacy text-only Qwen call for compatibility tests.
+
+        Active Media Post workflows must use the OpenAkita Plugin LLM facade.
 
         Caller is responsible for JSON parsing / format validation
         (the SEO generator does both with platform-aware fallbacks).

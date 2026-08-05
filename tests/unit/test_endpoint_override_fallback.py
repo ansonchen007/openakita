@@ -6,7 +6,15 @@ import pytest
 
 from openakita.agent.reasoning import ReasoningEngine
 from openakita.llm.client import EndpointOverride, LLMClient
-from openakita.llm.types import AllEndpointsFailedError, EndpointConfig, Message
+from openakita.llm.types import (
+    AllEndpointsFailedError,
+    EndpointConfig,
+    LLMResponse,
+    Message,
+    StopReason,
+    TextBlock,
+    Usage,
+)
 
 
 class FakeLLMClient:
@@ -176,6 +184,97 @@ def test_preferred_endpoint_can_fall_back_when_unhealthy():
     )
 
     assert [provider.name for provider in eligible] == ["glm"]
+
+
+def test_request_preference_is_scoped_and_takes_priority_over_global_override():
+    global_selected = _provider("global", healthy=True)
+    plugin_selected = _provider("plugin", healthy=True)
+    fallback = _provider("fallback", healthy=True)
+    client = _llm_client_with_required_override(global_selected, fallback, policy="prefer")
+    client._providers[plugin_selected.name] = plugin_selected
+    before_overrides = dict(client._conversation_overrides)
+
+    eligible = client._filter_eligible_endpoints(
+        require_tools=True,
+        conversation_id="conv-1",
+        prefer_endpoint="plugin",
+        request_endpoint="plugin",
+        request_policy="prefer",
+    )
+
+    assert [provider.name for provider in eligible][0] == "plugin"
+    assert client._conversation_overrides == before_overrides
+    assert client._endpoint_override is None
+
+
+@pytest.mark.asyncio
+async def test_chat_inherits_existing_routing_when_request_has_no_endpoint(monkeypatch):
+    selected = _provider("selected", healthy=True)
+    fallback = _provider("fallback", healthy=True)
+    client = LLMClient(endpoints=[])
+    client._providers = {selected.name: selected, fallback.name: fallback}
+    client._conversation_overrides = {
+        "conv-1": EndpointOverride(
+            endpoint_name=selected.name,
+            expires_at=datetime.now() + timedelta(minutes=5),
+            policy="prefer",
+        )
+    }
+    captured: dict = {}
+
+    async def fake_try_endpoints(providers, request, allow_failover=True, cancel_event=None):
+        captured["providers"] = providers
+        return LLMResponse(
+            id="msg-1",
+            content=[TextBlock(text="ok")],
+            stop_reason=StopReason.END_TURN,
+            usage=Usage(),
+            model=providers[0].model,
+        )
+
+    monkeypatch.setattr(client, "_try_endpoints", fake_try_endpoints)
+
+    response = await client.chat(
+        [Message(role="user", content="hello")],
+        conversation_id="conv-1",
+        endpoint_policy="inherit",
+    )
+
+    assert response.text == "ok"
+    assert [provider.name for provider in captured["providers"]][0] == "selected"
+
+
+def test_request_required_endpoint_is_used_without_mutating_overrides_or_health():
+    selected = _provider("plugin", healthy=False)
+    fallback = _provider("fallback", healthy=True)
+    client = _llm_client_with_required_override(selected, fallback, policy="prefer")
+    before_overrides = dict(client._conversation_overrides)
+
+    eligible = client._filter_eligible_endpoints(
+        require_tools=True,
+        request_endpoint="plugin",
+        request_policy="require",
+    )
+
+    assert [provider.name for provider in eligible] == ["plugin"]
+    assert selected.is_healthy is False
+    assert client._conversation_overrides == before_overrides
+
+
+@pytest.mark.asyncio
+async def test_request_required_endpoint_blocks_capability_fallback():
+    selected = _provider("plugin", healthy=True, capabilities=["text"])
+    fallback = _provider("fallback", healthy=True, capabilities=["text", "tools"])
+    client = _llm_client_with_required_override(selected, fallback, policy="prefer")
+    request = SimpleNamespace(enable_thinking=False)
+
+    with pytest.raises(AllEndpointsFailedError, match="Required endpoint 'plugin'"):
+        await client._resolve_providers_with_fallback(
+            request=request,
+            require_tools=True,
+            request_endpoint="plugin",
+            request_policy="require",
+        )
 
 
 @pytest.mark.asyncio

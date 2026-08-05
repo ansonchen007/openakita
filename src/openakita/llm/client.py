@@ -482,6 +482,8 @@ class LLMClient:
         thinking_depth: str | None = None,
         conversation_id: str | None = None,
         cancel_event: asyncio.Event | None = None,
+        endpoint_name: str | None = None,
+        endpoint_policy: str | None = None,
         **kwargs,
     ) -> LLMResponse:
         """
@@ -524,6 +526,8 @@ class LLMClient:
                     thinking_depth=thinking_depth,
                     conversation_id=conversation_id,
                     cancel_event=cancel_event,
+                    endpoint_name=endpoint_name,
+                    endpoint_policy=endpoint_policy,
                     **kwargs,
                 )
             finally:
@@ -540,6 +544,8 @@ class LLMClient:
         thinking_depth: str | None = None,
         conversation_id: str | None = None,
         cancel_event: asyncio.Event | None = None,
+        endpoint_name: str | None = None,
+        endpoint_policy: str | None = None,
         **kwargs,
     ) -> LLMResponse:
         # 消息规范化: 发送前统一格式
@@ -564,6 +570,23 @@ class LLMClient:
         require_pdf = self._has_documents(messages)
         require_thinking = bool(enable_thinking)
 
+        request_endpoint = str(endpoint_name or "").strip() or None
+        request_policy = str(
+            endpoint_policy or ("prefer" if request_endpoint else "inherit")
+        ).strip().lower()
+        if request_policy not in {"inherit", "prefer", "require"}:
+            raise ValueError("endpoint_policy must be 'inherit', 'prefer', or 'require'")
+        if request_endpoint and request_policy == "inherit":
+            raise ValueError("endpoint_policy='inherit' cannot specify endpoint_name")
+        if not request_endpoint and request_policy != "inherit":
+            raise ValueError(f"endpoint_policy={request_policy!r} requires endpoint_name")
+        if request_endpoint and request_endpoint not in self._providers:
+            available = ", ".join(sorted(self._providers))
+            raise AllEndpointsFailedError(
+                f"Requested endpoint '{request_endpoint}' is not configured. "
+                f"Available endpoints: {available or '(none)'}"
+            )
+
         # 检测工具上下文：对 failover 需要更保守
         #
         # 关键原因：
@@ -574,7 +597,7 @@ class LLMClient:
         # 因此默认：只要检测到工具上下文，就禁用 failover（保持同一端点/同一模型）
         # 但允许通过配置显式开启“同协议内 failover”（默认不开启）。
         has_tool_context = self._has_tool_context(messages)
-        allow_failover = not has_tool_context
+        allow_failover = not has_tool_context and request_policy != "require"
 
         if has_tool_context:
             logger.debug(
@@ -592,11 +615,19 @@ class LLMClient:
             require_audio=require_audio,
             require_pdf=require_pdf,
             conversation_id=conversation_id,
-            prefer_endpoint=self._last_success_endpoint if has_tool_context else None,
+            prefer_endpoint=(
+                request_endpoint
+                if request_endpoint
+                else self._last_success_endpoint
+                if has_tool_context
+                else None
+            ),
+            request_endpoint=request_endpoint,
+            request_policy=request_policy,
         )
 
         # 可选：工具上下文下启用 failover（显式配置才开启）
-        if has_tool_context and eligible:
+        if has_tool_context and eligible and request_policy != "require":
             if self._settings.get("allow_failover_with_tool_context", False):
                 # 默认只允许同协议内切换；避免 anthropic/openai 混用导致 tool message 不兼容
                 api_types = {p.config.api_type for p in eligible}
@@ -628,7 +659,15 @@ class LLMClient:
             require_audio=require_audio,
             require_pdf=require_pdf,
             conversation_id=conversation_id,
-            prefer_endpoint=self._last_success_endpoint if has_tool_context else None,
+            prefer_endpoint=(
+                request_endpoint
+                if request_endpoint
+                else self._last_success_endpoint
+                if has_tool_context
+                else None
+            ),
+            request_endpoint=request_endpoint,
+            request_policy=request_policy,
             cancel_event=cancel_event,
         )
         return await self._try_endpoints(
@@ -986,6 +1025,8 @@ class LLMClient:
         require_pdf: bool = False,
         conversation_id: str | None = None,
         prefer_endpoint: str | None = None,
+        request_endpoint: str | None = None,
+        request_policy: str = "prefer",
         cancel_event: asyncio.Event | None = None,
     ) -> list[LLMProvider]:
         """公共分层降级策略 — 供 chat() 和 chat_stream() 复用
@@ -1009,11 +1050,36 @@ class LLMClient:
             按优先级排序的端点列表（至少包含一个端点）
         """
         providers_sorted = sorted(self._providers.values(), key=lambda p: p.config.priority)
+
+        if request_endpoint and request_policy == "require":
+            provider = self._providers.get(request_endpoint)
+            if provider is None:
+                raise AllEndpointsFailedError(
+                    f"Required endpoint '{request_endpoint}' is no longer configured."
+                )
+            missing = self._missing_required_capabilities(
+                provider,
+                require_tools=require_tools,
+                require_vision=require_vision,
+                require_video=require_video,
+                require_audio=require_audio,
+                require_pdf=require_pdf,
+            )
+            if missing:
+                raise AllEndpointsFailedError(
+                    f"Required endpoint '{request_endpoint}' does not support this request "
+                    f"capability: {', '.join(missing)}."
+                )
+            if require_thinking and not provider.config.has_capability("thinking"):
+                request.enable_thinking = False
+            return [provider]
+
         effective_override = None
-        if conversation_id and conversation_id in self._conversation_overrides:
-            effective_override = self._conversation_overrides.get(conversation_id)
-        elif self._endpoint_override:
-            effective_override = self._endpoint_override
+        if not request_endpoint:
+            if conversation_id and conversation_id in self._conversation_overrides:
+                effective_override = self._conversation_overrides.get(conversation_id)
+            elif self._endpoint_override:
+                effective_override = self._endpoint_override
 
         if effective_override and effective_override.policy == "require":
             endpoint_name = effective_override.endpoint_name
@@ -1067,6 +1133,8 @@ class LLMClient:
                 require_pdf=require_pdf,
                 conversation_id=conversation_id,
                 prefer_endpoint=prefer_endpoint,
+                request_endpoint=request_endpoint,
+                request_policy=request_policy,
             )
             if eligible_no_thinking:
                 logger.info(
@@ -1171,6 +1239,8 @@ class LLMClient:
                                 require_pdf=require_pdf,
                                 conversation_id=conversation_id,
                                 prefer_endpoint=prefer_endpoint,
+                                request_endpoint=request_endpoint,
+                                request_policy=request_policy,
                             )
                             if eligible:
                                 logger.info(
@@ -1189,6 +1259,8 @@ class LLMClient:
                             require_pdf=require_pdf,
                             conversation_id=conversation_id,
                             prefer_endpoint=prefer_endpoint,
+                            request_endpoint=request_endpoint,
+                            request_policy=request_policy,
                         )
                         if eligible:
                             if require_thinking:
@@ -1351,6 +1423,8 @@ class LLMClient:
         require_pdf: bool = False,
         conversation_id: str | None = None,
         prefer_endpoint: str | None = None,
+        request_endpoint: str | None = None,
+        request_policy: str = "prefer",
     ) -> list[LLMProvider]:
         """筛选支持所需能力的端点
 
@@ -1382,12 +1456,29 @@ class LLMClient:
         eligible = []
         override_provider = None
 
+        if request_endpoint and request_policy == "require":
+            provider = self._providers.get(request_endpoint)
+            if provider is None:
+                return []
+            missing = self._missing_required_capabilities(
+                provider,
+                require_tools=require_tools,
+                require_vision=require_vision,
+                require_video=require_video,
+                require_audio=require_audio,
+                require_pdf=require_pdf,
+            )
+            if missing:
+                return []
+            return [provider]
+
         # 如果有临时覆盖，检查覆盖端点（conversation > global）
         effective_override = None
-        if conversation_id and conversation_id in self._conversation_overrides:
-            effective_override = self._conversation_overrides.get(conversation_id)
-        else:
-            effective_override = self._endpoint_override
+        if not request_endpoint:
+            if conversation_id and conversation_id in self._conversation_overrides:
+                effective_override = self._conversation_overrides.get(conversation_id)
+            else:
+                effective_override = self._endpoint_override
 
         if effective_override:
             override_name = effective_override.endpoint_name
