@@ -29,8 +29,8 @@ __all__ = [
 # 关键设计取舍（与 OpenClaw 的差异）：
 # - OpenClaw 用 mutating-verb + 100-char window 做配对，精度高但 regex 复杂、
 #   维护成本高；本函数只做关键词存在性检查，false-positive 由 banner 措辞"请核对"
-#   兜底，false-negative 由其他守卫（_guard_unbacked_action_claim / verify）兜底。
-# - 不修改 LLM 原文，只追加 banner，保持与 _check_source_tag_consistency 同风格。
+#   兜底，任务是否完成仍由基于工具结果的 verify 判定。
+# - 不修改 LLM 原文，只追加基于真实工具失败的 banner。
 FAILURE_ACKNOWLEDGE_ZH: tuple[str, ...] = (
     "失败",
     "出错",
@@ -85,8 +85,8 @@ def check_tool_failure_acknowledgement(
 ) -> str | None:
     """检测：本次任务存在最终失败的工具调用，但 LLM 文本完全没承认任何失败。
 
-    与 _check_source_tag_consistency 互补——后者抓"声明工具但未调"的伪标注幻觉；
-    本函数抓"工具失败但措辞乐观"的成功幻觉。参考 OpenClaw 的 MUTATING_FAILURE_ACTION
+    本函数根据真实 ``tool_results`` 抓取"工具失败但措辞乐观"的成功幻觉。
+    参考 OpenClaw 的 MUTATING_FAILURE_ACTION
     检测思路，简化为关键词存在性检查（中英双语），匹配 LLM 输出的双语场景。
 
     **对偶约定**：与 `_successful_tool_names()` 保持一致——任一成功 receipt 视为

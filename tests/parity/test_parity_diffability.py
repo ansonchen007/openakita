@@ -26,9 +26,9 @@ surfaces:
   and asserts the routing parity test ``would`` fail. This proves
   ``test_decision_routing_parity`` reacts to method-body drift.
 * :func:`test_diffability_via_guard_evaluation_mutation` patches the
-  source-tag guard to return ``None`` unconditionally and asserts
-  the guard parity row ``would`` fail on the fixture that pins
-  ``source_tag=False``. This proves
+  tool-failure guard to return ``None`` unconditionally and asserts
+  the guard parity row ``would`` fail on a fixture that pins
+  ``tool_failure_ack=False``. This proves
   ``test_guard_evaluation_parity`` reacts to guard-body drift.
 * :func:`test_diffability_via_file_identity` asserts the v1/v2
   ``__file__`` invariant ``would`` fail if the v2 module were ever
@@ -90,19 +90,18 @@ def test_diffability_via_classify_exit_reason_mutation() -> None:
 
 @pytest.mark.xfail(strict=True, reason="N10 diffability proof: mutated guard MUST flip a verdict")
 def test_diffability_via_guard_evaluation_mutation() -> None:
-    """Mutate the source-tag guard; the guard parity sweep MUST flag it.
+    """Mutate the tool-failure guard; the guard parity sweep MUST flag it.
 
     Pins the behaviour of ``test_guard_evaluation_parity`` against a
-    deliberately broken source-tag guard. The fixture is the new
-    P-RC-6 non-trivial case ``source_tag_mismatch_no_tools`` which
-    expects ``source_tag=False``; patching the guard to return ``None``
-    flips that to ``True`` and the parity assertion fails.
+    deliberately broken tool-failure guard. The selected fixture expects
+    ``tool_failure_ack=False``; patching the guard to return ``None`` flips
+    that to ``True`` and the parity assertion fails.
     """
-    fixture = _load_one_fixture("source_tag_mismatch_no_tools.json")
+    fixture = _load_one_fixture("tool_error_silent_success_claim.json")
     engine = V2Engine.__new__(V2Engine)
     engine._decision_graph = build_reasoning_graph()
     with patch(
-        "openakita.agent.reasoning.check_source_tag_consistency",
+        "openakita.agent.reasoning.check_tool_failure_acknowledgement",
         return_value=None,
     ):
         verdicts = engine.evaluate_decision(

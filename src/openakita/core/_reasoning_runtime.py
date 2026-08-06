@@ -662,195 +662,16 @@ class Checkpoint:
     tool_names: list[str] = field(default_factory=list)  # 该决策调用的工具
 
 
-# Extracted to runtime/state_graph/guards/unbacked_action.py (P-RC-5 P5.6);
-# re-exported here under the previous private names for backward compat.
-# Extracted to runtime/state_graph/guards/_text_patterns.py (P-RC-5 P5.2);
-# re-exported here under the previous private name for backward compat.
-from openakita.runtime.state_graph.guards._text_patterns import (  # noqa: E402
-    action_done_re as _get_action_done_re,
-)
-
-# Extracted to runtime/state_graph/guards/_text_patterns.py (P-RC-5 P5.2);
-# re-exported here under the previous private name for backward compat.
-# Extracted to runtime/state_graph/guards/_verb_tool_map.py (P-RC-5 P5.5);
-# re-exported here under the previous private names for backward compat.
-# Extracted to runtime/state_graph/guards/conversation_state.py (P-RC-5 P5.7);
-# re-exported here under the previous private names for backward compat.
+# Compatibility aliases for guards whose implementations live in the state graph runtime.
 from openakita.runtime.state_graph.guards.conversation_state import (
     has_recoverable_tool_issue as _has_recoverable_tool_issue,
 )
 from openakita.runtime.state_graph.guards.conversation_state import (
     looks_like_waiting_for_user_response as _looks_like_waiting_for_user_response,
 )
-from openakita.runtime.state_graph.guards.recap_context import (  # noqa: E402
-    RECAP_NEAR_RE as _RECAP_NEAR_RE,
-)
-
-# Extracted to runtime/state_graph/guards/recap_context.py (P-RC-5 P5.4);
-# re-exported here under the previous private name for backward compat.
-# Extracted to runtime/state_graph/guards/source_tag.py (P-RC-5 P5.2);
-# re-exported here under the previous private name for backward compat.
-from openakita.runtime.state_graph.guards.source_tag import (  # noqa: E402
-    check_source_tag_consistency as _check_source_tag_consistency,
-)
-
-# Extracted to runtime/state_graph/guards/tool_failure_ack.py (P-RC-5 P5.3);
-# re-exported here under the previous private name for backward compat.
-# 工具失败 vs 助手乐观措辞 一致性检测（参考 OpenClaw MUTATING_FAILURE_ACTION_PATTERN）。
-#
-# 设计动机：现有 _check_source_tag_consistency 只检"声明 [来源:工具] 但未调工具"；
-# 还有一类常见幻觉它检不到——**工具已执行但失败（is_error=True），LLM 却给出
-# 乐观成功措辞**（如"我已成功保存"），用户被误导。OpenClaw 用一段长 regex 把
-# mutating verb 和 failure context window 配对来贴 warning，本函数做中文等价版：
-#
-# 1. 扫描本轮 tool_results，统计 is_error=True 的工具名 / 数量。
-# 2. 如果一个失败都没有 → 无事可做，直接返回 None。
-# 3. 否则扫描 LLM 文本，看是否包含任意"失败 / 出错 / 无法 / 未能 / 报错"等
-#    中英文承认关键词。
-#    - 命中：说明 LLM 已经在文本里如实告知用户失败 → 无需 banner，返回 None。
-#    - 全部未命中 → 追加 ⚠️ 提示，让用户警惕"工具失败但措辞乐观"的幻觉。
-#
-# Extracted to runtime/state_graph/guards/tool_failure_ack.py (P-RC-5 P5.3);
-# re-exported here under the previous private name for backward compat.
-# Extracted to runtime/state_graph/guards/tool_failure_ack.py (P-RC-5 P5.3);
-# re-exported here under the previous private name for backward compat.
 from openakita.runtime.state_graph.guards.tool_failure_ack import (  # noqa: E402
     check_tool_failure_acknowledgement as _check_tool_failure_acknowledgement,
 )
-
-# Extracted to runtime/state_graph/guards/tool_failure_ack.py (P-RC-5 P5.3);
-# re-exported here under the previous private name for backward compat.
-from openakita.runtime.state_graph.guards.unbacked_action import (  # noqa: E402
-    action_claim_re as _get_action_claim_re,
-)
-from openakita.runtime.state_graph.guards.unbacked_action import (
-    guard_unbacked_action_claim as _guard_unbacked_action_claim,
-)
-
-# ----------------------------------------------------------------------------
-# 伪工具调用检测（P1 健壮性）
-#
-# 当 LLM 在 final_answer 文本里写出形如
-#   ```tool_call
-#   org_accept_deliverable(...)
-#   ```
-# 或裸的 `org_submit_deliverable(...)` 字面量时，ReasoningEngine 不会真正调用工具，
-# 但上层（producer / 组织编排）会误以为工具已执行，导致编排链路被卡死。
-# 这里提供一个轻量检测器，供 _handle_final_answer 等路径用于「补救式重试」。
-# ----------------------------------------------------------------------------
-
-_TOOL_CALL_FENCE_RE = re.compile(
-    r"```\s*tool[_-]?call\s*\n(.+?)```",
-    re.DOTALL | re.IGNORECASE,
-)
-
-# 已知会触发「写文本而非调工具」的工具名前缀。保留前缀化匹配可避免把普通函数
-# 名误判（例如 "list(...)"、"int(...)" 不会命中）。
-_TEXT_TOOL_CALL_PATTERNS: tuple[str, ...] = (
-    "org_",
-    "seedance_",
-    "tongyi_",
-    "clip_",
-    "ppt_",
-    "avatar_",
-    "memory_",
-    "mcp_",
-    "schedule_",
-)
-
-_INLINE_TOOL_CALL_RE = re.compile(
-    r"\b((?:" + "|".join(re.escape(p) for p in _TEXT_TOOL_CALL_PATTERNS) + r")[a-z0-9_]+)\s*\(",
-)
-
-_TEXTUAL_TOOL_EXECUTION_CLAIM_RE = re.compile(
-    r"(?:调用|执行)\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*\([^)]{0,600}\)"
-    r"\s*(?:\.{3}|…|，|,|\s)*(?:完成|成功|已完成)",
-    re.IGNORECASE,
-)
-
-
-def _detect_text_toolcall_block(text: str) -> list[str]:
-    """返回以纯文本伪调用形式出现的工具名（去重、排序）。
-
-    检测两种常见的 LLM 回退模式：
-
-    1. ```tool_call ... ``` 围栏块，块体里含 Markdown 文本形式的工具调用
-       （例如 ``org_accept_deliverable(task_chain_id=..., ...)``）。
-    2. 裸的 ``func_name(arg=...)`` 内联调用，且函数名匹配已知插件/运行时工具前缀。
-
-    返回空列表表示「未检测到伪工具调用」。调用方仅应在本轮没有发生真实工具
-    调用时才依据该结果采取行动。
-    """
-    if not text:
-        return []
-    found: set[str] = set()
-    fenced_hit = False
-    for m in _TOOL_CALL_FENCE_RE.finditer(text):
-        fenced_hit = True
-        body = m.group(1) or ""
-        for nm in _INLINE_TOOL_CALL_RE.findall(body):
-            found.add(nm)
-    if not fenced_hit:
-        for nm in _INLINE_TOOL_CALL_RE.findall(text):
-            found.add(nm)
-    return sorted(found)
-
-
-def _guard_text_toolcall_block(
-    text: str,
-    executed_tool_names: list[str],
-    intent: str | None,
-) -> list[str]:
-    """判断 LLM 是否把工具调用写成了文本却没有真正发起调用。
-
-    返回检测到的工具名，供调用方构造纠正消息。以下情况返回 ``[]``：
-
-    - 本轮实际执行了至少一个工具；
-    - LLM 把回复标注为 ``[REPLY]``（是在有意讨论工具，而非承诺执行动作）；
-    - 未出现任何伪调用模式。
-    """
-    if executed_tool_names:
-        return []
-    if intent == "REPLY":
-        return []
-    return _detect_text_toolcall_block(text or "")
-
-
-def _looks_like_no_tool_completion_claim(
-    text: str,
-    action_claim_re: re.Pattern[str],
-) -> bool:
-    """Detect final-answer text that claims an external action already ran."""
-    if not text:
-        return False
-
-    def _is_recap_match(match: re.Match[str]) -> bool:
-        half = 48
-        start = max(0, match.start() - half)
-        end = min(len(text), match.end() + half)
-        return bool(_RECAP_NEAR_RE.search(text[start:end]))
-
-    def _is_negated_mention(match: re.Match[str]) -> bool:
-        before = text[max(0, match.start() - 18) : match.start()]
-        return bool(
-            re.search(
-                r"(?:并?不(?:是|代表|应|该|要|允许|能)?|不能|不应|不要|"
-                r"没有|未|并非|而非|非(?:声称|表示)?|避免(?:说|写|使用)?)"
-                r"[`\"'“”‘’\s：:，,。；;、-]{0,8}$",
-                before,
-            )
-        )
-
-    patterns = (
-        action_claim_re,
-        _get_action_done_re(),
-        _TEXTUAL_TOOL_EXECUTION_CLAIM_RE,
-    )
-    return any(
-        not _is_recap_match(match) and not _is_negated_mention(match)
-        for pattern in patterns
-        for match in pattern.finditer(text)
-    )
 
 
 class ReasoningEngine:
@@ -5991,9 +5812,6 @@ class ReasoningEngine:
             cleaned_text = strip_thinking_tags(decision.text_content)
             _, cleaned_text = parse_intent_tag(cleaned_text)
             if cleaned_text and len(cleaned_text.strip()) > 0:
-                cleaned_text = _guard_unbacked_action_claim(
-                    cleaned_text, executed_tool_names, all_tool_results
-                )
                 last_user_request = ResponseHandler.get_last_user_request(original_messages)
                 if _looks_like_waiting_for_user_response(
                     cleaned_text
@@ -6274,9 +6092,6 @@ class ReasoningEngine:
 
         # 未执行过"实质性"工具 — 解析意图声明标记
         intent, stripped_text = parse_intent_tag(decision.text_content or "")
-        stripped_text = _guard_unbacked_action_claim(
-            stripped_text or "", executed_tool_names, all_tool_results
-        )
         logger.info(
             f"[IntentTag] intent={intent or 'NONE'}, "
             f"has_tool_calls=False, tools_executed_in_task=False, "
@@ -6327,19 +6142,13 @@ class ReasoningEngine:
                 max_no_tool_retries,
             )
 
-        _ACTION_CLAIM_RE = _get_action_claim_re()
         _txt = (stripped_text or "").strip()
-        _has_no_tool_completion_claim = _looks_like_no_tool_completion_claim(
-            _txt,
-            _ACTION_CLAIM_RE,
-        )
 
         if (
             intent == "REPLY"
             and stripped_text
             and len(stripped_text.strip()) > 10
             and not tool_evidence_required
-            and not _has_no_tool_completion_claim
         ):
             logger.info(
                 "[IntentTag] REPLY intent with substantial text, "
@@ -6347,60 +6156,8 @@ class ReasoningEngine:
             )
             return clean_llm_response(stripped_text)
 
-        # No intent tag but visible text is a genuine analysis / knowledge /
-        # writing response. Accept it as implicit REPLY as long as it does not
-        # look like an action-claim hallucination (e.g. "已帮你保存/删除/发送…"
-        # without any actual tool calls). This keeps tools available without
-        # forcing them into pure explanation or creative-writing turns.
-
-        # P1 修复：拦截「伪 tool_call 文本块」。LLM 偶尔会把工具调用写成
-        # ```tool_call\norg_accept_deliverable(...)\n``` 这样的 Markdown 文本，
-        # 但 ReasoningEngine 不会真正执行——上层（producer / 组织编排）会误以为
-        # 工具已执行而卡死。这里检测到后强制再重试一次，让 LLM 把伪文本改写为真实
-        # tool_calls。
-        _pseudo_called = _guard_text_toolcall_block(_txt, executed_tool_names, intent)
-        _pseudo_attr = "_pseudo_toolcall_retries"
-        _pseudo_retries = getattr(self, _pseudo_attr, 0)
-        if _pseudo_called and _pseudo_retries < 1:
-            setattr(self, _pseudo_attr, _pseudo_retries + 1)
-            logger.warning(
-                "[PseudoToolCall] Detected text-only tool call(s) %s without "
-                "actual invocation — forcing re-execution as real tool_calls "
-                "(attempt %d/1)",
-                _pseudo_called,
-                _pseudo_retries + 1,
-            )
-            if stripped_text:
-                working_messages.append(
-                    {
-                        "role": "assistant",
-                        "content": [{"type": "text", "text": stripped_text}],
-                        "reasoning_content": decision.thinking_content or None,
-                    }
-                )
-            tools_listed = ", ".join(_pseudo_called)
-            retry_msg = (
-                "[系统] ⚠️ 你在回复里写了 ```tool_call``` 文本块或形如 "
-                f"`{_pseudo_called[0]}(...)` 的工具调用文字（涉及：{tools_listed}），"
-                "但本轮**没有**真正发起任何工具调用——文本中的调用语句不会被执行。\n"
-                "请立即把它改写为真实的 tool_calls：直接选择对应工具并填好参数发起调用，"
-                "**不要**再用 Markdown / 代码块伪装。如果该工具确实不需要再调，"
-                "请用一句简短的中文说明你已完成的实际事项，并标注 [REPLY]。"
-            )
-            working_messages.append({"role": "user", "content": retry_msg})
-            return (
-                working_messages,
-                no_tool_call_count,
-                verify_incomplete_count,
-                no_confirmation_text_count,
-                max_no_tool_retries,
-            )
-
         has_todo_pending = self._has_active_todo_pending(conversation_id)
-        should_force_no_tool_action = intent == "ACTION" or (
-            _has_no_tool_completion_claim
-            and (max_no_tool_retries > 0 or tool_evidence_required or has_todo_pending)
-        )
+        should_force_no_tool_action = intent == "ACTION"
         if should_force_no_tool_action:
             effective_max_no_tool_retries = max_no_tool_retries
             if has_todo_pending and effective_max_no_tool_retries < 1:
@@ -6408,14 +6165,9 @@ class ReasoningEngine:
 
             no_tool_call_count += 1
             if no_tool_call_count <= effective_max_no_tool_retries:
-                reason = (
-                    "ACTION intent declared"
-                    if intent == "ACTION"
-                    else "action-completion claim emitted"
-                )
                 logger.warning(
                     "[IntentTag] %s but no tool calls — forcing retry (%s/%s)",
-                    reason,
+                    "ACTION intent declared",
                     no_tool_call_count,
                     effective_max_no_tool_retries,
                 )
@@ -6428,11 +6180,9 @@ class ReasoningEngine:
                         }
                     )
                 retry_msg = (
-                    "[系统] ⚠️ 你刚才声称已经执行/完成了外部操作，"
-                    "但本轮没有真正发起任何工具调用（tool_calls=0）。"
-                    "文字里的“调用 run_shell(... )...完成”或“已删除/已验证”不会被执行。\n"
-                    "请立即发起真实 tool_calls 完成用户请求；如果不需要执行工具，"
-                    "请明确说明这是历史回顾或建议，不要使用完成态措辞。"
+                    "[系统] 你将本轮标记为 [ACTION]，但没有发起任何真实 "
+                    "tool_calls。请直接调用所需工具；如果只需要回复文本，"
+                    "请改用 [REPLY]。"
                 )
                 working_messages.append({"role": "user", "content": retry_msg})
                 return (
@@ -6444,25 +6194,21 @@ class ReasoningEngine:
                 )
 
             logger.warning(
-                "[IntentTag] No-tool action claim retry budget exhausted — "
-                "returning non-deceptive failure instead of original text"
+                "[IntentTag] ACTION retry budget exhausted without tool calls"
             )
             return (
-                "⚠️ 本轮没有检测到任何真实工具调用，因此我不能确认外部操作已经完成。"
-                "上一次回复中的完成态描述没有工具凭证支持，未作为执行结果采信。"
-                "请重新发送指令，或允许我调用对应工具后再继续。"
+                "本轮标记为 [ACTION]，但没有产生任何工具调用结果。"
+                "请重试，或允许我调用所需工具后再继续。"
             )
 
         if (
             intent is None
             and _txt
-            and not _has_no_tool_completion_claim
             and not tool_evidence_required
         ):
             logger.info(
                 f"[IntentTag] No intent tag but visible text "
-                f"({len(_txt)} chars), "
-                f"no action-claim detected — accepting as implicit REPLY"
+                f"({len(_txt)} chars), accepting as implicit REPLY"
             )
             return clean_llm_response(stripped_text)
 
@@ -6471,9 +6217,7 @@ class ReasoningEngine:
         # 旧逻辑：4 种触发条件（evidence_required / ACTION / REPLY 短文本 / 无 intent）
         #         全都走 ForceToolCall 重试，导致大量 token 浪费 + text_replace 抖动 +
         #         OrgRuntime 误判 task_failed。
-        # 新逻辑：对显式 [ACTION] 或动作完成声明（含文本化工具执行轨迹）做重试。
-        #         其他条件仍降级为 log-only，由阶段 0 disclaimer + 阶段 3
-        #         _check_source_tag_consistency() 后置检测给出柔性提示。
+        # 新逻辑：仅对显式 [ACTION] 做重试，不从回复措辞推断动作是否执行。
         # ----------------------------------------------------------------
 
         # No hard-action claim remained. Other no-tool cases stay on the soft
@@ -6481,7 +6225,7 @@ class ReasoningEngine:
         if tool_evidence_required:
             logger.info(
                 "[ToolEvidence] No tool calls but evidence recommended — "
-                "softly noted, not retrying (relying on 阶段 3 source-tag check)"
+                "softly noted without response-text inference"
             )
         elif intent == "REPLY":
             logger.info(
@@ -6500,36 +6244,18 @@ class ReasoningEngine:
         # （那个 exit_reason 会被 OrgRuntime 错误映射为 task_failed 导致组织死锁）。
         # 改为柔性追加 disclaimer：让 LLM 原文返回 + 末尾追加来源不确定的提示。
         # 这样组织编排走 normal 路径自然回流，主链不会卡死。
-        # 与阶段 3 的 _check_source_tag_consistency() 形成 belt-and-suspenders。
         cleaned_text = clean_llm_response(stripped_text) or ""
         if tool_evidence_required and not tools_executed_in_task:
-            # 上下文敏感的提示文案：动作完成短语用强警告，普通陈述用弱提示
-            if cleaned_text and _get_action_done_re().search(cleaned_text):
-                disclaimer = (
-                    "\n\n---\n"
-                    "⚠️ **系统提示**：本轮未实际调用任何工具，上述声明的"
-                    '"已执行/已查到/已读取"等内容可能不准确，请你核实。'
-                    "如需精确数据请告诉我去查。"
-                )
-            else:
-                disclaimer = (
-                    "\n\n---\n"
-                    "（提示：本次回答未调用工具核对外部状态，"
-                    "结论来自训练常识或历史对话；如需最新精确数据请允许我调用相关工具。）"
-                )
+            disclaimer = (
+                "\n\n---\n"
+                "（提示：本次回答未调用工具核对外部状态，"
+                "结论来自训练常识或历史对话；如需最新精确数据请允许我调用相关工具。）"
+            )
             return (
                 cleaned_text + disclaimer
                 if cleaned_text
                 else ("未能就该问题给出可靠回答。请允许我调用读取、搜索或相关工具后再继续核对。")
             )
-
-        # P0-2 阶段 3：成功路径上的来源标签一致性检测（后置 belt）
-        consistency_warning = _check_source_tag_consistency(
-            cleaned_text,
-            tools_executed_count=0,  # 此分支前提就是 tool_calls=0
-        )
-        if consistency_warning:
-            return cleaned_text + consistency_warning
 
         return cleaned_text or (
             "⚠️ 大模型返回异常：未产生可用输出。任务已中断。请重试、或更换端点/模型后再执行。"
@@ -7532,10 +7258,6 @@ class ReasoningEngine:
         snippet = text.strip()
         if not snippet:
             return False
-        action_claim_re = _get_action_claim_re()
-        # 包含 action-claim 说明已经在汇报实际动作（非 proposal），放行。
-        if action_claim_re.search(snippet):
-            return False
         # 询问句号/确认关键词
         ask_markers = (
             "?",
@@ -7591,19 +7313,6 @@ class ReasoningEngine:
 ReasoningEngine.reason_stream.__wrapped__ = ReasoningEngine._reason_stream_impl
 
 
-# P11.2b: restore previous private aliases dropped during P-RC-5 reasoning-engine trim.
-# Canonical homes now live under runtime/state_graph/guards/*; tests in
-# tests/runtime/state_graph/guards/* still access them via
-# openakita.core._reasoning_runtime.<_private_name>.
-from openakita.runtime.state_graph.guards._verb_tool_map import (
-    CLAIMED_TOOL_TO_FRAGMENTS as _CLAIMED_TOOL_TO_FRAGMENTS,  # noqa: F401
-)
-from openakita.runtime.state_graph.guards._verb_tool_map import (
-    VERB_TO_TOOL_FRAGMENTS as _VERB_TO_TOOL_FRAGMENTS,  # noqa: F401
-)
-from openakita.runtime.state_graph.guards.recap_context import (
-    is_recap_context as _is_recap_context,  # noqa: F401
-)
 from openakita.runtime.state_graph.guards.tool_failure_ack import (
     successful_tool_names as _successful_tool_names,  # noqa: F401
 )
@@ -7615,7 +7324,4 @@ from openakita.runtime.state_graph.guards.tool_filters import (
 )
 from openakita.runtime.state_graph.guards.tool_filters import (
     is_shell_write_command as _is_shell_write_command,  # noqa: F401
-)
-from openakita.runtime.state_graph.guards.unbacked_action import (
-    extract_unbacked_verbs as _extract_unbacked_verbs,  # noqa: F401
 )
