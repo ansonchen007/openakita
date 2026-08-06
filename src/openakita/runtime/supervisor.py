@@ -57,6 +57,104 @@ __all__ = [
 logger = logging.getLogger(__name__)
 
 
+def _format_supervisor_llm_failure(exc: Exception) -> str | None:
+    """Return a user-facing reason for an LLM endpoint failure.
+
+    The supervisor must distinguish transport/model failures from malformed
+    progress-ledger output.  Only the latter belongs to the JSON retry loop;
+    endpoint, authentication, and protocol failures terminate the command
+    immediately with an actionable reason.
+    """
+
+    # Imported lazily because ``runtime.supervisor`` is loaded early by the
+    # agent package and a top-level LLM import would widen an existing cycle.
+    from ..llm.types import (
+        AllEndpointsFailedError,
+        AuthenticationError,
+        ConfigurationError,
+        LLMError,
+        UnsupportedMediaError,
+    )
+
+    chain: list[BaseException] = []
+    current: BaseException | None = exc
+    while current is not None and current not in chain:
+        chain.append(current)
+        current = current.__cause__ or current.__context__
+
+    llm_errors = [item for item in chain if isinstance(item, LLMError)]
+    if not llm_errors:
+        return None
+
+    categories: set[str] = set()
+    structural = False
+    status_code: int | None = None
+    for item in llm_errors:
+        if status_code is None:
+            raw_status = getattr(item, "status_code", None)
+            if isinstance(raw_status, int):
+                status_code = raw_status
+        if isinstance(item, AllEndpointsFailedError):
+            categories.update(str(value).lower() for value in item.error_categories)
+            structural = structural or item.is_structural
+
+    detail = str(exc).strip() or type(exc).__name__
+    detail = " ".join(detail.split())[:1200]
+    lowered = detail.lower()
+    http_suffix = f"（HTTP {status_code}）" if status_code is not None else ""
+
+    if "content_safety" in categories or any(
+        marker in lowered
+        for marker in ("data_inspection", "content_filter", "inappropriate content")
+    ):
+        prefix = "Supervisor 编排请求被端点内容安全策略拒绝"
+    elif status_code == 404 or any(
+        marker in lowered
+        for marker in (
+            "modelnotfound",
+            "model not found",
+            "endpoint not found",
+            "目标模型不存在",
+            "端点不存在",
+        )
+    ):
+        prefix = "Supervisor 指定的编排端点或模型不可用"
+    elif (
+        any(isinstance(item, AuthenticationError) for item in llm_errors)
+        or "auth" in categories
+        or status_code in {401, 403}
+    ):
+        prefix = "Supervisor 编排端点认证失败，请检查 API Key 和模型权限"
+    elif any(isinstance(item, ConfigurationError) for item in llm_errors):
+        prefix = "Supervisor 编排端点配置不可用"
+    elif (
+        any(isinstance(item, UnsupportedMediaError) for item in llm_errors)
+        or structural
+        or "structural" in categories
+        or status_code in {400, 405, 410, 413, 415, 422}
+        or any(
+            marker in lowered
+            for marker in (
+                "does not support",
+                "not supported",
+                "unsupported",
+                "invalid_request",
+                "invalid parameter",
+                "invalid_parameter",
+                "协议不兼容",
+                "不支持",
+            )
+        )
+    ):
+        prefix = "Supervisor 编排端点与请求协议不兼容"
+    elif "quota" in categories:
+        prefix = "Supervisor 编排端点配额不足"
+    else:
+        prefix = "Supervisor 编排模型调用失败"
+
+    return f"{prefix}{http_suffix}：{detail}"
+
+
 # ---------------------------------------------------------------------------
 # Outcome enumeration
 # ---------------------------------------------------------------------------
@@ -225,7 +323,7 @@ class _SupervisorConfig:
     max_stalls: int = 3
     max_turns: int = 30
     max_replans: int = 5
-    progress_ledger_max_retries: int = 10
+    progress_ledger_max_retries: int = 2
     progress_ledger_timeout_s: float = 60.0
 
 
@@ -264,7 +362,7 @@ class Supervisor:
         max_stalls: int = 3,
         max_turns: int = 30,
         max_replans: int = 5,
-        progress_ledger_max_retries: int = 10,
+        progress_ledger_max_retries: int = 2,
         progress_ledger_timeout_s: float = 60.0,
         wall_clock_soft_budget_s: float = 0.0,
         deliver_includes_recent_outputs: bool = True,
@@ -330,7 +428,7 @@ class Supervisor:
             max_stalls=max_stalls,
             max_turns=max_turns,
             max_replans=max_replans,
-            progress_ledger_max_retries=progress_ledger_max_retries,
+            progress_ledger_max_retries=max(0, int(progress_ledger_max_retries)),
             progress_ledger_timeout_s=max(0.01, float(progress_ledger_timeout_s)),
         )
         self.stall_detector = StallDetector(max_stalls=max_stalls, max_turns=max_turns)
@@ -453,6 +551,27 @@ class Supervisor:
             # checkpoint so the command stays resumable instead of crashing
             # with an uncaught exception.
             return await self._terminate(FinalOutcome.CANCELLED, exc.reason or "cancelled")
+        except ProgressLedgerParseError as exc:
+            reason = (
+                "Supervisor 输出格式错误，"
+                f"重试 {self.cfg.progress_ledger_max_retries} 次后仍无法解析：{exc}"
+            )
+            logger.warning(
+                "Supervisor progress ledger parsing exhausted for command=%s: %s",
+                self.command_id,
+                exc,
+            )
+            return await self._terminate(FinalOutcome.FAILED, reason)
+        except Exception as exc:
+            reason = _format_supervisor_llm_failure(exc)
+            if reason is None:
+                raise
+            logger.warning(
+                "Supervisor LLM endpoint failed for command=%s: %s",
+                self.command_id,
+                exc,
+            )
+            return await self._terminate(FinalOutcome.FAILED, reason)
         except asyncio.CancelledError:
             # v23 RC-4 fix: the d1275851 ``cancel_event`` bridge only
             # reaches ``SupervisorBrain`` (production
@@ -1237,7 +1356,11 @@ class Supervisor:
                     turn_id=self.stall_detector.n_turns + 1,
                 )
         last_error: ProgressLedgerParseError | None = None
-        for attempt in range(self.cfg.progress_ledger_max_retries):
+        # ``progress_ledger_max_retries`` means retries *after* the initial
+        # attempt.  The default of 2 therefore permits at most three LLM calls,
+        # replacing the historical ten-call parse storm.
+        attempts = self.cfg.progress_ledger_max_retries + 1
+        for attempt in range(attempts):
             self.cancel_token.raise_if_cancelled()
             started = time.monotonic()
             await self.stream.emit(
@@ -1329,7 +1452,8 @@ class Supervisor:
         # Out of retries — promote to a hard supervisor failure.
         raise ProgressLedgerParseError(
             f"progress ledger could not be parsed after "
-            f"{self.cfg.progress_ledger_max_retries} attempts: {last_error}"
+            f"{attempts} attempts ({self.cfg.progress_ledger_max_retries} retries): "
+            f"{last_error}"
         )
 
     def _progress_timeout_fallback(self, elapsed_s: float) -> ProgressLedger:

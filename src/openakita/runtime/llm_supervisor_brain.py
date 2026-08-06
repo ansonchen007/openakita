@@ -40,7 +40,7 @@ Dry-run simplifications (intentional, RC-5 Phase B)
   directory is supplied we normalise a role-style answer to a concrete
   ``node_id`` via :meth:`LLMSupervisorBrain.resolve_next_speaker`; on any
   ambiguity we leave the model's answer untouched and let the Supervisor's
-  existing 10x JSON-retry path own correctness. A complete role/address
+  bounded JSON-retry path own correctness. A complete role/address
   resolver is the next-phase gap (#2).
 * The three orchestrator prompts are adapted from AutoGen Magentic-One
   ``_prompts.py`` (see ``_rc5_biz/prototype/prompts/``) but otherwise kept
@@ -491,7 +491,7 @@ class LLMSupervisorBrain(SupervisorBrain):
         """Best-effort rewrite of ``next_speaker`` from role -> node_id.
 
         Never raises: any parse / shape issue returns ``raw`` unchanged so
-        the Supervisor's own strict parser + 10x retry path stays the single
+        the Supervisor's own strict parser + bounded retry path stays the single
         source of correctness. Only a clean JSON object whose
         ``next_speaker.answer`` resolves to a different concrete node id is
         rewritten in place.

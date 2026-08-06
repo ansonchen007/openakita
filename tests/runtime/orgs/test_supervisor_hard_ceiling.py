@@ -337,6 +337,62 @@ async def test_disk_report_without_manifest_at_ceiling_stays_error(monkeypatch) 
     cmd = svc._commands[cid]
     assert cmd["status"] == "error"
     assert cmd["result"]["partial"] is False
+    assert cmd["result"]["delivery_manifest"] is None
+    assert "file_attachments" not in cmd["result"]
+
+
+def test_reflect_projects_root_final_artifact_into_delivery_result(tmp_path) -> None:
+    from openakita.runtime.supervisor import FinalOutcome, SupervisorOutcome
+
+    svc = _make_service(supervisor=_SleepForeverSupervisor())
+    cid = "cmd_root_final_projection"
+    _seed_running_command(svc, cid)
+    final_file = tmp_path / "final.md"
+    final_file.write_text("# Final report\n\nComplete result.", encoding="utf-8")
+    svc._runtime._root_final_artifact = {cid: ("root1", str(final_file))}
+    outcome = SupervisorOutcome(
+        outcome=FinalOutcome.DONE,
+        final_message="Final report",
+        final_checkpoint_id="cp",
+        n_turns=2,
+        n_replans=0,
+        reason="",
+        deliverable="Final report",
+        delivery_manifest={
+            "state": "complete",
+            "final": True,
+            "artifacts": [
+                {
+                    "kind": "document",
+                    "status": "ready",
+                    "name": "Supporting document",
+                    "paths": [],
+                },
+                {
+                    "kind": "text",
+                    "status": "ready",
+                    "name": "Final report",
+                    "paths": [],
+                },
+            ],
+        },
+    )
+
+    svc._reflect_supervisor_outcome(cid, _SleepForeverSupervisor(), outcome)
+
+    result = svc._commands[cid]["result"]
+    assert svc._commands[cid]["status"] == "done"
+    assert result["delivery_manifest"]["artifacts"][0]["paths"] == []
+    assert result["delivery_manifest"]["artifacts"][1]["paths"] == [str(final_file)]
+    assert result["file_attachments"] == [
+        {
+            "filename": "final.md",
+            "file_path": str(final_file),
+            "file_size": final_file.stat().st_size,
+            "kind": "text",
+            "name": "Final report",
+        }
+    ]
 
 
 @pytest.mark.asyncio
