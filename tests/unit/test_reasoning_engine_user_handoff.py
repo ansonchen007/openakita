@@ -370,9 +370,8 @@ async def test_tool_evidence_required_soft_disclaimer_on_long_reply_without_tool
     and deadlocked organization chains on perfectly normal analysis replies.
 
     The new contract returns the cleaned text **plus** a soft disclaimer
-    suffix, working_messages is left untouched. Stage-3
-    ``_check_source_tag_consistency`` covers the remaining belt-and-suspenders
-    case at a later stage.
+    suffix, and working_messages is left untouched. The decision is based on
+    runtime evidence requirements, not on wording in the model response.
     """
     engine = ReasoningEngine(
         brain=None,
@@ -486,6 +485,49 @@ async def test_plain_long_reply_without_tools_is_still_accepted():
         max_confirmation_text_retries=1,
         base_force_retries=1,
         conversation_id="c1",
+        tool_evidence_required=False,
+    )
+
+    assert result == reply
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "已发送结果到群里。",
+        "write_file 已调用。",
+        "已通过 read_file 工具验证。",
+        "代码中的 status = '已发送' 表示成功。",
+        "已通过网络查询确认 [来源:工具]。",
+        "```tool_call\norg_accept_deliverable(task_chain_id='x')\n```",
+    ],
+)
+async def test_response_wording_does_not_trigger_execution_inference(reply: str):
+    engine = ReasoningEngine(
+        brain=None,
+        tool_executor=None,
+        context_manager=None,
+        response_handler=AsyncMock(),
+        agent_state=AgentState(),
+    )
+
+    result = await engine._handle_final_answer(
+        decision=Decision(type=DecisionType.FINAL_ANSWER, text_content=reply),
+        working_messages=[],
+        original_messages=[{"role": "user", "content": "说明这段文本"}],
+        tools_executed_in_task=False,
+        executed_tool_names=[],
+        delivery_receipts=[],
+        all_tool_results=[],
+        no_tool_call_count=0,
+        verify_incomplete_count=0,
+        no_confirmation_text_count=0,
+        max_no_tool_retries=1,
+        max_verify_retries=1,
+        max_confirmation_text_retries=1,
+        base_force_retries=1,
+        conversation_id="response-wording",
         tool_evidence_required=False,
     )
 
@@ -607,126 +649,6 @@ async def test_negated_action_phrase_without_tools_is_not_forced_retry():
 
 
 @pytest.mark.asyncio
-async def test_action_completion_claim_without_tools_forces_retry():
-    """Issue #702: action tasks must not accept "已删除/已验证" text with tool_calls=0."""
-    engine = ReasoningEngine(
-        brain=None,
-        tool_executor=None,
-        context_manager=None,
-        response_handler=AsyncMock(),
-        agent_state=AgentState(),
-    )
-    working_messages: list[dict] = []
-    reply = (
-        "# 卸载完成报告\n"
-        "| 路径 | 状态 |\n"
-        "| D:\\Boaosoft\\CellCtrl | ✅ 已删 |\n"
-        "[来源:工具] 全部 7 个真实 PowerShell 命令已通过独立验证。"
-    )
-
-    result = await engine._handle_final_answer(
-        decision=Decision(type=DecisionType.FINAL_ANSWER, text_content=reply),
-        working_messages=working_messages,
-        original_messages=[{"role": "user", "content": "请全部删除这个软件"}],
-        tools_executed_in_task=False,
-        executed_tool_names=[],
-        delivery_receipts=[],
-        all_tool_results=[],
-        no_tool_call_count=0,
-        verify_incomplete_count=0,
-        no_confirmation_text_count=0,
-        max_no_tool_retries=2,
-        max_verify_retries=1,
-        max_confirmation_text_retries=1,
-        base_force_retries=2,
-        conversation_id="issue-702",
-        tool_evidence_required=False,
-    )
-
-    assert isinstance(result, tuple)
-    assert result[1] == 1
-    assert working_messages[-1]["role"] == "user"
-    assert "tool_calls=0" in working_messages[-1]["content"]
-    assert "真实 tool_calls" in working_messages[-1]["content"]
-
-
-@pytest.mark.asyncio
-async def test_textual_tool_execution_claim_without_tools_forces_retry():
-    """Text like "调用 run_shell(...)...完成" is not a real tool call."""
-    engine = ReasoningEngine(
-        brain=None,
-        tool_executor=None,
-        context_manager=None,
-        response_handler=AsyncMock(),
-        agent_state=AgentState(),
-    )
-    working_messages: list[dict] = []
-    reply = (
-        "调用 get_todo_status()...完成 (897 字符)"
-        "调用 run_shell(command, description, block_timeout_ms)...完成 (3849 字符)\n"
-        "任务计划窗口已关闭。"
-    )
-
-    result = await engine._handle_final_answer(
-        decision=Decision(type=DecisionType.FINAL_ANSWER, text_content=reply),
-        working_messages=working_messages,
-        original_messages=[{"role": "user", "content": "请关闭这个任务计划窗口"}],
-        tools_executed_in_task=False,
-        executed_tool_names=[],
-        delivery_receipts=[],
-        all_tool_results=[],
-        no_tool_call_count=0,
-        verify_incomplete_count=0,
-        no_confirmation_text_count=0,
-        max_no_tool_retries=2,
-        max_verify_retries=1,
-        max_confirmation_text_retries=1,
-        base_force_retries=2,
-        conversation_id="issue-702-textual",
-        tool_evidence_required=False,
-    )
-
-    assert isinstance(result, tuple)
-    assert "文字里的“调用 run_shell" in working_messages[-1]["content"]
-
-
-@pytest.mark.asyncio
-async def test_action_completion_claim_without_tools_blocks_after_retry_budget():
-    """After retry budget is exhausted, do not return the deceptive original text."""
-    engine = ReasoningEngine(
-        brain=None,
-        tool_executor=None,
-        context_manager=None,
-        response_handler=AsyncMock(),
-        agent_state=AgentState(),
-    )
-    reply = "D:\\Boaosoft 已删除，注册表已清理。[来源:工具]"
-
-    result = await engine._handle_final_answer(
-        decision=Decision(type=DecisionType.FINAL_ANSWER, text_content=reply),
-        working_messages=[],
-        original_messages=[{"role": "user", "content": "请全部删除这个软件"}],
-        tools_executed_in_task=False,
-        executed_tool_names=[],
-        delivery_receipts=[],
-        all_tool_results=[],
-        no_tool_call_count=1,
-        verify_incomplete_count=0,
-        no_confirmation_text_count=0,
-        max_no_tool_retries=1,
-        max_verify_retries=1,
-        max_confirmation_text_retries=1,
-        base_force_retries=1,
-        conversation_id="issue-702-budget",
-        tool_evidence_required=False,
-    )
-
-    assert isinstance(result, str)
-    assert "没有检测到任何真实工具调用" in result
-    assert "D:\\Boaosoft 已删除" not in result
-
-
-@pytest.mark.asyncio
 async def test_tool_evidence_required_does_not_replace_text_after_retry_budget():
     """Even when retry counter is exhausted, the engine **must not** replace
     the LLM text with a synthetic "无法验证" string.
@@ -739,7 +661,7 @@ async def test_tool_evidence_required_does_not_replace_text_after_retry_budget()
     Post-a19f58d2 (current) behavior:
       - text preserved + soft disclaimer suffix
       - _last_exit_reason NOT set to "tool_evidence_missing"
-      - Stage-3 source-tag consistency check is the remaining safety net
+      - no response-text execution inference is performed
 
     The exhaustion counter (``no_tool_call_count=1``) no longer flips
     behavior — the soft path is uniformly applied.

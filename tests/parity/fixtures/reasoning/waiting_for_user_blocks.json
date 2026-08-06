@@ -8,10 +8,7 @@
   "tool_results": null,
   "recent_messages": null,
   "expected_guard_passed": {
-    "source_tag": true,
     "tool_failure_ack": true,
-    "unbacked_action": true,
-    "recap_context": true,
     "waiting_for_user": false,
     "recoverable_tool_issue": true
   }

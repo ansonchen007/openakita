@@ -25,13 +25,8 @@ from openakita.runtime.state_graph.guards.conversation_state import (
     has_recoverable_tool_issue,
     looks_like_waiting_for_user_response,
 )
-from openakita.runtime.state_graph.guards.recap_context import is_recap_context
-from openakita.runtime.state_graph.guards.source_tag import (
-    check_source_tag_consistency,
-)
 from openakita.runtime.state_graph.guards.tool_failure_ack import (
     check_tool_failure_acknowledgement,
-    successful_tool_names,
 )
 from openakita.runtime.state_graph.guards.tool_filters import (
     filter_tools_by_mode,
@@ -39,9 +34,7 @@ from openakita.runtime.state_graph.guards.tool_filters import (
     is_shell_write_command,
     should_block_tool,
 )
-from openakita.runtime.state_graph.guards.unbacked_action import (
-    guard_unbacked_action_claim,
-)
+from openakita.tools.tool_result import successful_tool_effect_actions
 
 __all__ = [
     "Checkpoint",
@@ -215,6 +208,27 @@ class ReasoningEngine(_RuntimeReasoningBase):
 
     # ----- Guard evaluation ------------------------------------------
 
+    @staticmethod
+    def summarize_tool_execution(tool_results: list[dict] | None) -> dict[str, Any]:
+        """Return execution facts derived only from runtime tool results."""
+        results = [result for result in (tool_results or []) if isinstance(result, dict)]
+        succeeded = [
+            result.get("tool_name") or result.get("name") or ""
+            for result in results
+            if not result.get("is_error")
+        ]
+        failed = [
+            result.get("tool_name") or result.get("name") or ""
+            for result in results
+            if result.get("is_error")
+        ]
+        return {
+            "total": len(results),
+            "succeeded": [name for name in succeeded if name],
+            "failed": [name for name in failed if name],
+            "effect_actions": sorted(successful_tool_effect_actions(results)),
+        }
+
     def evaluate_decision(
         self,
         text: str,
@@ -223,45 +237,17 @@ class ReasoningEngine(_RuntimeReasoningBase):
         tool_results: list[dict] | None = None,
         recent_messages: list[dict] | None = None,
     ) -> list[GuardVerdict]:
-        """Run the seven extracted guards in previous check order.
+        """Evaluate guards without inferring tool execution from response wording.
 
         Returns a list of :class:`GuardVerdict`; a caller can
         short-circuit on the first ``passed=False`` to mirror the
         previous in-line behaviour.
         """
         verdicts: list[GuardVerdict] = []
+        logger.debug("Runtime tool evidence: %s", self.summarize_tool_execution(tool_results))
 
-        tools_executed_count = len(tool_results or [])
-        tag_msg = check_source_tag_consistency(text, tools_executed_count)
-        verdicts.append(GuardVerdict("source_tag", tag_msg is None, tag_msg))
-
-        executed_names = [
-            (tr.get("name") or tr.get("tool_name") or "") for tr in (tool_results or [])
-        ]
-        names = list(successful_tool_names(executed_names, tool_results))
         ack_msg = check_tool_failure_acknowledgement(text, tool_results)
         verdicts.append(GuardVerdict("tool_failure_ack", ack_msg is None, ack_msg))
-
-        unbacked_out = guard_unbacked_action_claim(
-            text,
-            executed_tool_names=names,
-            tool_results=tool_results,
-        )
-        # The previous guard returns the input text unchanged when clean
-        # and the text+warning suffix when it flagged an unbacked claim.
-        # The guard "passes" iff the returned text is identical to the
-        # input; otherwise the appended suffix is the warning message.
-        unbacked_passed = unbacked_out == text
-        verdicts.append(
-            GuardVerdict(
-                "unbacked_action",
-                unbacked_passed,
-                None if unbacked_passed else unbacked_out[len(text) :].strip(),
-            )
-        )
-
-        recap = is_recap_context(last_user_text, "")
-        verdicts.append(GuardVerdict("recap_context", True, f"recap={recap}"))
 
         waiting = looks_like_waiting_for_user_response(text)
         verdicts.append(
