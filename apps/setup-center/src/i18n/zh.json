@@ -13,6 +13,7 @@
     "memory": "记忆",
     "identity": "身份配置",
     "status": "状态",
+    "account": "OpenAkita 账户",
     "dashboard": "协作",
     "orgEditor": "编排",
     "agentManager": "Agents",
@@ -34,6 +35,22 @@
     "plugins": "工作台",
     "pixelOffice": "像素办公室",
     "pendingApprovals": "待审批"
+  },
+  "account": {
+    "title": "OpenAkita 账户",
+    "description": "通过 Authorization Code + PKCE 安全连接账户，并同步已购权益。Refresh Token 仅保存在系统凭据库中。",
+    "serviceRequired": "请先启动 OpenAkita 服务。",
+    "signedOut": "尚未连接账户",
+    "signInHint": "连接后可同步 Marketplace 购买和 License 权益。",
+    "signIn": "连接账户",
+    "signOut": "退出账户",
+    "loginExpired": "登录已失败或超时，请重试。",
+    "statusValue": "账户状态：{{status}}",
+    "email": "邮箱",
+    "entitlements": "有效权益",
+    "statusReason": "状态原因",
+    "refreshEntitlements": "刷新权益",
+    "lastSync": "最后同步：{{time}}"
   },
   "topbar": {
     "workspace": "工作区",

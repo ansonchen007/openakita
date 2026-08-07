@@ -250,6 +250,9 @@ export function Sidebar({
         <div className={`navItem ${view === "status" ? "navItemActive" : ""}`} onClick={async () => { onViewChange("status"); try { await onRefreshStatus(); } catch { /* ignore */ } }} role="button" tabIndex={0} title={t("sidebar.status")}>
           <IconStatus size={16} /> {!collapsed && <span>{t("sidebar.status")}</span>}
         </div>
+        <div className={`navItem ${view === "account" ? "navItemActive" : ""}`} onClick={() => onViewChange("account")} role="button" tabIndex={0} title={t("sidebar.account")}>
+          <IconFingerprint size={16} /> {!collapsed && <span>{t("sidebar.account")}</span>}
+        </div>
 
         {/* ── Group: Capabilities ── */}
         <NavGroupHeader collapsed={collapsed} icon={<IconPuzzle size={GROUP_ICON_SIZE} />} label={t("sidebar.groupCapabilities")} expanded={capExpanded} onToggle={() => toggleGroup("capabilities")} />

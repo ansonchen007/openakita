@@ -13,6 +13,7 @@
     "memory": "Memory",
     "identity": "Identity",
     "status": "Status",
+    "account": "OpenAkita Account",
     "dashboard": "Collab",
     "orgEditor": "Org",
     "agentManager": "Agents",
@@ -34,6 +35,22 @@
     "plugins": "Plugins",
     "pixelOffice": "Pixel Office",
     "pendingApprovals": "Approvals"
+  },
+  "account": {
+    "title": "OpenAkita Account",
+    "description": "Connect securely with Authorization Code + PKCE and synchronize purchased entitlements. The refresh token stays in the OS credential vault.",
+    "serviceRequired": "Start the OpenAkita service first.",
+    "signedOut": "No account connected",
+    "signInHint": "Connect to synchronize Marketplace purchases and License entitlements.",
+    "signIn": "Connect account",
+    "signOut": "Sign out",
+    "loginExpired": "The login failed or expired. Please try again.",
+    "statusValue": "Account status: {{status}}",
+    "email": "Email",
+    "entitlements": "Active entitlements",
+    "statusReason": "Status reason",
+    "refreshEntitlements": "Refresh entitlements",
+    "lastSync": "Last synchronized: {{time}}"
   },
   "topbar": {
     "workspace": "Workspace",

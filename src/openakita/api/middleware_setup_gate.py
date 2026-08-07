@@ -47,6 +47,7 @@ SETUP_GATE_ALLOW_PATHS: frozenset[str] = frozenset(
         "/api/auth/setup-status",
         "/api/auth/change-password",
         "/api/logs/frontend",
+        "/api/internal/openakita/users/status",
     }
 )
 

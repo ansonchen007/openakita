@@ -20,6 +20,7 @@ const PluginAppHost = lazy(() => import("./views/PluginAppHost"));
 const SchedulerView = lazy(() => import("./views/SchedulerView").then(m => ({ default: m.SchedulerView })));
 const MemoryView = lazy(() => import("./views/MemoryView").then(m => ({ default: m.MemoryView })));
 const IdentityView = lazy(() => import("./views/IdentityView").then(m => ({ default: m.IdentityView })));
+const AccountView = lazy(() => import("./views/AccountView").then(m => ({ default: m.AccountView })));
 const AgentDashboardView = lazy(() => import("./views/AgentDashboardView").then(m => ({ default: m.AgentDashboardView })));
 const AgentManagerView = lazy(() => import("./views/AgentManagerView").then(m => ({ default: m.AgentManagerView })));
 const OrgEditorView = lazy(() => import("./views/OrgEditorView").then(m => ({ default: m.OrgEditorView })));
@@ -163,7 +164,7 @@ const EnvFieldContext = createContext<EnvFieldCtx | null>(null);
 
 const _HASH_TO_VIEW: Record<string, ViewId> = {
   "chat": "chat", "im": "im", "skills": "skills", "mcp": "mcp",
-  "scheduler": "scheduler", "memory": "memory", "status": "status",
+  "scheduler": "scheduler", "memory": "memory", "status": "status", "account": "account",
   "token-stats": "token_stats", "skill-usage": "skill_usage", "identity": "identity",
   "dashboard": "dashboard", "org-editor": "org_editor",
   "pixel-office": "pixel_office",
@@ -4750,6 +4751,11 @@ function MainApp() {
     if (view === "identity") {
       return (
         <IdentityView serviceRunning={serviceStatus?.running ?? false} apiBaseUrl={apiBaseUrl} />
+      );
+    }
+    if (view === "account") {
+      return (
+        <AccountView serviceRunning={serviceStatus?.running ?? false} apiBaseUrl={apiBaseUrl} />
       );
     }
     if (view === "dashboard") {
