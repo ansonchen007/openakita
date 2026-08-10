@@ -27,6 +27,8 @@
     "expand": "展开侧栏",
     "backToApp": "返回应用",
     "accountMenu": "账户菜单",
+    "appMenu": "应用菜单",
+    "appMenuHint": "配置与支持",
     "signedOut": "未登录",
     "connectAccount": "点击连接账户",
     "docs": "文档",

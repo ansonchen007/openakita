@@ -16,15 +16,19 @@ from urllib.parse import parse_qs, urlencode, urlsplit
 
 import httpx
 
+from openakita.account.config import (
+    DEFAULT_ACCOUNT_BASE_URL,
+    DEFAULT_ACCOUNT_CLIENT_ID,
+    disabled_credential_usernames,
+)
 from openakita.account.status_store import AccountStatusStore
 
 logger = logging.getLogger(__name__)
 
-CLIENT_ID = "openakita-desktop"
+CLIENT_ID = DEFAULT_ACCOUNT_CLIENT_ID
 CALLBACK_HOST = "127.0.0.1"
 CALLBACK_PORT = 1455
 CALLBACK_URI = f"http://{CALLBACK_HOST}:{CALLBACK_PORT}/auth/callback"
-DEFAULT_ACCOUNT_BASE_URL = "https://account.fzstack.com"
 
 
 class AccountOIDCError(Exception):
@@ -42,6 +46,9 @@ class TokenStore(Protocol):
 class KeyringTokenStore:
     service = "OpenAkita Account"
     username = "openakita-desktop-refresh-token"
+
+    def __init__(self, *, username: str | None = None) -> None:
+        self.username = username or type(self).username
 
     async def load_refresh_token(self) -> str | None:
         def _load() -> str | None:
@@ -73,6 +80,17 @@ class KeyringTokenStore:
                 return
 
         await asyncio.to_thread(_clear)
+
+
+async def clear_disabled_account_credentials() -> None:
+    """Remove every locally known account credential slot without reading it."""
+
+    await asyncio.gather(
+        *(
+            KeyringTokenStore(username=username).clear()
+            for username in disabled_credential_usernames()
+        )
+    )
 
 
 @dataclass
@@ -206,6 +224,7 @@ class AccountOIDCManager:
         store: AccountStatusStore,
         token_store: TokenStore | None = None,
         account_base_url: str | None = None,
+        client_id: str | None = None,
     ) -> None:
         self._store = store
         self._tokens = token_store or KeyringTokenStore()
@@ -213,6 +232,11 @@ class AccountOIDCManager:
             account_base_url
             or os.environ.get("OPENAKITA_ACCOUNT_BASE_URL", DEFAULT_ACCOUNT_BASE_URL)
         ).rstrip("/")
+        self._client_id = (
+            client_id or os.environ.get("OPENAKITA_ACCOUNT_CLIENT_ID", DEFAULT_ACCOUNT_CLIENT_ID)
+        ).strip()
+        if not self._client_id:
+            raise ValueError("account client ID must not be empty")
         self._attempts: dict[str, LoginAttempt] = {}
         self._server: asyncio.Server | None = None
         self._access_token: str | None = None
@@ -228,7 +252,7 @@ class AccountOIDCManager:
         attempt_id = secrets.token_urlsafe(18)
         query = urlencode(
             {
-                "client_id": CLIENT_ID,
+                "client_id": self._client_id,
                 "redirect_uri": CALLBACK_URI,
                 "response_type": "code",
                 "scope": "openid profile email offline_access entitlements organizations",
@@ -294,7 +318,7 @@ class AccountOIDCManager:
         self._access_token = None
         self._session_id = None
         self._account_user_id = None
-        query = urlencode({"client_id": CLIENT_ID})
+        query = urlencode({"client_id": self._client_id})
         return f"{self._base_url}/oauth/end-session?{query}"
 
     async def _callback(
@@ -364,7 +388,7 @@ class AccountOIDCManager:
                 data={
                     "grant_type": "authorization_code",
                     "code": code,
-                    "client_id": CLIENT_ID,
+                    "client_id": self._client_id,
                     "redirect_uri": CALLBACK_URI,
                     "code_verifier": verifier,
                 },
@@ -422,7 +446,7 @@ class AccountOIDCManager:
                 data={
                     "grant_type": "refresh_token",
                     "refresh_token": refresh_token,
-                    "client_id": CLIENT_ID,
+                    "client_id": self._client_id,
                 },
             )
         if response.status_code != 200:

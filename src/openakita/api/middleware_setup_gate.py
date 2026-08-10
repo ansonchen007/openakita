@@ -43,6 +43,7 @@ SETUP_GATE_ALLOW_PATHS: frozenset[str] = frozenset(
         "/api/health",
         "/api/healthz",
         "/api/readyz",
+        "/api/account/capability",
         "/api/auth/setup",
         "/api/auth/setup-status",
         "/api/auth/change-password",

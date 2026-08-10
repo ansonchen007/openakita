@@ -27,6 +27,8 @@
     "expand": "Expand sidebar",
     "backToApp": "Back to app",
     "accountMenu": "Account menu",
+    "appMenu": "App menu",
+    "appMenuHint": "Settings and support",
     "signedOut": "Signed out",
     "connectAccount": "Connect account",
     "docs": "Docs",

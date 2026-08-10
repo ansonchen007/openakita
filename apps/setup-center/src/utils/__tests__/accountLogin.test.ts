@@ -5,6 +5,7 @@ import { safeFetch } from "../../providers";
 import {
   connectOpenAkitaAccount,
   disconnectOpenAkitaAccount,
+  loadAccountCapability,
   refreshOpenAkitaAccountEntitlements,
 } from "../accountLogin";
 import { ACCOUNT_STATUS_CHANGED_EVENT } from "../accountStatusEvents";
@@ -59,6 +60,24 @@ describe("account login flow", () => {
     } finally {
       window.removeEventListener(ACCOUNT_STATUS_CHANGED_EVENT, listener);
     }
+  });
+
+  it("loads the backend account capability before rendering provider UI", async () => {
+    vi.mocked(safeFetch).mockResolvedValueOnce(response({
+      enabled: false,
+      mode: "disabled",
+      provider: null,
+      display_name: null,
+      supports_entitlements: false,
+    }));
+
+    const capability = await loadAccountCapability("http://localhost:18900");
+
+    expect(safeFetch).toHaveBeenCalledWith(
+      "http://localhost:18900/api/account/capability",
+    );
+    expect(capability.enabled).toBe(false);
+    expect(capability.mode).toBe("disabled");
   });
 
   it("surfaces a failed OAuth attempt", async () => {

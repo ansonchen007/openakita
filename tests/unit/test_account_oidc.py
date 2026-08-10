@@ -9,9 +9,11 @@ from openakita.account.oidc import (
     CLIENT_ID,
     DEFAULT_ACCOUNT_BASE_URL,
     AccountOIDCManager,
+    KeyringTokenStore,
     LoginAttempt,
     _callback_page_html,
     _preferred_callback_language,
+    clear_disabled_account_credentials,
     pkce_challenge,
 )
 
@@ -137,6 +139,43 @@ def test_account_base_url_defaults_to_hosted_service(monkeypatch: pytest.MonkeyP
     )
 
     assert manager._base_url == DEFAULT_ACCOUNT_BASE_URL
+
+
+@pytest.mark.asyncio
+async def test_manager_uses_configured_client_id_in_provider_requests() -> None:
+    manager = AccountOIDCManager(
+        store=_SnapshotStore(),  # type: ignore[arg-type]
+        token_store=_TokenStore(None),
+        account_base_url="https://accounts.vendor.example",
+        client_id="vendor-desktop",
+    )
+
+    logout_url = await manager.logout()
+
+    assert logout_url == (
+        "https://accounts.vendor.example/oauth/end-session?client_id=vendor-desktop"
+    )
+
+
+@pytest.mark.asyncio
+async def test_disabled_mode_clears_known_credential_slots(monkeypatch) -> None:
+    cleared: list[str] = []
+
+    async def fake_clear(self: KeyringTokenStore) -> None:
+        cleared.append(self.username)
+
+    monkeypatch.setattr(
+        "openakita.account.oidc.disabled_credential_usernames",
+        lambda: {"openakita-desktop-refresh-token", "vendor-desktop-refresh-token"},
+    )
+    monkeypatch.setattr(KeyringTokenStore, "clear", fake_clear)
+
+    await clear_disabled_account_credentials()
+
+    assert sorted(cleared) == [
+        "openakita-desktop-refresh-token",
+        "vendor-desktop-refresh-token",
+    ]
 
 
 @pytest.mark.asyncio

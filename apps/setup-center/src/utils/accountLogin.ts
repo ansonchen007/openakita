@@ -19,7 +19,20 @@ type AccountLoginOptions = {
   pollIntervalMs?: number;
 };
 
+export type AccountCapability = {
+  enabled: boolean;
+  mode: "openakita" | "custom" | "disabled";
+  provider: string | null;
+  display_name: string | null;
+  supports_entitlements: boolean;
+};
+
 let activeLogin: Promise<AccountStatusSummary> | null = null;
+
+export async function loadAccountCapability(apiBaseUrl: string): Promise<AccountCapability> {
+  const response = await safeFetch(`${apiBaseUrl}/api/account/capability`);
+  return await response.json() as AccountCapability;
+}
 
 function delay(milliseconds: number): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, milliseconds));

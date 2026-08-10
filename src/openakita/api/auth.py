@@ -40,6 +40,7 @@ AUTH_EXEMPT_PATHS = frozenset(
     {
         "/",
         "/api/health",
+        "/api/account/capability",
         "/api/auth/login",
         "/api/auth/logout",
         "/api/auth/refresh",

@@ -4,7 +4,15 @@ from fastapi import APIRouter, HTTPException, Request
 
 from openakita.account.oidc import AccountOIDCError, AccountOIDCManager
 
+capability_router = APIRouter(prefix="/api/account", tags=["account"])
 router = APIRouter(prefix="/api/account", tags=["account"])
+
+
+@capability_router.get("/capability")
+async def account_capability(request: Request) -> dict:
+    """Expose the distribution policy without activating the account provider."""
+
+    return request.app.state.account_capability
 
 
 def _manager(request: Request) -> AccountOIDCManager:

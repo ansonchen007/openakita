@@ -6,6 +6,7 @@ a client secret. The backend opens a temporary loopback listener on
 the Account authorization URL to Setup Center.
 
 ```text
+GET  /api/account/capability
 POST /api/account/login/start
 GET  /api/account/login/status/{attempt_id}
 GET  /api/account/status
@@ -25,21 +26,39 @@ time. A central `suspended` event revokes Account sessions in that database and
 all Account-backed operations fail immediately. The existing local web password
 remains a separate break-glass path and is not revoked by Account suspension.
 
-Setup Center's **OpenAkita Account** view drives these endpoints, polls the
-loopback attempt, shows the cached account/entitlement status, and lets the user
-refresh entitlements. Logout clears the OS credential and the UI opens the
-Account `end_session_endpoint` so the current browser SSO chain is revoked
-across products without affecting another device.
+Setup Center's sidebar account menu drives these endpoints, polls the loopback
+attempt, shows the cached account/entitlement status, and lets the user refresh
+entitlements. Logout clears the local OS credential without opening another
+browser tab.
 
-The hosted Account service is used by default:
+Account integration is a distribution-level capability with three modes:
+
+```text
+OPENAKITA_ACCOUNT_MODE=openakita  # official hosted service (default)
+OPENAKITA_ACCOUNT_MODE=custom     # OEM identity service
+OPENAKITA_ACCOUNT_MODE=disabled   # no account routes, credentials, or account UI
+```
+
+The official mode uses the hosted service by default:
 
 ```text
 OPENAKITA_ACCOUNT_BASE_URL=https://account.fzstack.com
+OPENAKITA_ACCOUNT_CLIENT_ID=openakita-desktop
 ```
 
 Override `OPENAKITA_ACCOUNT_BASE_URL` only when testing against a local Account
-service.
+service. Custom mode requires an explicit `OPENAKITA_ACCOUNT_BASE_URL` and
+`OPENAKITA_ACCOUNT_CLIENT_ID`; `OPENAKITA_ACCOUNT_DISPLAY_NAME` and
+`OPENAKITA_ACCOUNT_PROVIDER` customize the provider identity shown to users.
+Provider credentials use separate OS-vault slots, so an OEM token is never sent
+to the official service or another custom provider.
 
-An always-on server may additionally expose the signed D26 receiver at
+When account mode is disabled, only `GET /api/account/capability` remains
+mounted so the frontend can render an account-free application menu. OAuth,
+status, entitlement, logout, and status-propagation routes are absent, and
+startup clears locally stored account refresh tokens. Core local OpenAkita
+features continue to work without an account.
+
+An account-enabled always-on server may additionally expose the signed D26 receiver at
 `POST /api/internal/openakita/users/status`. Desktop-only processes must not be
 configured as Account Outbox targets because they have no stable ingress.

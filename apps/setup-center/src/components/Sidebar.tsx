@@ -20,7 +20,9 @@ import {
 import {
   connectOpenAkitaAccount,
   disconnectOpenAkitaAccount,
+  loadAccountCapability,
   refreshOpenAkitaAccountEntitlements,
+  type AccountCapability,
 } from "../utils/accountLogin";
 
 export type SidebarProps = {
@@ -57,6 +59,10 @@ const stepIcons: Partial<Record<StepId, React.ReactNode>> = {
 
 type NavGroupId = "capabilities" | "apps" | "monitor" | "multiAgent" | "store";
 const GROUP_ICON_SIZE = 16;
+const CAPABILITY_VIEWS: ViewId[] = ["skills", "mcp", "plugins", "memory", "scheduler"];
+const MONITOR_VIEWS: ViewId[] = ["token_stats", "skill_usage", "security", "pending_approvals"];
+const MULTI_AGENT_VIEWS: ViewId[] = ["dashboard", "org_editor", "pixel_office", "agent_manager"];
+const STORE_VIEWS: ViewId[] = ["agent_store", "skill_store"];
 
 const BETA_SUP = <sup style={{ fontSize: 9, color: "var(--primary, #3b82f6)", fontWeight: 600 }}>Beta</sup>;
 
@@ -136,14 +142,38 @@ export function Sidebar({
 
   const [pluginApps, setPluginApps] = useState<PluginUIApp[]>([]);
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
+  const [accountCapability, setAccountCapability] = useState<AccountCapability | null>(null);
   const [accountSnapshot, setAccountSnapshot] = useState<AccountStatusSummary | null>(null);
   const [accountLoginPending, setAccountLoginPending] = useState(false);
   const [accountActionPending, setAccountActionPending] = useState<"refresh" | "logout" | null>(null);
   const [accountLoginError, setAccountLoginError] = useState<string | null>(null);
   const accountAreaRef = useRef<HTMLDivElement>(null);
 
-  const refreshAccountSnapshot = useCallback(async () => {
+  const refreshAccountCapability = useCallback(async () => {
     if (!httpApiBase || !serviceRunning) {
+      setAccountCapability(null);
+      setAccountSnapshot(null);
+      return;
+    }
+    try {
+      const capability = await loadAccountCapability(httpApiBase);
+      setAccountCapability(capability);
+      if (!capability.enabled) {
+        setAccountSnapshot(null);
+        setAccountLoginError(null);
+      }
+    } catch {
+      setAccountCapability(null);
+      setAccountSnapshot(null);
+    }
+  }, [httpApiBase, serviceRunning]);
+
+  useEffect(() => {
+    void refreshAccountCapability();
+  }, [refreshAccountCapability]);
+
+  const refreshAccountSnapshot = useCallback(async () => {
+    if (!httpApiBase || !serviceRunning || !accountCapability?.enabled) {
       setAccountSnapshot(null);
       return;
     }
@@ -153,7 +183,7 @@ export function Sidebar({
     } catch {
       setAccountSnapshot(null);
     }
-  }, [httpApiBase, serviceRunning]);
+  }, [accountCapability?.enabled, httpApiBase, serviceRunning]);
 
   useEffect(() => {
     void refreshAccountSnapshot();
@@ -161,13 +191,14 @@ export function Sidebar({
 
   useEffect(() => {
     const onAccountStatusChanged = (event: Event) => {
+      if (!accountCapability?.enabled) return;
       const snapshot = (event as CustomEvent<AccountStatusSummary>).detail;
       if (snapshot?.status) setAccountSnapshot(snapshot);
       else void refreshAccountSnapshot();
     };
     window.addEventListener(ACCOUNT_STATUS_CHANGED_EVENT, onAccountStatusChanged);
     return () => window.removeEventListener(ACCOUNT_STATUS_CHANGED_EVENT, onAccountStatusChanged);
-  }, [refreshAccountSnapshot]);
+  }, [accountCapability?.enabled, refreshAccountSnapshot]);
 
   useEffect(() => {
     if (!accountMenuOpen) return;
@@ -242,20 +273,15 @@ export function Sidebar({
     };
   }, [httpApiBase, serviceRunning]);
 
-  const capViews: ViewId[] = ["skills", "mcp", "plugins", "memory", "scheduler"];
-  const monViews: ViewId[] = ["token_stats", "skill_usage", "security", "pending_approvals"];
-  const maViews: ViewId[] = ["dashboard", "org_editor", "pixel_office", "agent_manager"];
-  const stViews: ViewId[] = ["agent_store", "skill_store"];
-
   const prevViewRef = useRef(view);
   useEffect(() => {
     if (prevViewRef.current === view) return;
     prevViewRef.current = view;
     const groupOf = (v: ViewId): NavGroupId | null =>
-      capViews.includes(v) ? "capabilities"
-        : monViews.includes(v) ? "monitor"
-        : maViews.includes(v) ? "multiAgent"
-        : stViews.includes(v) ? "store"
+      CAPABILITY_VIEWS.includes(v) ? "capabilities"
+        : MONITOR_VIEWS.includes(v) ? "monitor"
+        : MULTI_AGENT_VIEWS.includes(v) ? "multiAgent"
+        : STORE_VIEWS.includes(v) ? "store"
         : (typeof v === "string" && v.startsWith("plugin_app:")) ? "apps"
         : null;
     const g = groupOf(view);
@@ -267,19 +293,22 @@ export function Sidebar({
   const monExpanded = expandedGroups.monitor;
   const maExpanded = expandedGroups.multiAgent;
   const stExpanded = expandedGroups.store;
+  const accountEnabled = accountCapability?.enabled === true;
+  const accountUsesOpenAkitaBrand = accountCapability?.provider === "openakita";
+  const accountProviderName = accountCapability?.display_name || t("sidebar.account");
   const accountEmail = accountSnapshot?.profile?.email;
   const accountSignedIn = Boolean(
-    accountSnapshot?.status && accountSnapshot.status !== "signed_out",
+    accountEnabled && accountSnapshot?.status && accountSnapshot.status !== "signed_out",
   );
   const accountNeedsSync = accountSignedIn && accountSnapshot?.status !== "active";
   const accountName = accountSignedIn
     ? accountSnapshot?.profile?.name
       || accountSnapshot?.profile?.preferred_username
       || accountEmail?.split("@")[0]
-      || t("sidebar.account")
+      || accountProviderName
     : t("sidebar.signedOut");
   const accountDetail = accountSignedIn
-    ? accountEmail || t("sidebar.account")
+    ? accountEmail || accountProviderName
     : accountLoginPending
       ? t("account.waitingForAuthorization")
       : accountLoginError
@@ -292,6 +321,7 @@ export function Sidebar({
   };
 
   const startAccountLogin = useCallback(async () => {
+    if (!accountEnabled) return;
     if (!serviceRunning || !httpApiBase) {
       toast.error(t("account.serviceRequired"));
       return;
@@ -314,10 +344,10 @@ export function Sidebar({
     } finally {
       setAccountLoginPending(false);
     }
-  }, [httpApiBase, serviceRunning, t]);
+  }, [accountEnabled, httpApiBase, serviceRunning, t]);
 
   const refreshAccountEntitlements = useCallback(async () => {
-    if (!httpApiBase) return;
+    if (!accountEnabled || !httpApiBase) return;
     setAccountActionPending("refresh");
     const notification = toast.loading(t("account.syncingEntitlements"));
     try {
@@ -330,10 +360,10 @@ export function Sidebar({
     } finally {
       setAccountActionPending(null);
     }
-  }, [httpApiBase, t]);
+  }, [accountEnabled, httpApiBase, t]);
 
   const logoutAccount = useCallback(async () => {
-    if (!httpApiBase) return;
+    if (!accountEnabled || !httpApiBase) return;
     setAccountActionPending("logout");
     const notification = toast.loading(t("account.signingOut"));
     try {
@@ -347,7 +377,7 @@ export function Sidebar({
     } finally {
       setAccountActionPending(null);
     }
-  }, [httpApiBase, t]);
+  }, [accountEnabled, httpApiBase, t]);
 
   return (
     <aside className={`sidebar ${collapsed ? "sidebarCollapsed" : ""}${configMode ? " sidebarConfigMode" : ""}${mobileOpen ? " sidebarOpen" : ""}`}>
@@ -547,10 +577,20 @@ export function Sidebar({
 
       <div className="sidebarAccountArea" ref={accountAreaRef}>
         {accountMenuOpen && (
-          <div className="sidebarAccountMenu" role="menu" aria-label={t("sidebar.accountMenu")}>
-            {accountSignedIn ? (
+          <div
+            className="sidebarAccountMenu"
+            role="menu"
+            aria-label={t(accountEnabled ? "sidebar.accountMenu" : "sidebar.appMenu")}
+          >
+            {accountEnabled && (accountSignedIn ? (
               <div className="sidebarAccountMenuProfile">
-                <img src={logoUrl} alt="" className="sidebarAccountMenuAvatar" />
+                {accountUsesOpenAkitaBrand ? (
+                  <img src={logoUrl} alt="" className="sidebarAccountMenuAvatar" />
+                ) : (
+                  <span className="sidebarAccountMenuAvatar sidebarAccountAvatarPlaceholder" aria-hidden="true">
+                    <IconUsers size={18} />
+                  </span>
+                )}
                 <span className="sidebarAccountMenuIdentity">
                   <strong>{accountName}</strong>
                   <small>{accountDetail}</small>
@@ -585,20 +625,20 @@ export function Sidebar({
                   <small>{accountDetail}</small>
                 </span>
               </button>
-            )}
-            {!accountSignedIn && accountLoginError && (
+            ))}
+            {accountEnabled && !accountSignedIn && accountLoginError && (
               <div className="sidebarAccountMenuError" role="alert">
                 <IconAlertCircle size={15} aria-hidden="true" />
                 <span>{accountLoginError}</span>
               </div>
             )}
-            {accountNeedsSync && accountSnapshot?.status_reason && (
+            {accountEnabled && accountNeedsSync && accountSnapshot?.status_reason && (
               <div className="sidebarAccountMenuNotice" role="status">
                 <IconAlertCircle size={15} aria-hidden="true" />
                 <span>{accountSnapshot.status_reason}</span>
               </div>
             )}
-            <div className="sidebarAccountMenuDivider" />
+            {accountEnabled && <div className="sidebarAccountMenuDivider" />}
             {accountNeedsSync && (
               <button
                 type="button"
@@ -674,15 +714,23 @@ export function Sidebar({
           }}
           aria-haspopup="menu"
           aria-expanded={accountMenuOpen}
-          aria-busy={accountLoginPending}
-          title={accountName}
+          aria-busy={accountEnabled && accountLoginPending}
+          title={accountEnabled ? accountName : t("sidebar.appMenu")}
         >
-          {accountLoginPending ? (
+          {!accountEnabled ? (
+            <span className="sidebarAccountAvatar sidebarAccountAvatarPlaceholder" aria-hidden="true">
+              <IconConfig size={18} />
+            </span>
+          ) : accountLoginPending ? (
             <span className="sidebarAccountAvatar sidebarAccountAvatarPlaceholder" aria-hidden="true">
               <IconRefresh size={18} className="spinIcon" />
             </span>
-          ) : accountSignedIn ? (
+          ) : accountSignedIn && accountUsesOpenAkitaBrand ? (
             <img src={logoUrl} alt="" className="sidebarAccountAvatar" />
+          ) : accountSignedIn ? (
+            <span className="sidebarAccountAvatar sidebarAccountAvatarPlaceholder" aria-hidden="true">
+              <IconUsers size={18} />
+            </span>
           ) : (
             <span className="sidebarAccountAvatar sidebarAccountAvatarPlaceholder" aria-hidden="true">
               <IconHelp size={18} />
@@ -691,8 +739,8 @@ export function Sidebar({
           {!collapsed && (
             <>
               <span className="sidebarAccountIdentity">
-                <strong>{accountName}</strong>
-                <small>{accountDetail}</small>
+                <strong>{accountEnabled ? accountName : t("sidebar.appMenu")}</strong>
+                <small>{accountEnabled ? accountDetail : t("sidebar.appMenuHint")}</small>
               </span>
               <span className="sidebarAccountToggle">
                 <IconChevronDown size={14} />
