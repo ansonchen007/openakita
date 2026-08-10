@@ -31,11 +31,14 @@ refresh entitlements. Logout clears the OS credential and the UI opens the
 Account `end_session_endpoint` so the current browser SSO chain is revoked
 across products without affecting another device.
 
-For local integration set:
+The hosted Account service is used by default:
 
 ```text
-OPENAKITA_ACCOUNT_BASE_URL=http://127.0.0.1:8088
+OPENAKITA_ACCOUNT_BASE_URL=https://account.fzstack.com
 ```
+
+Override `OPENAKITA_ACCOUNT_BASE_URL` only when testing against a local Account
+service.
 
 An always-on server may additionally expose the signed D26 receiver at
 `POST /api/internal/openakita/users/status`. Desktop-only processes must not be

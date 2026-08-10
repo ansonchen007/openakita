@@ -24,6 +24,7 @@ CLIENT_ID = "openakita-desktop"
 CALLBACK_HOST = "127.0.0.1"
 CALLBACK_PORT = 1455
 CALLBACK_URI = f"http://{CALLBACK_HOST}:{CALLBACK_PORT}/auth/callback"
+DEFAULT_ACCOUNT_BASE_URL = "https://account.fzstack.com"
 
 
 class AccountOIDCError(Exception):
@@ -90,6 +91,114 @@ def pkce_challenge(verifier: str) -> str:
     return base64.urlsafe_b64encode(digest).rstrip(b"=").decode()
 
 
+def _preferred_callback_language(accept_language: str) -> str:
+    """Choose a supported callback language from an HTTP Accept-Language value."""
+    preferences: list[tuple[float, int, str]] = []
+    for index, item in enumerate(accept_language.split(",")):
+        parts = [part.strip() for part in item.split(";")]
+        tag = parts[0].lower()
+        quality = 1.0
+        for parameter in parts[1:]:
+            if parameter.lower().startswith("q="):
+                try:
+                    quality = float(parameter[2:])
+                except ValueError:
+                    quality = 0.0
+        if quality > 0:
+            preferences.append((quality, -index, tag))
+    for _quality, _index, tag in sorted(preferences, reverse=True):
+        if tag == "zh" or tag.startswith("zh-"):
+            return "zh"
+        if tag == "en" or tag.startswith("en-"):
+            return "en"
+    return "en"
+
+
+def _callback_page_html(*, success: bool, language: str) -> bytes:
+    copy = {
+        "zh": {
+            "page_title": "登录成功" if success else "登录失败",
+            "eyebrow": "OpenAkita",
+            "title": "登录成功" if success else "登录失败",
+            "message": (
+                "你已成功登录 OpenAkita。"
+                if success
+                else "登录过程中遇到问题，请返回 OpenAkita 重新登录。"
+            ),
+            "hint": "现在可以关闭此页面。",
+        },
+        "en": {
+            "page_title": "Signed in successfully" if success else "Sign-in failed",
+            "eyebrow": "OpenAkita",
+            "title": "Signed in successfully" if success else "Sign-in failed",
+            "message": (
+                "You’re now signed in to OpenAkita."
+                if success
+                else "Something went wrong. Return to OpenAkita and try signing in again."
+            ),
+            "hint": "You can close this tab now.",
+        },
+    }
+    lang = "zh" if language == "zh" else "en"
+    text = copy[lang]
+    document_language = "zh-CN" if lang == "zh" else "en"
+    state_class = "success" if success else "error"
+    state_icon = "&#10003;" if success else "!"
+    status_role = "status" if success else "alert"
+    html = f"""<!doctype html>
+<html lang="{document_language}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>{text["page_title"]} · OpenAkita</title>
+  <style>
+    :root {{ color-scheme: light dark; font-family: Inter, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; }}
+    * {{ box-sizing: border-box; }}
+    body {{
+      min-height: 100vh; margin: 0; display: grid; place-items: center; padding: 24px;
+      color: #182033; background:
+        radial-gradient(circle at 50% 0%, rgba(59, 130, 246, .13), transparent 38%),
+        linear-gradient(180deg, #f8fafc 0%, #eef2f7 100%);
+    }}
+    .card {{
+      width: min(100%, 440px); padding: 42px 38px 30px; text-align: center;
+      border: 1px solid rgba(148, 163, 184, .28); border-radius: 22px;
+      background: rgba(255, 255, 255, .92); box-shadow: 0 24px 70px rgba(15, 23, 42, .12);
+    }}
+    .mark {{
+      width: 64px; height: 64px; margin: 0 auto 24px; display: grid; place-items: center;
+      border-radius: 20px; font-size: 32px; font-weight: 700;
+    }}
+    .success .mark {{ color: #047857; background: #d1fae5; box-shadow: 0 0 0 8px rgba(16, 185, 129, .08); }}
+    .error .mark {{ color: #b91c1c; background: #fee2e2; box-shadow: 0 0 0 8px rgba(239, 68, 68, .07); }}
+    .eyebrow {{ margin: 0 0 8px; color: #2563eb; font-size: 12px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }}
+    h1 {{ margin: 0; font-size: 28px; line-height: 1.25; letter-spacing: -.02em; }}
+    .message {{ margin: 14px auto 0; max-width: 340px; color: #64748b; font-size: 15px; line-height: 1.65; }}
+    .hint {{ margin: 26px 0 0; padding: 12px 14px; border-radius: 12px; color: #475569; background: #f1f5f9; font-size: 13px; }}
+    @media (prefers-color-scheme: dark) {{
+      body {{ color: #e5e7eb; background: radial-gradient(circle at 50% 0%, rgba(59, 130, 246, .18), transparent 38%), #0f172a; }}
+      .card {{ border-color: rgba(148, 163, 184, .2); background: rgba(17, 24, 39, .94); box-shadow: 0 24px 70px rgba(0, 0, 0, .35); }}
+      .message {{ color: #94a3b8; }}
+      .hint {{ color: #cbd5e1; background: rgba(51, 65, 85, .65); }}
+      .success .mark {{ color: #6ee7b7; background: rgba(6, 78, 59, .72); }}
+      .error .mark {{ color: #fca5a5; background: rgba(127, 29, 29, .62); }}
+    }}
+  </style>
+</head>
+<body>
+  <main class="card {state_class}" role="{status_role}" aria-labelledby="callback-title">
+    <div class="mark" aria-hidden="true">{state_icon}</div>
+    <p class="eyebrow">{text["eyebrow"]}</p>
+    <h1 id="callback-title">{text["title"]}</h1>
+    <p class="message">{text["message"]}</p>
+    <p class="hint">{text["hint"]}</p>
+  </main>
+</body>
+</html>"""
+    return html.encode("utf-8")
+
+
 class AccountOIDCManager:
     def __init__(
         self,
@@ -102,7 +211,7 @@ class AccountOIDCManager:
         self._tokens = token_store or KeyringTokenStore()
         self._base_url = (
             account_base_url
-            or os.environ.get("OPENAKITA_ACCOUNT_BASE_URL", "http://127.0.0.1:8088")
+            or os.environ.get("OPENAKITA_ACCOUNT_BASE_URL", DEFAULT_ACCOUNT_BASE_URL)
         ).rstrip("/")
         self._attempts: dict[str, LoginAttempt] = {}
         self._server: asyncio.Server | None = None
@@ -194,6 +303,7 @@ class AccountOIDCManager:
         writer: asyncio.StreamWriter,
         attempt: LoginAttempt,
     ) -> None:
+        language = "en"
         try:
             request_line = (await asyncio.wait_for(reader.readline(), timeout=5)).decode(
                 "ascii", errors="replace"
@@ -201,6 +311,18 @@ class AccountOIDCManager:
             parts = request_line.strip().split(" ")
             if len(parts) != 3 or parts[0] != "GET":
                 raise AccountOIDCError("invalid loopback callback")
+            accept_language = ""
+            for _ in range(64):
+                raw_header = await asyncio.wait_for(reader.readline(), timeout=5)
+                if raw_header in {b"", b"\r\n", b"\n"}:
+                    break
+                if len(raw_header) > 8_192:
+                    raise AccountOIDCError("loopback callback header is too large")
+                header = raw_header.decode("latin-1", errors="replace")
+                name, separator, value = header.partition(":")
+                if separator and name.strip().lower() == "accept-language":
+                    accept_language = value.strip()
+            language = _preferred_callback_language(accept_language)
             query = parse_qs(urlsplit(parts[1]).query)
             state = query.get("state", [""])[0]
             code = query.get("code", [""])[0]
@@ -208,18 +330,22 @@ class AccountOIDCManager:
                 raise AccountOIDCError("invalid OAuth state or code")
             await self._complete(code=code, verifier=attempt.verifier)
             attempt.status = "complete"
-            body = b"OpenAkita account connected. You can close this window."
+            body = _callback_page_html(success=True, language=language)
             status = b"200 OK"
         except Exception as exc:
             logger.warning("OpenAkita Account login failed: %s", exc)
             attempt.status = "failed"
             attempt.error = str(exc)
-            body = b"OpenAkita account login failed. Return to the application."
+            body = _callback_page_html(success=False, language=language)
             status = b"400 Bad Request"
         writer.write(
             b"HTTP/1.1 "
             + status
-            + b"\r\nContent-Type: text/plain; charset=utf-8\r\n"
+            + b"\r\nContent-Type: text/html; charset=utf-8\r\n"
+            + f"Content-Language: {'zh-CN' if language == 'zh' else 'en'}\r\n".encode()
+            + b"Cache-Control: no-store\r\n"
+            + b"X-Content-Type-Options: nosniff\r\n"
+            + b"Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'\r\n"
             + f"Content-Length: {len(body)}\r\nConnection: close\r\n\r\n".encode()
             + body
         )
