@@ -660,6 +660,7 @@ OpenAkita 对国内用户做了全面优化：
 - [ChineseBQB](https://github.com/zhaoolee/ChineseBQB) — 5700+ 中文表情包
 - [browser-use](https://github.com/browser-use/browser-use) — AI 浏览器自动化
 - [AGENTS.md](https://agentsmd.io/) / [Agent Skills](https://agentskills.io/) — 开放标准
+- Windows 免费代码签名由 [SignPath.io](https://signpath.io/) 提供，证书由 [SignPath Foundation](https://signpath.org/) 提供
 
 ### 社区贡献者
 

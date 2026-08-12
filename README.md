@@ -717,6 +717,7 @@ Tracing  ─── AgentTracer(12 SpanTypes) · DecisionTrace · TokenStats
 - [ChineseBQB](https://github.com/zhaoolee/ChineseBQB) — 5700+ stickers that give AI a soul
 - [browser-use](https://github.com/browser-use/browser-use) — AI browser automation
 - [AGENTS.md](https://agentsmd.io/) / [Agent Skills](https://agentskills.io/) — Open standards
+- Free code signing on Windows provided by [SignPath.io](https://signpath.io/), certificate by [SignPath Foundation](https://signpath.org/)
 
 ### Community Contributors
 
