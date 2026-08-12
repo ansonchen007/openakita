@@ -326,6 +326,271 @@ class TestOrgCommandsDoNotStartTyping:
         reply = gateway._send_response.await_args.args[1]
         assert reply == "组织任务完成"
 
+    def test_org_session_dedup_is_scoped_to_command_and_event(self, gateway, session_manager):
+        """Equal text from separate commands must remain as separate history turns."""
+        session = create_test_session(
+            chat_id="chat-command-dedup",
+            channel="telegram",
+            user_id="user-command-dedup",
+        )
+
+        with patch.object(gateway_module, "_notify_im_event") as notify:
+            assert gateway._record_org_session_message(
+                session,
+                role="user",
+                content="生成相同报告",
+                command_id="cmd-one",
+                event="submitted",
+            )
+            assert not gateway._record_org_session_message(
+                session,
+                role="user",
+                content="生成相同报告",
+                command_id="cmd-one",
+                event="submitted",
+            )
+            assert gateway._record_org_session_message(
+                session,
+                role="user",
+                content="生成相同报告",
+                command_id="cmd-two",
+                event="submitted",
+            )
+
+        assert [item["org_command_id"] for item in session.context.messages] == [
+            "cmd-one",
+            "cmd-two",
+        ]
+        assert notify.call_count == 2
+        assert session_manager.mark_dirty.call_count == 2
+
+    async def test_org_task_syncs_live_status_into_im_session(self, gateway, session_manager):
+        """Submitted, progress, and terminal turns must refresh the IM message viewer."""
+        session = create_test_session(
+            chat_id="chat-live-sync",
+            channel="telegram",
+            user_id="user-live-sync",
+        )
+        session.set_metadata("bound_org_id", "org_content")
+
+        queue: asyncio.Queue[dict] = asyncio.Queue()
+        fake_svc = MagicMock()
+        fake_svc.submit = AsyncMock(return_value={"command_id": "cmd_live_sync"})
+        fake_svc.subscribe_summary = MagicMock(return_value=queue)
+        fake_svc.unsubscribe_summary = MagicMock()
+
+        fake_manager = MagicMock()
+        fake_manager.resolve_id_by_name_or_id.return_value = ("org_content", [])
+        fake_manager.get.return_value = SimpleNamespace(name="内容工作室")
+        gateway._get_org_manager = MagicMock(return_value=fake_manager)
+        gateway._send_org_status_card = AsyncMock(return_value="status-card-1")
+        gateway._patch_org_status_card = AsyncMock(return_value=True)
+
+        msg = create_channel_message(
+            text="@org 写一段产品文案",
+            chat_id="chat-live-sync",
+            user_id="user-live-sync",
+        )
+        from openakita.orgs import command_service as cs_module
+
+        async def wait_for(predicate) -> None:
+            for _ in range(20):
+                if predicate():
+                    return
+                await asyncio.sleep(0)
+            raise AssertionError("timed out waiting for organization session sync")
+
+        with (
+            patch.object(cs_module, "get_command_service", return_value=fake_svc),
+            patch.object(gateway_module, "_notify_im_event") as notify,
+        ):
+            handling = asyncio.create_task(
+                gateway._try_handle_org_command(msg, session, "@org 写一段产品文案")
+            )
+
+            await wait_for(lambda: len(session.context.messages) == 2)
+            assert [item["role"] for item in session.context.messages] == ["user", "system"]
+            assert session.context.messages[0]["content"] == "@org 写一段产品文案"
+            status_item = session.context.messages[1]
+            assert status_item["org_command_id"] == "cmd_live_sync"
+            assert status_item["org_status"] == "running"
+            assert status_item["transient_for_llm"] is True
+
+            queue.put_nowait({"type": "org_progress", "summary": "文案节点正在撰写"})
+            await wait_for(lambda: "文案节点正在撰写" in status_item["content"])
+            assert len(session.context.messages) == 2
+
+            queue.put_nowait(
+                {
+                    "type": "org_command_done",
+                    "result": {"result": "组织任务完成", "file_attachments": []},
+                }
+            )
+            assert await handling is True
+
+            assert [item["role"] for item in session.context.messages] == [
+                "user",
+                "system",
+                "assistant",
+            ]
+            assert status_item["org_status"] == "done"
+            assert "✅ 命令已完成" in status_item["content"]
+            assert session.context.messages[-1]["content"] == "组织任务完成"
+            assert session.context.messages[-1]["org_event"] == "done"
+
+            payloads = [call.args[1] for call in notify.call_args_list]
+            assert any(item["org_event"] == "submitted" for item in payloads)
+            assert any(item["org_event"] == "status" and item["updated"] for item in payloads)
+            assert any(item["org_event"] == "done" for item in payloads)
+
+        session_manager.persist.assert_called_once()
+        fake_svc.unsubscribe_summary.assert_called_once_with("cmd_live_sync", queue)
+
+    async def test_group_org_task_syncs_progress_without_sending_private_status_card(
+        self, gateway, session_manager
+    ):
+        """Group organization progress belongs in history even when IM cards are suppressed."""
+        session = create_test_session(
+            chat_id="group-live-sync",
+            channel="telegram",
+            user_id="group-user",
+        )
+        session.chat_type = "group"
+        session.set_metadata("bound_org_id", "org_content")
+
+        queue: asyncio.Queue[dict] = asyncio.Queue()
+        queue.put_nowait({"type": "org_progress", "summary": "群聊任务正在执行"})
+        queue.put_nowait(
+            {
+                "type": "org_command_done",
+                "result": {"result": "群聊组织任务完成", "file_attachments": []},
+            }
+        )
+        fake_svc = MagicMock()
+        fake_svc.submit = AsyncMock(return_value={"command_id": "cmd_group_sync"})
+        fake_svc.subscribe_summary = MagicMock(return_value=queue)
+        fake_svc.unsubscribe_summary = MagicMock()
+
+        fake_manager = MagicMock()
+        fake_manager.resolve_id_by_name_or_id.return_value = ("org_content", [])
+        fake_manager.get.return_value = SimpleNamespace(name="内容工作室")
+        gateway._get_org_manager = MagicMock(return_value=fake_manager)
+        gateway._send_org_status_card = AsyncMock(return_value=None)
+        gateway._patch_org_status_card = AsyncMock(return_value=True)
+
+        msg = create_channel_message(
+            text="@org 完成群聊任务",
+            chat_id="group-live-sync",
+            user_id="group-user",
+        )
+        msg.chat_type = "group"
+        from openakita.orgs import command_service as cs_module
+
+        with patch.object(cs_module, "get_command_service", return_value=fake_svc):
+            assert await gateway._try_handle_org_command(msg, session, msg.plain_text) is True
+
+        gateway._send_org_status_card.assert_not_awaited()
+        status_item = session.context.messages[1]
+        assert status_item["role"] == "system"
+        assert "群聊任务正在执行" in status_item["content"]
+        assert status_item["org_status"] == "done"
+        assert session.context.messages[-1]["content"] == "群聊组织任务完成"
+
+    async def test_failed_org_terminal_syncs_failure_state(self, gateway, session_manager):
+        """A terminal error must be visible as a failed organization turn."""
+        session = create_test_session(
+            chat_id="chat-failed-sync",
+            channel="telegram",
+            user_id="user-failed-sync",
+        )
+        session.set_metadata("bound_org_id", "org_content")
+
+        queue: asyncio.Queue[dict] = asyncio.Queue()
+        queue.put_nowait(
+            {
+                "type": "org_command_done",
+                "error": "Supervisor 编排端点认证失败",
+            }
+        )
+        fake_svc = MagicMock()
+        fake_svc.submit = AsyncMock(return_value={"command_id": "cmd_failed_sync"})
+        fake_svc.subscribe_summary = MagicMock(return_value=queue)
+        fake_svc.unsubscribe_summary = MagicMock()
+
+        fake_manager = MagicMock()
+        fake_manager.resolve_id_by_name_or_id.return_value = ("org_content", [])
+        fake_manager.get.return_value = SimpleNamespace(name="内容工作室")
+        gateway._get_org_manager = MagicMock(return_value=fake_manager)
+        gateway._send_org_status_card = AsyncMock(return_value="status-card-failed")
+        gateway._patch_org_status_card = AsyncMock(return_value=True)
+
+        msg = create_channel_message(
+            text="@org 执行失败任务",
+            chat_id="chat-failed-sync",
+            user_id="user-failed-sync",
+        )
+        from openakita.orgs import command_service as cs_module
+
+        with patch.object(cs_module, "get_command_service", return_value=fake_svc):
+            assert await gateway._try_handle_org_command(msg, session, msg.plain_text) is True
+
+        assert [item["role"] for item in session.context.messages] == [
+            "user",
+            "system",
+            "assistant",
+        ]
+        assert session.context.messages[1]["org_status"] == "failed"
+        assert "❌ 命令执行失败" in session.context.messages[1]["content"]
+        assert session.context.messages[-1]["org_event"] == "failed"
+        assert session.context.messages[-1]["content"] == "Supervisor 编排端点认证失败"
+
+    async def test_delivery_failure_does_not_reclassify_completed_history(
+        self, gateway, session_manager
+    ):
+        """Adapter delivery errors after completion must not append a false failed turn."""
+        session = create_test_session(
+            chat_id="chat-delivery-failed",
+            channel="telegram",
+            user_id="user-delivery-failed",
+        )
+        session.set_metadata("bound_org_id", "org_content")
+
+        queue: asyncio.Queue[dict] = asyncio.Queue()
+        queue.put_nowait(
+            {
+                "type": "org_command_done",
+                "result": {"result": "结果已经生成", "file_attachments": []},
+            }
+        )
+        fake_svc = MagicMock()
+        fake_svc.submit = AsyncMock(return_value={"command_id": "cmd_delivery_failed"})
+        fake_svc.subscribe_summary = MagicMock(return_value=queue)
+        fake_svc.unsubscribe_summary = MagicMock()
+
+        fake_manager = MagicMock()
+        fake_manager.resolve_id_by_name_or_id.return_value = ("org_content", [])
+        fake_manager.get.return_value = SimpleNamespace(name="内容工作室")
+        gateway._get_org_manager = MagicMock(return_value=fake_manager)
+        gateway._send_org_status_card = AsyncMock(return_value="status-card-delivery-failed")
+        gateway._patch_org_status_card = AsyncMock(return_value=True)
+        gateway._send_response = AsyncMock(side_effect=RuntimeError("adapter offline"))
+
+        msg = create_channel_message(
+            text="@org 生成结果",
+            chat_id="chat-delivery-failed",
+            user_id="user-delivery-failed",
+        )
+        from openakita.orgs import command_service as cs_module
+
+        with patch.object(cs_module, "get_command_service", return_value=fake_svc):
+            assert await gateway._try_handle_org_command(msg, session, msg.plain_text) is True
+
+        assistant_items = [item for item in session.context.messages if item["role"] == "assistant"]
+        assert len(assistant_items) == 1
+        assert assistant_items[0]["content"] == "结果已经生成"
+        assert assistant_items[0]["org_event"] == "done"
+        assert session.context.messages[1]["org_status"] == "done"
+
     async def test_org_task_sends_delivery_manifest_media(self, gateway, session_manager):
         """Final manifest paths must enter the normal IM media delivery pipeline."""
         session = create_test_session(

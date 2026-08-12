@@ -3377,6 +3377,134 @@ class MessageGateway:
             },
         )
 
+    def _notify_org_session_update(
+        self,
+        session: Session,
+        *,
+        role: str,
+        command_id: str,
+        event: str,
+        updated: bool = False,
+    ) -> None:
+        """Tell the message viewer that an organization turn changed."""
+        _notify_im_event(
+            "im:new_message",
+            {
+                "channel": session.channel,
+                "bot_instance_id": session.bot_instance_id or session.channel,
+                "role": role,
+                "session_id": session.session_key,
+                "chat_type": session.chat_type,
+                "display_name": session.display_name,
+                "org_command_id": command_id,
+                "org_event": event,
+                "updated": updated,
+            },
+        )
+
+    def _record_org_session_message(
+        self,
+        session: Session,
+        *,
+        role: str,
+        content: str,
+        command_id: str,
+        event: str,
+        source_message: UnifiedMessage | None = None,
+        persist: bool = False,
+    ) -> bool:
+        """Persist one organization turn and refresh the IM message viewer."""
+        text = str(content or "").strip()
+        if not text:
+            return False
+
+        metadata: dict[str, Any] = {
+            "source": "org_command",
+            "org_command_id": command_id,
+            "org_event": event,
+        }
+        if source_message is not None:
+            metadata.update(
+                {
+                    "message_id": source_message.id,
+                    "channel_message_id": source_message.channel_message_id,
+                    "bot_instance_id": session.bot_instance_id or session.channel,
+                }
+            )
+
+        with session.context._msg_lock:
+            already_recorded = any(
+                item.get("org_command_id") == command_id and item.get("org_event") == event
+                for item in session.context.messages
+            )
+        if already_recorded:
+            return False
+
+        added = session.add_message(role=role, content=text, **metadata)
+        if not added:
+            # Generic history dedup keys on role/content/time. Distinct
+            # organization commands may legitimately repeat the same prompt or
+            # result, so preserve them while still deduping by command/event.
+            session.append_marker(role=role, content=text, **metadata)
+
+        if persist:
+            self.session_manager.persist()
+        else:
+            self.session_manager.mark_dirty()
+        self._notify_org_session_update(
+            session,
+            role=role,
+            command_id=command_id,
+            event=event,
+        )
+        return True
+
+    def _sync_org_status_message(
+        self,
+        session: Session,
+        *,
+        command_id: str,
+        content: str,
+        status: str,
+    ) -> None:
+        """Create or update the single live status row shown for an org command."""
+        text = str(content or "").strip()
+        if not text:
+            return
+
+        updated = False
+        now = datetime.now().isoformat()
+        with session.context._msg_lock:
+            for item in reversed(session.context.messages):
+                if item.get("org_command_id") == command_id and item.get("org_event") == "status":
+                    item["content"] = text
+                    item["timestamp"] = now
+                    item["org_status"] = status
+                    updated = True
+                    break
+
+        if updated:
+            session.touch()
+        else:
+            session.add_message(
+                role="system",
+                content=text,
+                source="org_command",
+                org_command_id=command_id,
+                org_event="status",
+                org_status=status,
+                transient_for_llm=True,
+            )
+
+        self.session_manager.mark_dirty()
+        self._notify_org_session_update(
+            session,
+            role="system",
+            command_id=command_id,
+            event="status",
+            updated=updated,
+        )
+
     @staticmethod
     def _finish_current_org_command(
         session: Session,
@@ -3692,6 +3820,7 @@ class MessageGateway:
         command_id: str,
         progress_lines: list[str],
         done: bool = False,
+        failed: bool = False,
     ) -> str:
         lines = [
             f"已向组织 {org_display} 下发指令，命令 ID：`{command_id}`",
@@ -3707,7 +3836,10 @@ class MessageGateway:
                 lines.append(f"• {line}")
         else:
             lines.append("• 等待组织开始处理")
-        if done:
+        if failed:
+            lines.append("")
+            lines.append("❌ 命令执行失败")
+        elif done:
             lines.append("")
             lines.append("✅ 命令已完成")
         return "\n".join(lines)
@@ -3969,6 +4101,8 @@ class MessageGateway:
             await self._send_response(message, err)
             return True
 
+        command_id: str | None = None
+        terminal_synced = False
         try:
             from openakita.orgs.command_models import (
                 OrgCommandRequest,
@@ -4001,7 +4135,15 @@ class MessageGateway:
                     ),
                 )
             )
-            command_id = started["command_id"]
+            command_id = str(started["command_id"])
+            self._record_org_session_message(
+                session,
+                role="user",
+                content=text,
+                command_id=command_id,
+                event="submitted",
+                source_message=message,
+            )
             queue = svc.subscribe_summary(
                 command_id,
                 surface="im",
@@ -4028,21 +4170,28 @@ class MessageGateway:
                 progress_seen: set[str] = set()
                 org_display = f"「{org_name}」" if org_name else org_id
                 status_card_id: str | None = None
+                status_text = self._format_org_command_status_card(
+                    org_display=org_display,
+                    command_id=command_id,
+                    progress_lines=progress_lines,
+                )
                 if chat_type != "group":
                     status_card_id = await self._send_org_status_card(
                         message,
-                        self._format_org_command_status_card(
-                            org_display=org_display,
-                            command_id=command_id,
-                            progress_lines=progress_lines,
-                        ),
+                        status_text,
                     )
+                self._sync_org_status_message(
+                    session,
+                    command_id=command_id,
+                    content=status_text,
+                    status="running",
+                )
                 final_text = ""
                 while True:
                     item = await queue.get()
                     if item.get("type") == "org_progress":
                         summary = str(item.get("summary") or "").strip()
-                        if summary and chat_type != "group":
+                        if summary:
                             if summary in progress_seen:
                                 continue
                             progress_seen.add(summary)
@@ -4052,17 +4201,25 @@ class MessageGateway:
                                 command_id=command_id,
                                 progress_lines=progress_lines,
                             )
-                            patched = await self._patch_org_status_card(
-                                message,
-                                status_card_id,
-                                status_text,
+                            self._sync_org_status_message(
+                                session,
+                                command_id=command_id,
+                                content=status_text,
+                                status="running",
                             )
-                            if not patched and not status_card_id:
-                                await self._send_response(message, f"组织进度：{summary}")
+                            if chat_type != "group":
+                                patched = await self._patch_org_status_card(
+                                    message,
+                                    status_card_id,
+                                    status_text,
+                                )
+                                if not patched and not status_card_id:
+                                    await self._send_response(message, f"组织进度：{summary}")
                         continue
                     if item.get("type") == "org_command_done":
                         result = item.get("result")
                         error = item.get("error")
+                        terminal_failed = bool(error) and not result
                         attachments: list[dict] = []
                         if isinstance(result, dict):
                             final_text = str(
@@ -4070,7 +4227,8 @@ class MessageGateway:
                                 or result.get("deliverable")
                                 or result.get("final_message")
                                 or result.get("error")
-                                or ""
+                                or error
+                                or "组织命令已完成"
                             )
                             attachments = self._extract_org_result_attachments(result)
                         else:
@@ -4079,20 +4237,34 @@ class MessageGateway:
                             final_text = self._append_attachment_media_lines(
                                 final_text, attachments
                             )
-                        session.add_message("user", text, message_id=message.id)
-                        session.add_message("assistant", final_text)
                         self._finish_current_org_command(session, result_text=final_text)
-                        self.session_manager.mark_dirty()
+                        done_status_text = self._format_org_command_status_card(
+                            org_display=org_display,
+                            command_id=command_id,
+                            progress_lines=progress_lines,
+                            done=not terminal_failed,
+                            failed=terminal_failed,
+                        )
+                        self._sync_org_status_message(
+                            session,
+                            command_id=command_id,
+                            content=done_status_text,
+                            status="failed" if terminal_failed else "done",
+                        )
+                        self._record_org_session_message(
+                            session,
+                            role="assistant",
+                            content=final_text,
+                            command_id=command_id,
+                            event="failed" if terminal_failed else "done",
+                            persist=True,
+                        )
+                        terminal_synced = True
                         if chat_type != "group":
                             await self._patch_org_status_card(
                                 message,
                                 status_card_id,
-                                self._format_org_command_status_card(
-                                    org_display=org_display,
-                                    command_id=command_id,
-                                    progress_lines=progress_lines,
-                                    done=True,
-                                ),
+                                done_status_text,
                                 done=True,
                             )
                         await self._send_response(message, final_text)
@@ -4106,8 +4278,31 @@ class MessageGateway:
                     self._finish_current_org_command(session, result_text="(无最终回复)")
                     self.session_manager.mark_dirty()
         except Exception as exc:
+            if terminal_synced:
+                logger.warning(
+                    "[IM] org command completed but final response delivery failed: %s",
+                    exc,
+                    exc_info=True,
+                )
+                return True
             logger.warning("[IM] org command failed: %s", exc, exc_info=True)
-            await self._send_response(message, f"组织命令提交失败：{_format_user_error(exc)}")
+            failure_text = f"组织命令提交失败：{_format_user_error(exc)}"
+            if command_id and not terminal_synced:
+                self._sync_org_status_message(
+                    session,
+                    command_id=command_id,
+                    content=f"❌ 组织任务执行失败\n\n{failure_text}",
+                    status="failed",
+                )
+                self._record_org_session_message(
+                    session,
+                    role="assistant",
+                    content=failure_text,
+                    command_id=command_id,
+                    event="failed",
+                    persist=True,
+                )
+            await self._send_response(message, failure_text)
             return True
 
     async def _handle_message(self, message: UnifiedMessage) -> None:
