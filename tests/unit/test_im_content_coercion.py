@@ -65,6 +65,55 @@ def test_im_routes_preview_structured_content_without_slice_keyerror():
     assert message["content"] == "插件 seedance-video 任务更新: succeeded (e53d8a5a-a76)"
 
 
+def test_im_routes_expose_live_organization_status_messages():
+    app = FastAPI()
+    app.include_router(im_router)
+
+    status_text = "已向组织「内容工作室」下发指令\n\n组织进度：\n• 文案节点正在撰写"
+    session = SimpleNamespace(
+        channel="wechat:main",
+        chat_id="chat-org-live",
+        user_id="user-org-live",
+        chat_type="private",
+        display_name="tester",
+        chat_name="",
+        state="active",
+        last_active="2026-08-12T10:00:00",
+        context=SimpleNamespace(
+            messages=[
+                {
+                    "role": "user",
+                    "content": "@组织 写一段产品文案",
+                    "timestamp": "2026-08-12T10:00:00",
+                    "org_command_id": "cmd-live",
+                    "org_event": "submitted",
+                },
+                {
+                    "role": "system",
+                    "content": status_text,
+                    "timestamp": "2026-08-12T10:00:01",
+                    "org_command_id": "cmd-live",
+                    "org_event": "status",
+                    "org_status": "running",
+                    "transient_for_llm": True,
+                },
+            ]
+        ),
+    )
+    app.state.session_manager = SimpleNamespace(_sessions={"wechat-org-session": session})
+    app.state.gateway = None
+
+    client = TestClient(app)
+    listed = client.get("/api/im/sessions").json()["sessions"][0]
+    assert listed["messageCount"] == 2
+    assert "文案节点正在撰写" in listed["lastMessage"]
+
+    body = client.get("/api/im/sessions/wechat-org-session/messages").json()
+    assert body["total"] == 2
+    assert [item["role"] for item in body["messages"]] == ["user", "system"]
+    assert body["messages"][-1]["content"] == status_text
+
+
 def test_memory_encoder_handles_structured_turn_content():
     encoder = MemoryEncoder(session_id="s1")
     turns = [
