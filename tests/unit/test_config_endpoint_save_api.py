@@ -843,12 +843,17 @@ def test_apply_llm_runtime_config_refreshes_all_runtime_components(tmp_path, mon
             self.reason = reason
 
     brain = FakeBrain()
+    default_client = FakeClient()
     gateway = SimpleNamespace(stt_client=FakeSttClient())
     pool = FakePool()
 
     monkeypatch.setattr(
         "openakita.llm.config.load_endpoints_config",
         lambda path=None: ([], [], ["stt"], {}),
+    )
+    monkeypatch.setattr(
+        "openakita.llm.client.get_default_client_if_initialized",
+        lambda: default_client,
     )
 
     result = apply_llm_runtime_config(
@@ -861,11 +866,14 @@ def test_apply_llm_runtime_config_refreshes_all_runtime_components(tmp_path, mon
 
     assert result["status"] == "ok"
     assert result["main_reloaded"] is True
+    assert result["default_reloaded"] is True
     assert result["compiler_reloaded"] is True
     assert result["stt_reloaded"] is True
     assert result["pool_invalidated"] is True
     assert brain._llm_client.reload_called is True
     assert brain._llm_client._config_path == config_path
+    assert default_client.reload_called is True
+    assert default_client._config_path == config_path
     assert brain.compiler_reloaded is True
     assert gateway.stt_client.reloaded_with == ["stt"]
     assert pool.reason == "llm_config:test"

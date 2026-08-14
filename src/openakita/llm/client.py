@@ -2582,6 +2582,22 @@ class LLMClient:
         """获取指定名称的 Provider"""
         return self._providers.get(name)
 
+    def get_default_endpoint_name(self) -> str | None:
+        """Return the highest-priority endpoint eligible for a text request.
+
+        This intentionally ignores global and conversation overrides. Callers
+        that need a stable endpoint for an isolated operation can resolve the
+        workspace default once, then apply their own per-conversation lock.
+        The regular eligibility filter keeps health, authentication failures,
+        configured model catalogs, and endpoint priority consistent with
+        normal non-thinking text requests.
+        """
+        eligible = self._filter_eligible_endpoints()
+        for provider in eligible:
+            if provider.config.has_capability("text"):
+                return provider.config.name
+        return None
+
     def add_endpoint(self, config: EndpointConfig):
         """动态添加端点"""
         provider = self._create_provider(config)
@@ -2919,6 +2935,11 @@ def get_default_client() -> LLMClient:
     global _default_client
     if _default_client is None:
         _default_client = LLMClient()
+    return _default_client
+
+
+def get_default_client_if_initialized() -> LLMClient | None:
+    """Return the process-shared client without creating it."""
     return _default_client
 
 

@@ -308,6 +308,7 @@ class RuntimeConfigCoordinator:
         result = RuntimeApplyResult(apply_mode=ConfigApplyMode.NEXT_TASK)
         for key, label in (
             ("main_reloaded", "llm_main"),
+            ("default_reloaded", "llm_supervisor"),
             ("compiler_reloaded", "llm_compiler"),
             ("stt_reloaded", "gateway_stt"),
         ):
