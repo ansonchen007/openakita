@@ -60,6 +60,7 @@ def apply_llm_runtime_config(
         "status": "ok",
         "reloaded": False,
         "main_reloaded": False,
+        "default_reloaded": False,
         "compiler_reloaded": False,
         "stt_reloaded": False,
         "pool_invalidated": False,
@@ -83,15 +84,16 @@ def apply_llm_runtime_config(
 
     if agent is None:
         agent = _fallback_runtime_ref("_agent")
+    brain = None
+    llm_client = None
     if agent is None:
         result["reason"] = "agent_not_initialized"
-        return result
-
-    brain = _resolve_brain(agent)
-    llm_client = _resolve_main_client(agent, brain)
-    if llm_client is None:
-        result["reason"] = "llm_client_not_found"
     else:
+        brain = _resolve_brain(agent)
+        llm_client = _resolve_main_client(agent, brain)
+    if llm_client is None and agent is not None:
+        result["reason"] = "llm_client_not_found"
+    elif llm_client is not None:
         try:
             if config_path is not None and getattr(llm_client, "_config_path", None) != config_path:
                 llm_client._config_path = config_path
@@ -106,6 +108,28 @@ def apply_llm_runtime_config(
             result["status"] = "failed"
             result["reason"] = str(exc)
             logger.error("[LLM Runtime] main reload failed: %s", exc, exc_info=True)
+
+    # Organization Supervisor calls use the process-shared default client,
+    # which is deliberately independent from the global Agent's Brain client.
+    # Reload it when it already exists so a saved endpoint change is visible to
+    # the next organization command. Do not create it just for configuration
+    # propagation; first use will read the persisted file directly.
+    try:
+        from openakita.llm.client import get_default_client_if_initialized
+
+        default_client = get_default_client_if_initialized()
+        if default_client is not None and default_client is not llm_client:
+            if (
+                config_path is not None
+                and getattr(default_client, "_config_path", None) != config_path
+            ):
+                default_client._config_path = config_path
+            result["default_reloaded"] = bool(default_client.reload())
+            if not result["default_reloaded"]:
+                add_warning("default_client_reload_returned_false")
+    except Exception as exc:
+        add_warning(f"default_client_reload_failed: {exc}")
+        logger.warning("[LLM Runtime] default client reload failed: %s", exc)
 
     if brain and hasattr(brain, "reload_compiler_client"):
         try:

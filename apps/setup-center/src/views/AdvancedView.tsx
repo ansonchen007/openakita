@@ -53,6 +53,12 @@ export interface AdvancedViewProps {
   storeVisible: boolean;
   setStoreVisible: (v: boolean) => void;
   desktopVersion: string;
+  endpointSummary: Array<{
+    name: string;
+    provider: string;
+    model: string;
+    enabled?: boolean;
+  }>;
   shouldUseHttpApi: () => boolean;
   httpApiBase: () => string;
   backendBootPhase: "unknown" | "starting" | "running" | "stopped" | "error";
@@ -67,7 +73,7 @@ export function AdvancedView(props: AdvancedViewProps) {
   const {
     envDraft, setEnvDraft, busy,
     workspaces, currentWorkspaceId, serviceStatus, info,
-    storeVisible, setStoreVisible, desktopVersion,
+    storeVisible, setStoreVisible, desktopVersion, endpointSummary,
     shouldUseHttpApi, httpApiBase,
     backendBootPhase, onOpenRuntimeEnvironment,
     askConfirm,
@@ -84,6 +90,32 @@ export function AdvancedView(props: AdvancedViewProps) {
     <FieldBool key={p.k} {...p} {..._envBase} />;
   const FS = (p: { k: string; label: string; options: { value: string; label: string }[]; help?: string }) =>
     <FieldSelect key={p.k} {...p} {..._envBase} />;
+
+  const configuredSupervisorEndpoint = envGet(
+    envDraft,
+    "ORGS_SUPERVISOR_LLM_ENDPOINT",
+    "auto",
+  ).trim() || "auto";
+  const supervisorEndpointOptions = [
+    { value: "auto", label: t("config.supervisorEndpointAuto") },
+    ...endpointSummary
+      .filter((endpoint) => endpoint.enabled !== false)
+      .map((endpoint) => ({
+        value: endpoint.name,
+        label: `${endpoint.name} · ${endpoint.provider || "-"} · ${endpoint.model || "-"}`,
+      })),
+  ];
+  if (
+    configuredSupervisorEndpoint !== "auto"
+    && !supervisorEndpointOptions.some((option) => option.value === configuredSupervisorEndpoint)
+  ) {
+    supervisorEndpointOptions.push({
+      value: configuredSupervisorEndpoint,
+      label: t("config.supervisorEndpointUnavailable", {
+        endpoint: configuredSupervisorEndpoint,
+      }),
+    });
+  }
 
   // ── Local state (previously in App.tsx top-level, only used here) ──
   const [advSysInfo, setAdvSysInfo] = useState<Record<string, string> | null>(null);
@@ -400,6 +432,26 @@ export function AdvancedView(props: AdvancedViewProps) {
           <div className="grid2">
             {FB({ k: "DESKTOP_NOTIFY_ENABLED", label: t("config.agentDesktopNotifyEnable"), help: t("config.agentDesktopNotifyEnableHelp") })}
             {FB({ k: "DESKTOP_NOTIFY_SOUND", label: t("config.agentDesktopNotifySound"), help: t("config.agentDesktopNotifySoundHelp") })}
+          </div>
+        </Section>
+
+        <Section title={t("config.supervisorSection")} className="mt-2">
+          <div className="grid2">
+            {FS({
+              k: "ORGS_SUPERVISOR_BRAIN_MODE",
+              label: t("config.supervisorMode"),
+              help: t("config.supervisorModeHelp"),
+              options: [
+                { value: "llm", label: t("config.supervisorModeLlm") },
+                { value: "passthrough", label: t("config.supervisorModePassthrough") },
+              ],
+            })}
+            {FS({
+              k: "ORGS_SUPERVISOR_LLM_ENDPOINT",
+              label: t("config.supervisorEndpoint"),
+              help: t("config.supervisorEndpointHelp"),
+              options: supervisorEndpointOptions,
+            })}
           </div>
         </Section>
 

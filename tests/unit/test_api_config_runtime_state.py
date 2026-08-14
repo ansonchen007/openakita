@@ -319,6 +319,42 @@ async def test_write_env_invalidates_agent_pool_for_next_task_settings(
 
 
 @pytest.mark.asyncio
+async def test_write_env_applies_explicit_supervisor_endpoint_to_next_command(
+    isolated_runtime_state,
+    monkeypatch,
+):
+    from openakita.api.routes.config import EnvUpdateRequest, write_env
+    from openakita.config import settings
+
+    monkeypatch.delenv("ORGS_SUPERVISOR_LLM_ENDPOINT", raising=False)
+    monkeypatch.setattr(settings, "orgs_supervisor_llm_endpoint", "auto")
+    pool = _DummyPool()
+    request = SimpleNamespace(
+        app=SimpleNamespace(state=SimpleNamespace(agent=None, agent_pool=pool))
+    )
+
+    response = await write_env(
+        EnvUpdateRequest(
+            entries={"ORGS_SUPERVISOR_LLM_ENDPOINT": "workspace-supervisor"},
+            delete_keys=[],
+        ),
+        request,
+    )
+
+    assert settings.orgs_supervisor_llm_endpoint == "workspace-supervisor"
+    assert response["apply_mode"] == "next_task"
+    assert response["restart_required"] is False
+    assert response["apply_modes"] == {
+        "ORGS_SUPERVISOR_LLM_ENDPOINT": "next_task",
+    }
+    assert pool.reasons == ["runtime_config:ORGS_SUPERVISOR_LLM_ENDPOINT"]
+    assert (
+        "ORGS_SUPERVISOR_LLM_ENDPOINT=workspace-supervisor"
+        in (isolated_runtime_state / ".env").read_text(encoding="utf-8")
+    )
+
+
+@pytest.mark.asyncio
 async def test_write_env_reloads_desktop_component_without_process_restart(
     isolated_runtime_state,
     monkeypatch,

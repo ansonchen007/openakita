@@ -2374,6 +2374,7 @@ function MainApp() {
           "LOG_DIR", "LOG_FILE_PREFIX", "LOG_MAX_SIZE_MB", "LOG_BACKUP_COUNT",
           "LOG_RETENTION_DAYS", "LOG_FORMAT", "LOG_TO_CONSOLE", "LOG_TO_FILE",
           "DESKTOP_NOTIFY_ENABLED", "DESKTOP_NOTIFY_SOUND",
+          "ORGS_SUPERVISOR_BRAIN_MODE", "ORGS_SUPERVISOR_LLM_ENDPOINT",
           "SESSION_STORAGE_PATH",
           "API_HOST", "TRUST_PROXY",
           "BACKUP_ENABLED", "BACKUP_PATH", "BACKUP_CRON",
@@ -3394,6 +3395,7 @@ function MainApp() {
         storeVisible={storeVisible}
         setStoreVisible={setStoreVisible}
         desktopVersion={desktopVersion}
+        endpointSummary={endpointSummary}
         shouldUseHttpApi={shouldUseHttpApi}
         httpApiBase={httpApiBase}
         backendBootPhase={backendBootPhase}

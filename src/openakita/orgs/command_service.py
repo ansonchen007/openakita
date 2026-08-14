@@ -1822,7 +1822,8 @@ class OrgCommandService:
         custom ``llm_client_provider`` can be injected for tests; otherwise we
         wrap the process-shared :func:`openakita.llm.client.get_default_client`
         in :class:`~openakita.runtime.llm_supervisor_client.GatewaySupervisorLLMClient`,
-        locking the no-thinking endpoint from settings.
+        resolving and locking the configured Supervisor endpoint for this
+        command. ``auto`` selects from the latest shared-client snapshot.
         """
         try:
             if self._llm_client_provider is not None:
