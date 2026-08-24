@@ -214,13 +214,17 @@ result = await skill.execute(input="test")
 Agent> [自动生成 SKILL.md + scripts → 加载 → 可用]
 ```
 
-### 方法三：从 GitHub/URL 安装
+### 方法三：从 SkillHub、GitHub 或 URL 安装
 
 ```
 调用 install_skill：
+- source: "skillhub:@namespace/my-skill?version=1.2.3"
+- source: "https://skillhub.cn/skills/namespace/my-skill"
 - source: "https://github.com/user/my-skill"
 - subdir: "skills/my-skill"（可选）
 ```
+
+SkillHub 安装会下载完整技能包，并保留注册表坐标、命名空间和版本来源信息。
 
 ### 创建技巧
 
@@ -238,7 +242,7 @@ Agent> [自动生成 SKILL.md + scripts → 加载 → 可用]
 |------|------|
 | `list_skills()` | 列出已安装的所有技能 |
 | `get_skill_info(name)` | 获取技能详细信息 |
-| `install_skill(source, name?)` | 从 URL/Git 安装技能 |
+| `install_skill(source, name?)` | 从 SkillHub、URL 或 Git 安装技能 |
 | `load_skill(skill_name)` | 加载新创建的技能 |
 | `reload_skill(skill_name)` | 重新加载已有技能 |
 | `run_skill_script(skill_name, script, args?)` | 运行技能脚本 |
@@ -373,6 +377,7 @@ Agent> [自动生成 SKILL.md + scripts → 加载 → 可用]
 | **AgentSkill.space** | [agentskill.space](https://www.agentskill.space/) | 17,122+ | 跨平台索引，支持 Claude Code / Cursor / VS Code 等 |
 | **Install Agent Skills** | [installagentskills.com](https://installagentskills.com/) | - | 带信任评分和安全检查的可信技能目录，一键安装 |
 | **PRPM** | [prpm.dev](https://prpm.dev/) | 7,500+ | 通用注册表，包含 Cursor Rules + Claude Agents + Slash Commands |
+| **SkillHub** | [skillhub.cn](https://skillhub.cn/) | - | 面向中国用户优化的技能社区，支持命名空间、版本化安装与安全评估 |
 | **Skills.sh** | [skills.sh](https://skills.sh/) | - | 开放的 Agent Skills 目录，免费浏览和安装 |
 | **Awesome Claude** | [awesomeclaude.ai](https://awesomeclaude.ai/awesome-claude-skills) | - | Claude 技能精选集 |
 

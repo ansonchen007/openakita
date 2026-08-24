@@ -145,11 +145,12 @@ class SkillManager:
         安装技能到当前工作区的技能目录。
 
         URL 解析优先级:
-        1. GitHub blob/tree/repo URL → git clone + subdir 提取
-        2. playbooks.com 市场页面 → 转换为 GitHub 源
-        3. raw.githubusercontent.com → 直接下载文件
-        4. 其他 Git 托管平台 URL → git clone
-        5. 其他 HTTP URL → 作为文件 URL 下载
+        1. SkillHub locator/detail URL → registry ZIP download
+        2. GitHub blob/tree/repo URL → git clone + subdir 提取
+        3. playbooks.com 市场页面 → 转换为 GitHub 源
+        4. raw.githubusercontent.com → 直接下载文件
+        5. 其他 Git 托管平台 URL → git clone
+        6. 其他 HTTP URL → 作为文件 URL 下载
 
         Args:
             source: Git 仓库 URL、SKILL.md 文件 URL 或技能市场 URL
@@ -175,6 +176,20 @@ class SkillManager:
         skills_dir = settings.skills_path
         skills_dir.mkdir(parents=True, exist_ok=True)
 
+        from ..skills.marketplace import normalize_skillhub_source
+
+        try:
+            skillhub_source = normalize_skillhub_source(source)
+        except ValueError as e:
+            return self._build_install_skill_error(
+                error_type=ErrorType.PERMANENT,
+                message=f"Invalid SkillHub source: {e}",
+                source=source,
+                failure_class="skillhub_invalid_source",
+            )
+        if skillhub_source:
+            return await self._install_from_skillhub(skillhub_source, name, skills_dir)
+
         gh = parse_github_source(source)
         if gh:
             clone_url = f"https://github.com/{gh.owner}/{gh.repo}.git"
@@ -199,6 +214,78 @@ class SkillManager:
             return await self._install_from_git(source, name, subdir, skills_dir)
 
         return await self._install_from_url(source, name, extra_files, skills_dir)
+
+    async def _install_from_skillhub(
+        self,
+        source: str,
+        requested_name: str | None,
+        skills_dir: Path,
+    ) -> str:
+        """Install a complete SkillHub package through the shared registry installer."""
+        from ..setup_center.bridge import install_skill as install_workspace_skill
+        from ..skills.marketplace import parse_skillhub_locator
+
+        locator = parse_skillhub_locator(source)
+        try:
+            target_dir = await asyncio.to_thread(
+                install_workspace_skill,
+                str(skills_dir.parent),
+                source,
+                emit_result=False,
+            )
+            self._ensure_skill_structure(target_dir)
+            loaded = self._loader.load_skill(target_dir, force=True)
+            if not loaded:
+                self._cleanup_broken_skill_dir(target_dir)
+                return self._build_install_skill_error(
+                    error_type=ErrorType.PERMANENT,
+                    message="SkillHub package was downloaded but could not be loaded",
+                    source=source,
+                    failure_class="skillhub_load_failed",
+                )
+
+            self._catalog_text = self._catalog.generate_catalog()
+            self._reset_failure_streaks()
+            logger.info("Skill installed from SkillHub: %s", target_dir.name)
+            alias_note = ""
+            if requested_name and self._normalize_skill_name(requested_name) != target_dir.name:
+                alias_note = (
+                    f"\n**请求名称**: {requested_name}（已保留注册表标识 `{target_dir.name}`）"
+                )
+            return (
+                "✅ 技能从 SkillHub 安装成功！\n\n"
+                f"**技能名称**: {target_dir.name}\n"
+                f"**注册表坐标**: {locator.coordinate}\n"
+                f"**版本**: {locator.version or 'latest'}\n"
+                f"**安装路径**: {target_dir}{alias_note}\n\n"
+                f'技能已自动加载，可以使用 `get_skill_info("{target_dir.name}")` 查看详细指令。'
+            )
+        except ValueError as e:
+            if "已安装" in str(e):
+                return f"✅ SkillHub 技能已安装: {locator.coordinate}"
+            return self._build_install_skill_error(
+                error_type=ErrorType.PERMANENT,
+                message=f"SkillHub install failed: {e}",
+                source=source,
+                failure_class="skillhub_install_failed",
+            )
+        except Exception as e:
+            message = str(e)
+            network_failure = any(
+                marker in message.lower()
+                for marker in ("timeout", "timed out", "connection", "resolve", "network")
+            )
+            return self._build_install_skill_error(
+                error_type=ErrorType.TRANSIENT if network_failure else ErrorType.PERMANENT,
+                message=f"SkillHub install failed: {message}",
+                source=source,
+                failure_class=(
+                    "skillhub_network_failure" if network_failure else "skillhub_install_failed"
+                ),
+                retry_suggestion=(
+                    "Check access to api.skillhub.cn and retry later." if network_failure else None
+                ),
+            )
 
     def update_shell_tool_description(self, tools: list[dict]) -> None:
         """动态更新 shell 工具描述，包含当前操作系统信息"""

@@ -198,11 +198,11 @@ Skills are extensible capability modules for OpenAkita, following the Agent Skil
 
 ### 3.2 Skill Marketplace
 
-Powered by [skills.sh](https://skills.sh):
+Marketplace data is provided by [SkillHub](https://skillhub.cn) and normalized by OpenAkita:
 
-- **Real-time search**: Search the global skill library by keywords
-- **Install count sorting**: Results sorted by popularity
-- **One-click install**: Automatically downloaded and registered locally
+- **Real-time search**: Search the skill library by keyword
+- **Popularity sorting**: Results are sorted by download count
+- **One-click install**: Safely download from the SkillHub registry and register locally
 - **Default recommendations**: Popular skills shown on entry
 
 ### 3.3 Built-in Skills

@@ -1,0 +1,315 @@
+"""Provider-neutral marketplace models and provider adapters.
+
+Marketplace providers expose different identifiers, metrics, and installation
+protocols.  This module is the boundary between those provider payloads and the
+stable representation consumed by OpenAkita's API, desktop bridge, and UI.
+"""
+
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass
+from typing import Any
+from urllib.parse import parse_qs, unquote, urlencode, urlparse
+
+MARKETPLACE_SCHEMA_VERSION = 1
+SKILLHUB_PROVIDER = "skillhub"
+SKILLHUB_API_BASE = "https://api.skillhub.cn"
+SKILLHUB_SKILLS_API = f"{SKILLHUB_API_BASE}/api/skills"
+SKILLHUB_DOWNLOAD_API = f"{SKILLHUB_API_BASE}/api/v1/download"
+
+_COORDINATE_PART_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
+_VERSION_RE = re.compile(r"^[A-Za-z0-9_.+-]+$")
+
+
+@dataclass(frozen=True)
+class SkillHubLocator:
+    """Parsed ``skillhub:`` installation locator."""
+
+    slug: str
+    namespace: str | None = None
+    version: str | None = None
+
+    @property
+    def coordinate(self) -> str:
+        if self.namespace:
+            return f"@{self.namespace}/{self.slug}"
+        return self.slug
+
+    @property
+    def canonical_locator(self) -> str:
+        return f"skillhub:{self.coordinate}"
+
+
+def build_skillhub_locator(namespace: str | None, slug: str) -> str:
+    """Build a stable SkillHub locator without pinning a version."""
+    normalized_namespace = (namespace or "").strip().removeprefix("@") or None
+    parsed = SkillHubLocator(slug=slug.strip(), namespace=normalized_namespace)
+    _validate_skillhub_locator(parsed)
+    return parsed.canonical_locator
+
+
+def parse_skillhub_locator(value: str) -> SkillHubLocator:
+    """Parse ``skillhub:slug`` or ``skillhub:@namespace/slug?version=...``."""
+    if not value.startswith("skillhub:"):
+        raise ValueError("SkillHub locator must start with 'skillhub:'")
+
+    raw = value.removeprefix("skillhub:").strip()
+    coordinate, _, query = raw.partition("?")
+    namespace: str | None = None
+    slug = coordinate
+    if coordinate.startswith("@"):
+        namespaced = coordinate.removeprefix("@")
+        namespace, separator, slug = namespaced.partition("/")
+        if not separator:
+            raise ValueError("SkillHub namespaced locator must contain a slug")
+    elif "/" in coordinate:
+        raise ValueError("SkillHub locator namespaces must start with '@'")
+
+    query_values = parse_qs(query, keep_blank_values=False)
+    version = (query_values.get("version") or [None])[0]
+    parsed = SkillHubLocator(slug=slug, namespace=namespace, version=version)
+    _validate_skillhub_locator(parsed)
+    return parsed
+
+
+def normalize_skillhub_source(value: str) -> str | None:
+    """Normalize a SkillHub locator or public detail URL to an installer locator.
+
+    Returns ``None`` for non-SkillHub values so callers can continue their
+    existing Git/URL dispatch. Malformed SkillHub values raise ``ValueError``
+    instead of silently falling through to a generic downloader.
+    """
+    source = (value or "").strip()
+    if source.startswith("skillhub:"):
+        locator = parse_skillhub_locator(source)
+        return _locator_with_version(locator)
+    if not source.startswith(("http://", "https://")):
+        return None
+
+    parsed_url = urlparse(source)
+    host = (parsed_url.hostname or "").lower()
+    if host not in {"skillhub.cn", "www.skillhub.cn", "api.skillhub.cn"}:
+        return None
+
+    query = parse_qs(parsed_url.query, keep_blank_values=False)
+    version = (query.get("version") or query.get("v") or [None])[0]
+    namespace: str | None = None
+    slug = ""
+    parts = [unquote(part) for part in parsed_url.path.split("/") if part]
+
+    if host == "api.skillhub.cn" and parts == ["api", "v1", "download"]:
+        slug = (query.get("slug") or [""])[0]
+        namespace = (query.get("namespace") or [None])[0]
+    elif parts and parts[0] == "skills":
+        if len(parts) == 2:
+            slug = parts[1]
+        elif len(parts) == 3:
+            namespace, slug = parts[1], parts[2]
+    elif host == "api.skillhub.cn" and len(parts) == 2 and parts[0] != "api":
+        namespace, slug = parts
+
+    if not slug:
+        raise ValueError("Unsupported SkillHub skill URL")
+    locator = SkillHubLocator(
+        slug=slug,
+        namespace=(namespace or "").removeprefix("@") or None,
+        version=version,
+    )
+    _validate_skillhub_locator(locator)
+    return _locator_with_version(locator)
+
+
+def build_skillhub_download_url(locator: SkillHubLocator) -> str:
+    """Build the official registry ZIP endpoint for a parsed locator."""
+    params = {"slug": locator.slug}
+    if locator.namespace:
+        params["namespace"] = locator.namespace
+    if locator.version:
+        params["version"] = locator.version
+    return f"{SKILLHUB_DOWNLOAD_API}?{urlencode(params)}"
+
+
+def resolve_marketplace_install_source(install: dict[str, Any]) -> str:
+    """Validate an internal install descriptor and return an installer source."""
+    strategy = _string(install.get("strategy"))
+    locator_value = _string(install.get("locator"))
+    if not locator_value:
+        raise ValueError("Marketplace install locator is required")
+    if strategy in {"git", "url"}:
+        return locator_value
+    if strategy != "registry-zip":
+        raise ValueError(f"Unsupported marketplace install strategy: {strategy or 'missing'}")
+    locator = parse_skillhub_locator(locator_value)
+
+    version = _string(install.get("version")) or locator.version
+    if version:
+        locator = SkillHubLocator(
+            slug=locator.slug,
+            namespace=locator.namespace,
+            version=version,
+        )
+        _validate_skillhub_locator(locator)
+        return f"{locator.canonical_locator}?{urlencode({'version': version})}"
+    return locator.canonical_locator
+
+
+def normalize_skillhub_response(
+    payload: dict[str, Any],
+    *,
+    page: int = 1,
+    page_size: int = 20,
+) -> dict[str, Any]:
+    """Convert a SkillHub response to OpenAkita's marketplace contract."""
+    data = payload.get("data")
+    if payload.get("code") != 0 or not isinstance(data, dict):
+        message = payload.get("message") or "SkillHub returned an invalid response"
+        raise ValueError(str(message))
+
+    raw_skills = data.get("skills")
+    if not isinstance(raw_skills, list):
+        raw_skills = []
+
+    skills: list[dict[str, Any]] = []
+    for raw in raw_skills:
+        if not isinstance(raw, dict):
+            continue
+        normalized = _normalize_skillhub_skill(raw)
+        if normalized is not None:
+            skills.append(normalized)
+
+    total = data.get("total")
+    if not isinstance(total, int):
+        total = len(skills)
+    return {
+        "schemaVersion": MARKETPLACE_SCHEMA_VERSION,
+        "provider": SKILLHUB_PROVIDER,
+        "skills": skills,
+        "pagination": {
+            "page": page,
+            "pageSize": page_size,
+            "total": total,
+        },
+    }
+
+
+def _normalize_skillhub_skill(raw: dict[str, Any]) -> dict[str, Any] | None:
+    slug = _string(raw.get("slug"))
+    if not slug:
+        return None
+
+    namespace_data = raw.get("namespace")
+    if not isinstance(namespace_data, dict):
+        namespace_data = {}
+    namespace = _string(namespace_data.get("handle")) or None
+    try:
+        install_locator = build_skillhub_locator(namespace, slug)
+    except ValueError:
+        return None
+
+    coordinate = install_locator.removeprefix("skillhub:")
+    tags = _string_list(raw.get("tags"))
+    subcategories = []
+    raw_subcategories = raw.get("subCategories")
+    if isinstance(raw_subcategories, list):
+        for item in raw_subcategories:
+            if isinstance(item, dict):
+                key = _string(item.get("key"))
+                name = _string(item.get("name"))
+                if key or name:
+                    subcategories.append({"key": key, "name": name})
+
+    labels = raw.get("labels")
+    if not isinstance(labels, dict):
+        labels = {}
+    verified = bool(raw.get("verified"))
+    publisher_name = _string(raw.get("ownerName"))
+    if not publisher_name:
+        publisher_name = _string(namespace_data.get("displayName"))
+
+    return {
+        "canonicalId": f"{SKILLHUB_PROVIDER}:{coordinate}",
+        "provider": SKILLHUB_PROVIDER,
+        "coordinate": {"namespace": namespace, "slug": slug},
+        "display": {
+            "name": _string(raw.get("name")) or slug,
+            "description": _string(raw.get("description_zh")) or _string(raw.get("description")),
+            "descriptionI18n": {
+                "zh": _string(raw.get("description_zh")),
+                "default": _string(raw.get("description")),
+            },
+            "iconUrl": _string(raw.get("iconUrl")) or None,
+        },
+        "version": _string(raw.get("version")) or None,
+        "publisher": {
+            "name": publisher_name or namespace or "unknown",
+            "namespace": namespace,
+        },
+        "classification": {
+            "category": _string(raw.get("category")) or None,
+            "subcategories": subcategories,
+            "tags": tags,
+        },
+        "metrics": {
+            "downloads": _integer(raw.get("downloads")),
+            "installs": _integer(raw.get("installs")),
+            "stars": _integer(raw.get("stars")),
+        },
+        "trust": {
+            "verified": verified,
+            "level": "verified" if verified else "community",
+        },
+        "requirements": {
+            "requiresApiKey": _boolean_label(labels.get("requires_api_key")),
+        },
+        "source": {
+            "kind": "registry",
+            "registry": SKILLHUB_PROVIDER,
+            "upstreamUrl": _string(raw.get("upstream_url")) or None,
+            "homepageUrl": _string(raw.get("homepage")) or None,
+        },
+        "install": {
+            "strategy": "registry-zip",
+            "locator": install_locator,
+            "version": _string(raw.get("version")) or None,
+        },
+    }
+
+
+def _validate_skillhub_locator(locator: SkillHubLocator) -> None:
+    if not locator.slug or not _COORDINATE_PART_RE.fullmatch(locator.slug):
+        raise ValueError("Invalid SkillHub skill slug")
+    if locator.namespace and not _COORDINATE_PART_RE.fullmatch(locator.namespace):
+        raise ValueError("Invalid SkillHub namespace")
+    if locator.version and not _VERSION_RE.fullmatch(locator.version):
+        raise ValueError("Invalid SkillHub skill version")
+
+
+def _locator_with_version(locator: SkillHubLocator) -> str:
+    if locator.version:
+        return f"{locator.canonical_locator}?{urlencode({'version': locator.version})}"
+    return locator.canonical_locator
+
+
+def _string(value: Any) -> str:
+    return value.strip() if isinstance(value, str) else ""
+
+
+def _string_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [item.strip() for item in value if isinstance(item, str) and item.strip()]
+
+
+def _integer(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    return value if isinstance(value, int) else None
+
+
+def _boolean_label(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes"}
+    return False
