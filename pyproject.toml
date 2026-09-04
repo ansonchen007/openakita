@@ -57,6 +57,8 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "tenacity>=8.2.3",
     "simplejson>=3.19.2",
+    "packaging>=24.0",
+    "cryptography>=42.0,<47.0",
     # C17: cross-process audit / scheduler / event_store locking.
     "filelock>=3.13.0",
 
@@ -318,6 +320,20 @@ path = "hatch_build.py"
 "identity/personas/tech_expert.md" = "openakita/identity/personas/tech_expert.md"
 "identity/personas/user_custom.md.example" = "openakita/identity/personas/user_custom.md.example"
 "identity/prompts/policies.md" = "openakita/identity/prompts/policies.md"
+
+[tool.uv]
+# The bundled runtime and finance automation plugin intentionally require
+# incompatible cryptography lines and cannot be installed together.
+conflicts = [
+    [
+        { extra = "all" },
+        { extra = "finance-auto" },
+    ],
+    [
+        { extra = "wework-ws" },
+        { extra = "finance-auto" },
+    ],
+]
 
 [tool.ruff]
 line-length = 100

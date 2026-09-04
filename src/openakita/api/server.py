@@ -47,6 +47,7 @@ from .routes import (
     im,
     inbox,
     logs,
+    marketplace,
     mcp,
     memory,
     memory_repair,
@@ -726,6 +727,19 @@ def create_app(
         openapi_tags=tags_metadata,
     )
 
+    from openakita.integrations.marketplace import MarketplaceInstallManager
+
+    marketplace_install_manager = MarketplaceInstallManager()
+    app.state.marketplace_install_manager = marketplace_install_manager
+
+    @app.on_event("startup")
+    async def _start_marketplace_install_reconciliation() -> None:
+        marketplace_install_manager.start()
+
+    @app.on_event("shutdown")
+    async def _stop_marketplace_install_reconciliation() -> None:
+        await marketplace_install_manager.stop()
+
     @app.exception_handler(RequestValidationError)
     async def _validation_error_handler(request, exc: RequestValidationError):
         """Return Pydantic validation errors as a flat string detail
@@ -1155,6 +1169,7 @@ def create_app(
     # P-RC-2 commit P2.8: GET /api/build-info for the frontend
     # stale-bundle banner. Always-mounted, unauthenticated.
     app.include_router(build_info_routes.router)
+    app.include_router(marketplace.router)
     if plugins_routes is not None:
         app.include_router(plugins_routes.router)
 

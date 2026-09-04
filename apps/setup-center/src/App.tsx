@@ -120,6 +120,7 @@ import { ModalOverlay } from "./components/ModalOverlay";
 import { Sidebar } from "./components/Sidebar";
 import { Topbar } from "./components/Topbar";
 import { AppUpdateDialog, UpdateProgressToast } from "./components/AppUpdateDialog";
+import { MarketplaceInstallDialog } from "./components/MarketplaceInstallDialog";
 import { useNotifications } from "./hooks/useNotifications";
 import { notifySuccess, notifyError, notifyLoading, dismissLoading } from "./utils/notify";
 import { Toaster } from "@/components/ui/sonner";
@@ -4886,6 +4887,10 @@ function MainApp() {
 
         <ConfirmDialog dialog={confirmDialog} onClose={() => setConfirmDialog(null)} />
         <Toaster position="top-right" richColors closeButton />
+        <MarketplaceInstallDialog
+          apiBaseUrl={IS_TAURI ? DEFAULT_LOCAL_API_BASE : httpApiBase()}
+          desktopVersion={desktopVersion}
+        />
       </div>
       </EnvFieldContext.Provider>
     );
@@ -5138,6 +5143,7 @@ function MainApp() {
           onRefreshAll={async () => { await refreshAll(); try { await refreshStatus(undefined, undefined, true); } catch {} }}
           onSetTheme={(theme) => setThemePref(theme)}
           themePrefState={themePrefState}
+          desktopVersion={desktopVersion}
           isWeb={IS_WEB || IS_CAPACITOR}
           onLogout={(IS_WEB || IS_CAPACITOR) ? async () => {
             const { logout } = await import("./platform/auth");
@@ -5445,6 +5451,10 @@ function MainApp() {
           onRepairRuntime={repairRuntimeAndRestart}
         />
         <Toaster position="top-right" richColors closeButton />
+        <MarketplaceInstallDialog
+          apiBaseUrl={IS_TAURI ? DEFAULT_LOCAL_API_BASE : httpApiBase()}
+          desktopVersion={desktopVersion}
+        />
 
         {view === "wizard" ? (() => {
           const saveConfig = footerSaveConfig;

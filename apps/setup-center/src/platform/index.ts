@@ -59,6 +59,25 @@ export async function listen<T>(
   return tauriListen<T>(event, handler);
 }
 
+export async function getCurrentDeepLinks(): Promise<string[]> {
+  if (!IS_TAURI) return [];
+  const { getCurrent } = await import("@tauri-apps/plugin-deep-link");
+  return (await getCurrent()) ?? [];
+}
+
+export async function onDeepLinkOpen(handler: (urls: string[]) => void): Promise<() => void> {
+  if (!IS_TAURI) return () => {};
+  const [{ onOpenUrl }, unlistenForwarded] = await Promise.all([
+    import("@tauri-apps/plugin-deep-link"),
+    listen<string>("openakita-deep-link", (event) => handler([event.payload])),
+  ]);
+  const unlistenPlugin = await onOpenUrl(handler);
+  return () => {
+    unlistenPlugin();
+    unlistenForwarded();
+  };
+}
+
 // ---------------------------------------------------------------------------
 // App version
 // ---------------------------------------------------------------------------

@@ -1,4 +1,6 @@
 use crate::prelude::*;
+use tauri::Emitter;
+use tauri_plugin_deep_link::DeepLinkExt;
 
 pub fn run() {
     let args: Vec<String> = std::env::args().collect();
@@ -95,10 +97,16 @@ pub fn run() {
     }
 
     let app = match tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
             // 第二个实例启动时，聚焦已有窗口并退出自身
             show_main_window(app, "single-instance", false);
+            for arg in args {
+                if arg.starts_with("openakita://") {
+                    let _ = app.emit("openakita-deep-link", arg);
+                }
+            }
         }))
+        .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_autostart::init(
             MacosLauncher::LaunchAgent,
             Some(vec!["--background"]),
@@ -112,6 +120,10 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .setup(|app| {
             let result: Result<(), Box<dyn std::error::Error>> = (|| {
+            #[cfg(any(windows, target_os = "linux"))]
+            if cfg!(debug_assertions) {
+                app.deep_link().register_all()?;
+            }
             // ── NSIS 安装后以当前用户执行清理（解决“以管理员运行安装程序”时清错目录的问题） ──
             let args: Vec<String> = std::env::args().collect();
             if let Some(pos) = args.iter().position(|a| a == "--clean-env") {
