@@ -66,6 +66,7 @@ async def test_intent_analyzer_uses_bounded_output_budget():
                     "tool_hints: [File System]\n"
                     "memory_keywords: [logs]\n"
                     "capability_scope: [files, code]\n"
+                    "knowledge_lookup: false\n"
                     "evidence_required: true"
                 )
             )
@@ -110,7 +111,15 @@ class _FakeToolCatalog:
 
 
 async def test_greeting_uses_llm_intent_analysis():
-    brain = _StaticCompilerBrain("intent: chat\ntask_type: other\ngoal: respond to greeting")
+    brain = _StaticCompilerBrain(
+        "intent: chat\n"
+        "task_type: other\n"
+        "goal: respond to greeting\n"
+        "tool_hints: []\n"
+        "memory_keywords: []\n"
+        "capability_scope: [none]\n"
+        "knowledge_lookup: false"
+    )
 
     result = await IntentAnalyzer(brain).analyze("你好")
 
@@ -133,7 +142,15 @@ async def test_intent_analyzer_preserves_compiler_fallback_diagnostics():
     class _FallbackBrain:
         async def compiler_think(self, *args, **kwargs):
             return SimpleNamespace(
-                content="intent: query\ngoal: explain tuples",
+                content=(
+                    "intent: query\n"
+                    "task_type: question\n"
+                    "goal: explain tuples\n"
+                    "tool_hints: []\n"
+                    "memory_keywords: [tuples]\n"
+                    "capability_scope: [none]\n"
+                    "knowledge_lookup: false"
+                ),
                 compiler_source="main_fallback",
                 compiler_fallback_reason="all_disabled",
                 compiler_fallback_detail="提示词编译模型全部被禁用",
@@ -250,7 +267,9 @@ async def test_desktop_screenshot_request_uses_structured_intent_analysis():
 task_type: action
 goal: capture the desktop
 tool_hints: [Desktop]
+memory_keywords: [desktop screenshot]
 capability_scope: [desktop]
+knowledge_lookup: false
 prompt_depth: standard
 memory_scope: none
 requires_tools: true
@@ -277,7 +296,9 @@ async def test_compound_web_and_file_request_keeps_structured_analysis():
 task_type: compound
 goal: query the weather and create query.py
 tool_hints: [Web Search, File System]
+memory_keywords: [weather, query.py]
 capability_scope: [web, files]
+knowledge_lookup: false
 prompt_depth: standard
 memory_scope: relevant
 catalog_scope: [tools]
@@ -302,7 +323,15 @@ suggest_plan: false"""
 
 
 async def test_one_sentence_explanation_skips_tools_without_blocking_model_answer():
-    brain = _StaticCompilerBrain("intent: query\ntask_type: question\ngoal: explain Docker briefly")
+    brain = _StaticCompilerBrain(
+        "intent: query\n"
+        "task_type: question\n"
+        "goal: explain Docker briefly\n"
+        "tool_hints: []\n"
+        "memory_keywords: [Docker]\n"
+        "capability_scope: [none]\n"
+        "knowledge_lookup: false"
+    )
     result = await IntentAnalyzer(brain).analyze("一句话解释 Docker")
 
     assert brain.calls == 1
@@ -484,10 +513,10 @@ def test_main_chat_stable_mode_keeps_small_direct_toolset_across_intents():
     assert agent._last_minimal_toolset is False
 
 
-def test_stable_main_chat_core_has_8_to_15_tools_in_fixed_order():
+def test_stable_main_chat_core_has_bounded_tools_in_fixed_order():
     from openakita.tools.defer_config import STABLE_MAIN_CHAT_CORE_TOOLS
 
-    assert 8 <= len(STABLE_MAIN_CHAT_CORE_TOOLS) <= 15
+    assert 8 <= len(STABLE_MAIN_CHAT_CORE_TOOLS) <= 18
     assert STABLE_MAIN_CHAT_CORE_TOOLS == (
         "run_shell",
         "read_file",
@@ -503,6 +532,9 @@ def test_stable_main_chat_core_has_8_to_15_tools_in_fixed_order():
         "search_memory",
         "add_memory",
         "get_skill_info",
+        "knowledge_list",
+        "knowledge_search",
+        "knowledge_read",
     )
 
 

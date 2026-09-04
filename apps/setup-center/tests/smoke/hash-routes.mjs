@@ -8,6 +8,7 @@ const routes = [
   "#/skills",
   "#/mcp",
   "#/plugins",
+  "#/knowledge",
   "#/scheduler",
   "#/memory",
   "#/identity",

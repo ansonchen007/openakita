@@ -120,6 +120,7 @@ class IntentResult:
     # 二者不再 OR 等价；前者驱动重试/警告，后者驱动 prompt 软提示。
     evidence_required: bool = False
     evidence_recommended: bool = False
+    knowledge_lookup: bool = False
     requires_project_context: bool = False
     risk_level_hint: RiskLevelHint = RiskLevelHint.NONE
     compiler_source: str = ""
@@ -129,12 +130,49 @@ class IntentResult:
 
 INTENT_ANALYZER_MAX_TOKENS = 384
 
+_INTENT_REQUIRED_FIELDS = (
+    "intent",
+    "task_type",
+    "goal",
+    "tool_hints",
+    "memory_keywords",
+    "capability_scope",
+    "knowledge_lookup",
+)
+
+_INTENT_LIST_FIELDS = {
+    "tool_hints",
+    "memory_keywords",
+    "capability_scope",
+    "catalog_scope",
+}
+
+_INTENT_ALLOWED_FIELDS = (
+    set(_INTENT_REQUIRED_FIELDS)
+    | _INTENT_LIST_FIELDS
+    | {
+        "prompt_depth",
+        "memory_scope",
+        "requires_tools",
+        "evidence_required",
+        "requires_project_context",
+        "risk_level_hint",
+        "destructive",
+        "scope",
+        "suggest_plan",
+        "constraints",
+        "inputs",
+        "output_requirements",
+        "risks_or_ambiguities",
+    }
+)
+
 INTENT_ANALYZER_SYSTEM = """\
 你是 Intent Analyzer。分析用户的实际请求，只输出紧凑 YAML（无代码块、无解释）。
 
 intent: task=需实际操作外部系统；query=无工具知识问答；chat=闲聊；follow_up=追问/修改上轮结果；command=/指令。
 task_type: question|action|creation|analysis|reminder|compound|other。
-tool_hints: File System|Browser|Web Search|IM Channel|Desktop|Agent|Organization|Config。
+tool_hints: File System|Browser|Web Search|Knowledge|IM Channel|Desktop|Agent|Organization|Config。
 capability_scope: none|files|web|browser|plugin|skill|mcp|im|desktop|org|code。
 
 每次必须输出：
@@ -144,6 +182,7 @@ goal: <最多80字>
 tool_hints: [<必需的工具类别>]
 memory_keywords: [<最多5个检索词>]
 capability_scope: [<所需能力>]
+knowledge_lookup: <true|false>
 
 仅当值为 true/broad 或需要覆盖默认值时输出：
 evidence_required: true
@@ -162,6 +201,9 @@ tool_hints/capability_scope 推导；destructive=false；scope=narrow。
 原则：
 - 数学/日期/概念/常识是 query；只有实际读写、执行、搜索、发送等外部操作才是 task。
 - 需查 GitHub/issue/网页/日志/当前代码/配置/API/下载/验证时，evidence_required=true。
+- knowledge_lookup=true：请求需查询/概括专业资料，可能来自用户知识库；明确要求联网、实时信息、
+  本地文件、当前代码或一般常识时为 false。按整体语义判断，不做关键词匹配；值为 true 时
+  tool_hints 必须包含 Knowledge。
 - 风险必须按实际后果判断，不得只匹配 add/remove/delete 字样。
 
 示例（只演示格式，必须重新分析实际消息）：
@@ -172,6 +214,7 @@ goal: 解释Python GIL
 tool_hints: []
 memory_keywords: [Python, GIL]
 capability_scope: [none]
+knowledge_lookup: false
 
 问：查福州明天温度并写query.py
 intent: task
@@ -180,18 +223,18 @@ goal: 查天气并写代码
 tool_hints: [Web Search, File System]
 memory_keywords: [福州, 明天天气, query.py]
 capability_scope: [web, files, code]
+knowledge_lookup: false
 evidence_required: true
 
-问：删除项目内所有.bak
-intent: task
-task_type: action
-goal: 删除.bak文件
-tool_hints: [File System]
-memory_keywords: [.bak]
-capability_scope: [files, code]
-destructive: true
-scope: broad
 """
+
+INTENT_ANALYZER_REPAIR_SYSTEM = (
+    INTENT_ANALYZER_SYSTEM
+    + """\
+\n上一次输出未通过格式校验。重新分析原始请求，并严格按上述 YAML 契约输出。
+不要复述分析过程，不要输出代码块，不要省略任何必填字段。
+"""
+)
 
 
 def _strip_thinking_tags(text: str) -> str:
@@ -352,9 +395,44 @@ class IntentAnalyzer:
             )
 
             raw_output = _strip_thinking_tags(response.content).strip() if response.content else ""
-            if not raw_output:
-                logger.warning("[IntentAnalyzer] Empty LLM response, using default")
-                return _make_default(message)
+            valid, validation_error = _validate_intent_yaml(raw_output)
+            if not valid:
+                logger.warning(
+                    "[IntentAnalyzer] Invalid YAML contract (%s), retrying compiler once",
+                    validation_error,
+                )
+                repair_response = await self.brain.compiler_think(
+                    prompt=(
+                        f"原始用户请求：\n{message}\n\n"
+                        f"上一次无效输出：\n{raw_output or '[empty]'}\n\n"
+                        f"校验错误：{validation_error}"
+                    ),
+                    system=INTENT_ANALYZER_REPAIR_SYSTEM,
+                    max_tokens=INTENT_ANALYZER_MAX_TOKENS,
+                )
+                repaired_output = (
+                    _strip_thinking_tags(repair_response.content).strip()
+                    if repair_response.content
+                    else ""
+                )
+                repaired_valid, repaired_error = _validate_intent_yaml(repaired_output)
+                if not repaired_valid:
+                    logger.warning(
+                        "[IntentAnalyzer] Compiler YAML retry failed (%s), using safe default",
+                        repaired_error,
+                    )
+                    fallback = _make_default(message)
+                    fallback.compiler_source = getattr(
+                        repair_response,
+                        "compiler_source",
+                        getattr(response, "compiler_source", ""),
+                    )
+                    fallback.compiler_fallback_reason = "compiler_output_invalid"
+                    fallback.compiler_fallback_detail = repaired_error[:500]
+                    return fallback
+                response = repair_response
+                raw_output = repaired_output
+                logger.info("[IntentAnalyzer] Compiler YAML contract repaired on retry")
 
             logger.info(f"[IntentAnalyzer] Raw output: {raw_output[:200]}")
             result = _parse_intent_output(raw_output, message)
@@ -408,6 +486,117 @@ def _make_default(message: str) -> IntentResult:
     )
 
 
+def _validate_intent_yaml(raw_output: str) -> tuple[bool, str]:
+    """Validate the compiler envelope without inferring values from prose."""
+
+    if not raw_output.strip():
+        return False, "empty_output"
+
+    extracted: dict[str, str] = {}
+    current_list_key = ""
+    for line_number, line in enumerate(raw_output.splitlines(), start=1):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped.startswith("```"):
+            return False, f"code_fence_at_line_{line_number}"
+
+        kv_match = re.match(r"^(\w[\w_]*):\s*(.*)$", stripped)
+        if kv_match:
+            key = kv_match.group(1)
+            if key not in _INTENT_ALLOWED_FIELDS:
+                return False, f"unknown_field:{key}"
+            if key in extracted:
+                return False, f"duplicate_field:{key}"
+            value = kv_match.group(2).strip()
+            extracted[key] = value
+            current_list_key = key if key in _INTENT_LIST_FIELDS and not value else ""
+            continue
+
+        if current_list_key and stripped.startswith("- ") and stripped[2:].strip():
+            extracted[current_list_key] += f"\n{stripped}"
+            continue
+        return False, f"non_yaml_text_at_line_{line_number}"
+
+    missing = [key for key in _INTENT_REQUIRED_FIELDS if key not in extracted]
+    if missing:
+        return False, f"missing_fields:{','.join(missing)}"
+
+    if extracted["intent"].lower() not in {item.value for item in IntentType}:
+        return False, "invalid_enum:intent"
+    if extracted["task_type"].lower() not in {
+        "question",
+        "action",
+        "creation",
+        "analysis",
+        "reminder",
+        "compound",
+        "other",
+    }:
+        return False, "invalid_enum:task_type"
+    if not extracted["goal"] or len(extracted["goal"]) > 80:
+        return False, "invalid_goal"
+    if extracted["knowledge_lookup"].lower() not in {"true", "false"}:
+        return False, "invalid_bool:knowledge_lookup"
+
+    parsed_lists: dict[str, list[str]] = {}
+    for key in ("tool_hints", "memory_keywords", "capability_scope"):
+        value = extracted[key]
+        is_inline = value.startswith("[") and value.endswith("]")
+        is_block = bool(value) and all(
+            part.strip().startswith("- ") for part in value.splitlines() if part.strip()
+        )
+        if not (is_inline or is_block):
+            return False, f"invalid_list:{key}"
+        parsed_lists[key] = _parse_list(value)
+
+    allowed_hints = {
+        "file system",
+        "browser",
+        "web search",
+        "knowledge",
+        "im channel",
+        "desktop",
+        "agent",
+        "organization",
+        "config",
+    }
+    if any(item.lower() not in allowed_hints for item in parsed_lists["tool_hints"]):
+        return False, "invalid_enum:tool_hints"
+    if len(parsed_lists["memory_keywords"]) > 5:
+        return False, "too_many_items:memory_keywords"
+    allowed_capabilities = {item.value for item in CapabilityScope}
+    if any(item.lower() not in allowed_capabilities for item in parsed_lists["capability_scope"]):
+        return False, "invalid_enum:capability_scope"
+
+    optional_enums: dict[str, set[str]] = {
+        "prompt_depth": {item.value for item in PromptDepth},
+        "memory_scope": {item.value for item in MemoryScope},
+        "risk_level_hint": {item.value for item in RiskLevelHint},
+        "scope": {"narrow", "broad"},
+    }
+    for key, allowed in optional_enums.items():
+        if key in extracted and extracted[key].lower() not in allowed:
+            return False, f"invalid_enum:{key}"
+
+    for key in (
+        "requires_tools",
+        "evidence_required",
+        "requires_project_context",
+        "destructive",
+        "suggest_plan",
+    ):
+        if key in extracted and extracted[key].lower() not in {"true", "false"}:
+            return False, f"invalid_bool:{key}"
+
+    if "catalog_scope" in extracted:
+        value = extracted["catalog_scope"]
+        if not (value.startswith("[") and value.endswith("]")):
+            return False, "invalid_list:catalog_scope"
+
+    return True, ""
+
+
 def _parse_intent_output(raw_output: str, message: str) -> IntentResult:
     """Parse YAML output from IntentAnalyzer LLM into IntentResult."""
     lines = raw_output.splitlines()
@@ -422,28 +611,7 @@ def _parse_intent_output(raw_output: str, message: str) -> IntentResult:
             continue
 
         kv_match = re.match(r"^(\w[\w_]*):\s*(.*)", stripped)
-        if kv_match and kv_match.group(1) in (
-            "intent",
-            "task_type",
-            "goal",
-            "tool_hints",
-            "memory_keywords",
-            "capability_scope",
-            "prompt_depth",
-            "memory_scope",
-            "catalog_scope",
-            "requires_tools",
-            "evidence_required",
-            "requires_project_context",
-            "risk_level_hint",
-            "constraints",
-            "inputs",
-            "output_requirements",
-            "risks_or_ambiguities",
-            "destructive",
-            "scope",
-            "suggest_plan",
-        ):
+        if kv_match and kv_match.group(1) in _INTENT_ALLOWED_FIELDS:
             if current_key:
                 extracted[current_key] = "\n".join(current_lines).strip()
             current_key = kv_match.group(1)
@@ -517,6 +685,7 @@ def _parse_intent_output(raw_output: str, message: str) -> IntentResult:
     # 这样规则误判（如把"算我33岁离60岁还几年"识别为外部证据）只影响 prompt 文案，
     # 不再触发 ForceToolCall 重试 + text_replace + OrgRuntime 误判 task_failed。
     evidence_required = llm_evidence_required
+    knowledge_lookup = _parse_bool(extracted.get("knowledge_lookup", ""), default=False)
     rule_evidence = _requires_external_evidence(message)
     evidence_recommended = llm_evidence_required or rule_evidence
     if evidence_required:
@@ -569,6 +738,7 @@ def _parse_intent_output(raw_output: str, message: str) -> IntentResult:
         requires_tools=requires_tools,
         evidence_required=evidence_required,
         evidence_recommended=evidence_recommended,
+        knowledge_lookup=knowledge_lookup,
         requires_project_context=requires_project_context,
         risk_level_hint=risk_level_hint,
     )
@@ -606,7 +776,9 @@ def _parse_intent_output(raw_output: str, message: str) -> IntentResult:
             result.intent.value,
             message[:120],
         )
-        return _make_tool_action_result(message)
+        coerced = _make_tool_action_result(message)
+        coerced.knowledge_lookup = result.knowledge_lookup
+        return coerced
 
     return result
 

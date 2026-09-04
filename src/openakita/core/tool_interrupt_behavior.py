@@ -175,6 +175,12 @@ _INTERRUPT_BEHAVIOR_MAP: dict[str, InterruptBehavior] = {
     "search_memory": "cancel",
     "search_relational_memory": "cancel",
     "trace_memory": "cancel",
+    # ── Knowledge bases ─────────────────────────────────────────
+    # Connector tools only query remote services or return cached
+    # search excerpts; they do not mutate provider-side content.
+    "knowledge_list": "cancel",
+    "knowledge_read": "cancel",
+    "knowledge_search": "cancel",
     # ── Mode / persona / profile ────────────────────────────────
     "get_persona_profile": "cancel",
     "get_user_profile": "cancel",

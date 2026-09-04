@@ -15,6 +15,7 @@ const IMView = lazy(() => import("./views/IMView").then(m => ({ default: m.IMVie
 const TokenStatsView = lazy(() => import("./views/TokenStatsView").then(m => ({ default: m.TokenStatsView })));
 const SkillUsageView = lazy(() => import("./views/SkillUsageView").then(m => ({ default: m.SkillUsageView })));
 const MCPView = lazy(() => import("./views/MCPView").then(m => ({ default: m.MCPView })));
+const KnowledgeBaseView = lazy(() => import("./views/KnowledgeBaseView").then(m => ({ default: m.KnowledgeBaseView })));
 const PluginManagerView = lazy(() => import("./views/PluginManagerView"));
 const PluginAppHost = lazy(() => import("./views/PluginAppHost"));
 const SchedulerView = lazy(() => import("./views/SchedulerView").then(m => ({ default: m.SchedulerView })));
@@ -162,7 +163,7 @@ interface EnvFieldCtx {
 const EnvFieldContext = createContext<EnvFieldCtx | null>(null);
 
 const _HASH_TO_VIEW: Record<string, ViewId> = {
-  "chat": "chat", "im": "im", "skills": "skills", "mcp": "mcp",
+  "chat": "chat", "im": "im", "skills": "skills", "mcp": "mcp", "knowledge": "knowledge",
   "scheduler": "scheduler", "memory": "memory", "status": "status",
   "token-stats": "token_stats", "skill-usage": "skill_usage", "identity": "identity",
   "dashboard": "dashboard", "org-editor": "org_editor",
@@ -4742,6 +4743,9 @@ function MainApp() {
     }
     if (view === "plugins") {
       return <PluginManagerView visible={true} httpApiBase={httpApiBase} />;
+    }
+    if (view === "knowledge") {
+      return <KnowledgeBaseView serviceRunning={serviceStatus?.running ?? false} apiBaseUrl={httpApiBase()} />;
     }
     if (view === "scheduler") {
       return <SchedulerView serviceRunning={serviceStatus?.running ?? false} apiBaseUrl={apiBaseUrl} />;
