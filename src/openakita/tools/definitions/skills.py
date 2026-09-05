@@ -155,14 +155,18 @@ SKILLS_TOOLS = [
     {
         "name": "install_skill",
         "category": "Skills",
-        "description": "Install skill from URL or Git repository to local skills/ directory. When you need to: (1) Add new skill from GitHub, (2) Install SKILL.md from URL. Supports Git repos and single SKILL.md files.",
-        "detail": """从 URL 或 Git 仓库安装技能到本地 skills/ 目录。
+        "description": "Install a complete skill from SkillHub, a Git repository, or a SKILL.md URL. Prefer the canonical skillhub:@namespace/slug locator returned by the marketplace search.",
+        "detail": """从 SkillHub、URL 或 Git 仓库安装技能到本地 skills/ 目录。
 
 **支持的安装源**：
-1. Git 仓库 URL（如 https://github.com/user/repo）
+1. SkillHub 注册表坐标或详情页
+   - `skillhub:@namespace/slug`（推荐，可附加 `?version=1.0.0`）
+   - `https://skillhub.cn/skills/namespace/slug`
+   - 安装完整 ZIP 包，并保留注册表来源、命名空间和版本信息
+2. Git 仓库 URL（如 https://github.com/user/repo）
    - 自动克隆仓库并查找 SKILL.md
    - 支持指定子目录路径
-2. 单个 SKILL.md 文件 URL
+3. 单个 SKILL.md 文件 URL
    - 创建规范目录结构（scripts/, references/, assets/）
 
 **安装后**：
@@ -170,7 +174,10 @@ SKILLS_TOOLS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "source": {"type": "string", "description": "Git 仓库 URL 或 SKILL.md 文件 URL"},
+                "source": {
+                    "type": "string",
+                    "description": "SkillHub 坐标/详情页、Git 仓库 URL 或 SKILL.md 文件 URL",
+                },
                 "name": {"type": "string", "description": "技能名称（可选，自动从 SKILL.md 提取）"},
                 "subdir": {
                     "type": "string",

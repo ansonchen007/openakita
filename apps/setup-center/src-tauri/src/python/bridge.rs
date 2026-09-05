@@ -232,9 +232,12 @@ pub(crate) async fn openakita_uninstall_skill(
 
 /// List marketplace skills.
 #[tauri::command]
-pub(crate) async fn openakita_list_marketplace(venv_dir: String) -> Result<String, String> {
+pub(crate) async fn openakita_list_marketplace(
+    venv_dir: String,
+    query: String,
+) -> Result<String, String> {
     spawn_blocking_result(move || {
-        let args = vec!["list-marketplace"];
+        let args = vec!["list-marketplace", "--query", &query];
         run_python_module_json(&venv_dir, "openakita.setup_center.bridge", &args, &[])
     })
     .await

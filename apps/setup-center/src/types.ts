@@ -591,16 +591,73 @@ export type SkillInfo = {
 };
 
 export type MarketplaceSkill = {
-  id: string;         // e.g. "vercel-labs/agent-skills/vercel-react-best-practices"
-  skillId: string;    // e.g. "vercel-react-best-practices"
-  name: string;
-  description: string;
-  author: string;     // source repo owner
-  url: string;        // install URL: "owner/repo@skill"
-  installs?: number;
-  stars?: number;
-  tags?: string[];
-  installed?: boolean;
+  canonicalId: string;
+  provider: string;
+  coordinate: {
+    namespace?: string | null;
+    slug: string;
+  };
+  display: {
+    name: string;
+    description?: string;
+    descriptionI18n?: Record<string, string>;
+    iconUrl?: string | null;
+  };
+  version?: string | null;
+  publisher?: {
+    name: string;
+    namespace?: string | null;
+  };
+  classification?: {
+    category?: string | null;
+    subcategories?: Array<{ key: string; name: string }>;
+    tags?: string[];
+  };
+  metrics?: {
+    downloads?: number | null;
+    installs?: number | null;
+    stars?: number | null;
+  };
+  trust?: {
+    verified?: boolean;
+    level?: string;
+  };
+  requirements?: {
+    requiresApiKey?: boolean;
+  };
+  source?: {
+    kind: string;
+    registry?: string;
+    upstreamUrl?: string | null;
+    homepageUrl?: string | null;
+  };
+  install: {
+    strategy: "registry-zip" | "git" | "url";
+    locator: string;
+    version?: string | null;
+  };
+};
+
+export type MarketplaceSkillState = {
+  installed: boolean;
+  installedVersion?: string | null;
+  updateAvailable?: boolean;
+};
+
+export type MarketplaceSkillView = MarketplaceSkill & {
+  state: MarketplaceSkillState;
+};
+
+export type MarketplaceResponse = {
+  schemaVersion: number;
+  provider: string;
+  skills: MarketplaceSkill[];
+  pagination: {
+    page: number;
+    pageSize: number;
+    total: number;
+  };
+  error?: string;
 };
 
 // ─── Persona presets ───

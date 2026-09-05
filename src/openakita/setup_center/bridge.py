@@ -1010,10 +1010,13 @@ def list_skills(workspace_dir: str) -> None:
     out = []
     for s in skills:
         skill_path = getattr(s, "skill_path", None)
-        source_url = None
-        if skill_path:
+        source_url = getattr(s, "source_url", None)
+        if skill_path and not source_url:
             try:
-                origin_file = Path(skill_path) / ".openakita-source"
+                source_base = Path(skill_path)
+                if source_base.name == "SKILL.md" or source_base.is_file():
+                    source_base = source_base.parent
+                origin_file = source_base / ".openakita-source"
                 if origin_file.exists():
                     source_url = origin_file.read_text(encoding="utf-8").strip()
             except Exception:
@@ -1198,6 +1201,72 @@ def _validate_zip_members(zf: zipfile.ZipFile) -> None:
             or os.path.isabs(normalized)
         ):
             raise RuntimeError(f"Zip Slip detected: dangerous member '{name}'")
+
+
+_SKILLHUB_ARCHIVE_MAX_BYTES = 50 * 1024 * 1024
+_SKILLHUB_UNCOMPRESSED_MAX_BYTES = 200 * 1024 * 1024
+_SKILLHUB_ARCHIVE_MAX_FILES = 5000
+
+
+def _download_skillhub_skill(source: str, dest_dir: Path) -> dict[str, str | None]:
+    """Download and safely extract a SkillHub registry package."""
+    import io
+    import shutil
+    import tempfile
+    import urllib.request
+    import zipfile
+
+    from openakita.skills.marketplace import (
+        build_skillhub_download_url,
+        parse_skillhub_locator,
+    )
+
+    locator = parse_skillhub_locator(source)
+    request = urllib.request.Request(
+        build_skillhub_download_url(locator),
+        headers={"User-Agent": "OpenAkita-SetupCenter"},
+    )
+    with urllib.request.urlopen(request, timeout=30) as response:
+        content_length = response.headers.get("Content-Length")
+        if content_length and int(content_length) > _SKILLHUB_ARCHIVE_MAX_BYTES:
+            raise ValueError("SkillHub 技能包超过 50 MiB 下载限制")
+        data = response.read(_SKILLHUB_ARCHIVE_MAX_BYTES + 1)
+    if len(data) > _SKILLHUB_ARCHIVE_MAX_BYTES:
+        raise ValueError("SkillHub 技能包超过 50 MiB 下载限制")
+
+    tmp_extract = Path(tempfile.mkdtemp(prefix="openakita_skillhub_"))
+    staging_root = Path(tempfile.mkdtemp(prefix=".openakita-skillhub-", dir=str(dest_dir.parent)))
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as zf:
+            _validate_zip_members(zf)
+            files = [item for item in zf.infolist() if not item.is_dir()]
+            if len(files) > _SKILLHUB_ARCHIVE_MAX_FILES:
+                raise ValueError("SkillHub 技能包文件数量超过安全限制")
+            if sum(item.file_size for item in files) > _SKILLHUB_UNCOMPRESSED_MAX_BYTES:
+                raise ValueError("SkillHub 技能包解压后超过 200 MiB 安全限制")
+            zf.extractall(tmp_extract)
+
+        source_dir = tmp_extract
+        if not (source_dir / "SKILL.md").is_file():
+            children = list(source_dir.iterdir())
+            if len(children) == 1 and children[0].is_dir():
+                source_dir = children[0]
+        if not (source_dir / "SKILL.md").is_file():
+            raise ValueError("SkillHub 技能包根目录缺少 SKILL.md")
+        staged_skill = staging_root / "skill"
+        _copy_skill_tree(source_dir, staged_skill)
+        staged_skill.rename(dest_dir)
+    finally:
+        shutil.rmtree(str(tmp_extract), ignore_errors=True)
+        shutil.rmtree(str(staging_root), ignore_errors=True)
+
+    return {
+        "provider": "skillhub",
+        "locator": locator.canonical_locator,
+        "namespace": locator.namespace,
+        "slug": locator.slug,
+        "version": locator.version,
+    }
 
 
 _PROXY_ENV_KEYS: tuple[str, ...] = (
@@ -1545,21 +1614,33 @@ def _extract_skill_signal(raw: str) -> str:
     return ""
 
 
-def install_skill(workspace_dir: str, url: str, *, category: str | None = None) -> None:
-    """安装技能（从 Git URL、GitHub 简写或本地目录）。
+def install_skill(
+    workspace_dir: str,
+    url: str,
+    *,
+    category: str | None = None,
+    emit_result: bool = True,
+) -> Path:
+    """安装技能（从 SkillHub、Git URL、GitHub 简写或本地目录）。
 
     Args:
         workspace_dir: 工作区根目录
-        url: 技能来源（github:owner/repo / 完整 URL / owner/repo / 本地路径）
+        url: 技能来源（skillhub:@namespace/slug / Git URL / owner/repo / 本地路径）
         category: 可选大类。命中且通过校验时，安装到 ``skills/<category>/<skill_id>/``；
             否则维持旧行为安装到 ``skills/<skill_id>/``（顶层平铺）。
     """
     url = _extract_skill_signal(url)
     if not url:
         raise ValueError("请输入有效的技能地址，如 owner/repo 或 Git URL")
+    from openakita.skills.marketplace import normalize_skillhub_source
+
+    skillhub_source = normalize_skillhub_source(url)
+    if skillhub_source:
+        url = skillhub_source
 
     root_skills_dir = _resolve_skills_dir(workspace_dir)
     root_skills_dir.mkdir(parents=True, exist_ok=True)
+    origin_metadata: dict[str, str | None] | None = None
 
     # 校验 category 并解析最终落盘根。校验失败时退化为顶层安装并向 stderr
     # 写一行提示，**不污染 stdout 的 JSON 协议**（CLI 与 API 都按行解析 stdout）。
@@ -1577,7 +1658,22 @@ def install_skill(workspace_dir: str, url: str, *, category: str | None = None) 
             sys.stderr.write(f"[install_skill] 分类校验异常 {category!r}: {ce}，已安装到顶层\n")
             skills_dir = root_skills_dir
 
-    if url.startswith("github:"):
+    if url.startswith("skillhub:"):
+        from openakita.skills.marketplace import parse_skillhub_locator
+
+        locator = parse_skillhub_locator(url)
+        source_locator = locator.canonical_locator
+        skill_name = _sanitize_skill_dir_name(locator.slug)
+        target = skills_dir / skill_name
+        if target.exists() and _is_valid_skill_dir(target):
+            if _read_skill_source(target) != source_locator and locator.namespace:
+                skill_name = _sanitize_skill_dir_name(f"{locator.namespace}-{locator.slug}")
+                target = skills_dir / skill_name
+        _ensure_target_available(target, source_locator)
+        origin_metadata = _download_skillhub_skill(url, target)
+        url = source_locator
+
+    elif url.startswith("github:"):
         # github:user/repo/path -> clone from GitHub
         parts = url.replace("github:", "").split("/")
         if len(parts) < 2:
@@ -1665,8 +1761,9 @@ def install_skill(workspace_dir: str, url: str, *, category: str | None = None) 
                 origin_file.write_text(url, encoding="utf-8")
             except Exception:
                 pass
-            _json_print({"status": "ok", "skill_dir": str(target), "source": "platform-cache"})
-            return
+            if emit_result:
+                _json_print({"status": "ok", "skill_dir": str(target), "source": "platform-cache"})
+            return target
         # Cache downloads may leave a partial directory if interrupted or locked.
         _ensure_target_available(target, url)
 
@@ -1726,10 +1823,17 @@ def install_skill(workspace_dir: str, url: str, *, category: str | None = None) 
     try:
         origin_file = target / ".openakita-source"
         origin_file.write_text(url, encoding="utf-8")
+        if origin_metadata:
+            (target / ".openakita-origin.json").write_text(
+                json.dumps(origin_metadata, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
     except Exception:
         pass
 
-    _json_print({"status": "ok", "skill_dir": str(target)})
+    if emit_result:
+        _json_print({"status": "ok", "skill_dir": str(target)})
+    return target
 
 
 def uninstall_skill(workspace_dir: str, skill_name: str) -> None:
@@ -1760,45 +1864,31 @@ def uninstall_skill(workspace_dir: str, skill_name: str) -> None:
     _json_print({"status": "ok", "removed": skill_name})
 
 
-def list_marketplace() -> None:
-    """列出市场可用技能（从注册表或 GitHub）"""
-    # TODO: 从真实的注册表 API 获取
-    # 暂返回硬编码的示例列表
-    marketplace = [
+def list_marketplace(query: str = "agent", page: int = 1, page_size: int = 20) -> None:
+    """Search SkillHub and emit the provider-neutral marketplace model."""
+    import urllib.parse
+    import urllib.request
+
+    from openakita.skills.marketplace import SKILLHUB_SKILLS_API, normalize_skillhub_response
+
+    page = max(1, page)
+    page_size = min(100, max(1, page_size))
+    params = urllib.parse.urlencode(
         {
-            "name": "web-search",
-            "description": "使用 Serper/Google 进行网络搜索",
-            "author": "openakita",
-            "url": "github:openakita/skills/web-search",
-            "stars": 42,
-            "tags": ["搜索", "网络"],
-        },
-        {
-            "name": "code-interpreter",
-            "description": "Python 代码解释器，支持数据分析和可视化",
-            "author": "openakita",
-            "url": "github:openakita/skills/code-interpreter",
-            "stars": 38,
-            "tags": ["代码", "数据分析"],
-        },
-        {
-            "name": "browser-use",
-            "description": "浏览器自动化，支持网页操作和数据抓取",
-            "author": "openakita",
-            "url": "github:openakita/skills/browser-use",
-            "stars": 25,
-            "tags": ["浏览器", "自动化"],
-        },
-        {
-            "name": "image-gen",
-            "description": "AI 图片生成，支持 DALL-E / Stable Diffusion",
-            "author": "openakita",
-            "url": "github:openakita/skills/image-gen",
-            "stars": 19,
-            "tags": ["图片", "生成"],
-        },
-    ]
-    _json_print(marketplace)
+            "keyword": query.strip(),
+            "page": page,
+            "pageSize": page_size,
+            "sortBy": "downloads",
+            "order": "desc",
+        }
+    )
+    request = urllib.request.Request(
+        f"{SKILLHUB_SKILLS_API}?{params}",
+        headers={"User-Agent": "OpenAkita-SetupCenter"},
+    )
+    with urllib.request.urlopen(request, timeout=15) as response:
+        payload = json.loads(response.read().decode("utf-8"))
+    _json_print(normalize_skillhub_response(payload, page=page, page_size=page_size))
 
 
 def get_skill_config(workspace_dir: str, skill_name: str) -> None:
@@ -1858,7 +1948,10 @@ def main(argv: list[str] | None = None) -> None:
     p_uninst.add_argument("--workspace-dir", required=True, help="工作区目录")
     p_uninst.add_argument("--skill-name", required=True, help="技能名称")
 
-    sub.add_parser("list-marketplace", help="列出市场可用技能（JSON）")
+    p_market = sub.add_parser("list-marketplace", help="搜索市场可用技能（JSON）")
+    p_market.add_argument("--query", default="agent", help="搜索关键词")
+    p_market.add_argument("--page", type=int, default=1, help="结果页码")
+    p_market.add_argument("--page-size", type=int, default=20, help="每页结果数")
 
     p_cfg = sub.add_parser("get-skill-config", help="获取技能配置 schema（JSON）")
     p_cfg.add_argument("--workspace-dir", required=True, help="工作区目录")
@@ -1953,7 +2046,7 @@ def main(argv: list[str] | None = None) -> None:
         return
 
     if args.cmd == "list-marketplace":
-        list_marketplace()
+        list_marketplace(query=args.query, page=args.page, page_size=args.page_size)
         return
 
     if args.cmd == "get-skill-config":

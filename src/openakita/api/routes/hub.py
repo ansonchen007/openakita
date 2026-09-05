@@ -695,7 +695,7 @@ async def hub_skill_detail(skill_id: str):
             detail=_hub_unavailable_detail(
                 "skill_store",
                 "远程 Skill Store 暂不可用。",
-                "请稍后重试，或改用技能管理中的本地/skills.sh 安装方式。",
+                "请稍后重试，或改用技能管理中的本地/SkillHub 安装方式。",
             ),
         )
     finally:
@@ -715,7 +715,7 @@ async def hub_install_skill(request: Request, skill_id: str):
             detail=_hub_unavailable_detail(
                 "skill_store",
                 "远程 Skill Store 暂不可用，无法安装。",
-                "可在「技能管理 → 浏览市场」通过 skills.sh 安装，或使用 install_skill 从 GitHub 安装。",
+                "可在「技能管理 → 浏览市场」通过 SkillHub 安装，或使用 install_skill 从 GitHub 安装。",
             ),
         )
 
