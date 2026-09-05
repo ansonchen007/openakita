@@ -14,10 +14,7 @@
   ],
   "recent_messages": null,
   "expected_guard_passed": {
-    "source_tag": true,
     "tool_failure_ack": false,
-    "unbacked_action": false,
-    "recap_context": true,
     "waiting_for_user": true,
     "recoverable_tool_issue": true
   }

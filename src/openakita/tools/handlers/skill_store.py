@@ -84,7 +84,7 @@ class SkillStoreHandler:
                 f"💡 远程市场暂不可用，但你仍可以：\n"
                 f"- 使用 `list_skills` 查看已安装的本地技能\n"
                 f"- 使用 `install_skill` 从 GitHub 直接安装技能\n"
-                f"- 在 Setup Center「技能管理 → 浏览市场」从 skills.sh 搜索安装"
+                f"- 在 Setup Center「技能管理 → 浏览市场」从 SkillHub 搜索安装"
             )
 
         skills = result.get("skills", result.get("data", []))

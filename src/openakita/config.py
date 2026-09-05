@@ -1102,13 +1102,12 @@ class Settings(BaseSettings):
         ),
     )
     orgs_supervisor_llm_endpoint: str = Field(
-        default="dashscope-qwen3.5-plus-nothinking",
+        default="auto",
         description=(
-            "RC-5 S3 编排大脑专用 LLM 端点名。灰度路径构造 "
-            "GatewaySupervisorLLMClient 时锁定该端点（no-thinking 档，降噪降本 + "
-            "提升 progress_ledger JSON 首解析率）。该端点不存在时安全回退默认路由 "
-            "+ enable_thinking=False，绝不阻断 submit。复用 DASHSCOPE_API_KEY，"
-            "不引入新 key。"
+            "组织编排大脑使用的 LLM 端点名。'auto' 会在每条新命令开始时选择"
+            "当前工作区优先级最高的健康文本端点并锁定；填写具体端点名时严格使用"
+            "该端点，端点不存在、停用或不可用都会返回明确配置错误。Supervisor "
+            "请求始终传入 enable_thinking=False，不依赖端点命名约定。"
         ),
     )
     # v22 P1: Supervisor hard ceiling + OrgCommandService reconcile loop.

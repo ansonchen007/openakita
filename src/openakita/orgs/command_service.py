@@ -178,12 +178,15 @@ def delivery_language_directive(text: str) -> str:
 def _project_manifest_file_attachments(
     delivery_manifest: dict[str, Any] | None,
     artifact_records: tuple[Any, ...],
+    *,
+    root_artifact_path: str | None = None,
 ) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
     """Hydrate declared deliverables with their runtime-registered local files.
 
     Nodes commonly submit only ``asset_ids`` / ``task_ids`` in the final
     manifest. The artifact ledger is the authoritative mapping from those IDs
-    to downloaded files, so terminal consumers should not need to repeat that
+    to downloaded files, while ``root_artifact_path`` is the runtime-designated
+    final root report. Terminal consumers should not need to repeat either
     lookup independently.
     """
     if delivery_manifest is None:
@@ -193,6 +196,46 @@ def _project_manifest_file_attachments(
     raw_artifacts = delivery_manifest.get("artifacts")
     if not isinstance(raw_artifacts, list):
         return projected, []
+
+    working_artifacts = list(raw_artifacts)
+    root_target_index: int | None = None
+    root_artifact_path = str(root_artifact_path or "").strip() or None
+    if root_artifact_path is not None:
+        root_key = root_artifact_path.lower().replace("\\", "/")
+        preferred_kinds = ("text", "document")
+        for index, raw_artifact in enumerate(working_artifacts):
+            if not isinstance(raw_artifact, dict):
+                continue
+            declared_paths = raw_artifact.get("paths")
+            if isinstance(declared_paths, list) and any(
+                str(path).strip().lower().replace("\\", "/") == root_key
+                for path in declared_paths
+            ):
+                root_target_index = index
+                break
+        if root_target_index is None:
+            for preferred_kind in preferred_kinds:
+                for index in range(len(working_artifacts) - 1, -1, -1):
+                    raw_artifact = working_artifacts[index]
+                    if not isinstance(raw_artifact, dict):
+                        continue
+                    kind = str(raw_artifact.get("kind") or "").strip().lower()
+                    status = str(raw_artifact.get("status") or "ready").strip().lower()
+                    if kind == preferred_kind and status == "ready":
+                        root_target_index = index
+                        break
+                if root_target_index is not None:
+                    break
+        if root_target_index is None:
+            working_artifacts.append(
+                {
+                    "kind": "text",
+                    "status": "ready",
+                    "name": Path(root_artifact_path).name,
+                    "paths": [],
+                }
+            )
+            root_target_index = len(working_artifacts) - 1
 
     attachments: list[dict[str, Any]] = []
     seen_paths: set[str] = set()
@@ -204,7 +247,7 @@ def _project_manifest_file_attachments(
             return []
         return [str(value).strip() for value in values if str(value).strip()]
 
-    for raw_artifact in raw_artifacts:
+    for index, raw_artifact in enumerate(working_artifacts):
         if not isinstance(raw_artifact, dict):
             projected_artifacts.append(raw_artifact)
             continue
@@ -214,6 +257,8 @@ def _project_manifest_file_attachments(
         asset_ids = set(string_values(artifact.get("asset_ids")))
         task_ids = set(string_values(artifact.get("task_ids")))
         paths = string_values(artifact.get("paths"))
+        if index == root_target_index and root_artifact_path is not None:
+            paths.append(root_artifact_path)
 
         for record in artifact_records:
             record_kinds = {str(value).strip().lower() for value in record.asset_kinds}
@@ -1777,7 +1822,8 @@ class OrgCommandService:
         custom ``llm_client_provider`` can be injected for tests; otherwise we
         wrap the process-shared :func:`openakita.llm.client.get_default_client`
         in :class:`~openakita.runtime.llm_supervisor_client.GatewaySupervisorLLMClient`,
-        locking the no-thinking endpoint from settings.
+        resolving and locking the configured Supervisor endpoint for this
+        command. ``auto`` selects from the latest shared-client snapshot.
         """
         try:
             if self._llm_client_provider is not None:
@@ -2888,6 +2934,25 @@ class OrgCommandService:
             return None
         return body[:12000] if body else None
 
+    def _root_final_artifact_path(self, command_id: str, root_node_id: str) -> str | None:
+        """Return the existing final artifact recorded for this command's root."""
+        store = getattr(self._runtime, "_root_final_artifact", None)
+        if not isinstance(store, dict):
+            return None
+        record = store.get(command_id)
+        if not isinstance(record, (list, tuple)) or len(record) != 2:
+            return None
+        node_id, raw_path = record
+        if str(node_id) != root_node_id:
+            return None
+        file_path = str(raw_path or "").strip()
+        if not file_path:
+            return None
+        try:
+            return file_path if Path(file_path).is_file() else None
+        except OSError:
+            return None
+
     def _degraded_reason(self, command_id: str, outcome_value: str | None) -> str:
         """Human/machine reason a delivered command hit a limit (test16).
 
@@ -2933,6 +2998,9 @@ class OrgCommandService:
         delivery_manifest = getattr(outcome, "delivery_manifest", None)
         if not isinstance(delivery_manifest, dict):
             delivery_manifest = None
+        command = self._commands.get(command_id, {})
+        org_id = str(command.get("org_id") or "")
+        root_node_id = str(command.get("root_node_id") or "")
         artifact_records: tuple[Any, ...] = ()
         manifest_media_failures: list[dict[str, Any]] = []
         if delivery_manifest is not None:
@@ -2943,9 +3011,6 @@ class OrgCommandService:
                 validate_manifest_media_delivery,
             )
 
-            command = self._commands.get(command_id, {})
-            org_id = str(command.get("org_id") or "")
-            root_node_id = str(command.get("root_node_id") or "")
             artifact_records = artifact_ledger.get(org_id, command_id)
             try:
                 reflected_manifest = DeliveryManifest.from_mapping(
@@ -2969,9 +3034,18 @@ class OrgCommandService:
                     }
                 ]
 
+        root_artifact_path = None
+        if (
+            delivery_manifest is not None
+            and delivery_manifest.get("state") == "complete"
+            and delivery_manifest.get("final") is True
+        ):
+            root_artifact_path = self._root_final_artifact_path(command_id, root_node_id)
+
         delivery_manifest, file_attachments = _project_manifest_file_attachments(
             delivery_manifest,
             artifact_records,
+            root_artifact_path=root_artifact_path,
         )
 
         # test16 semantic root-cause: OUT_OF_TURNS / REPLAN_BUDGET_EXHAUSTED /
@@ -3021,7 +3095,18 @@ class OrgCommandService:
         elif outcome_value == FinalOutcome.CANCELLED.value:
             status, phase, error = "cancelled", "cancelled", None
         elif outcome_value in _limit_exits:
-            degraded_reason = self._degraded_reason(command_id, outcome_value)
+            # A normal FAILED outcome can now describe a structural supervisor
+            # endpoint error (auth, model missing, incompatible protocol). It
+            # is not a budget degradation. Only actual budget verdicts or a
+            # watchdog-stamped FAILED outcome receive ``degraded_reason``.
+            cancelled_by = (self._command_outcomes.get(command_id) or {}).get(
+                "cancelled_by"
+            )
+            if outcome_value != FinalOutcome.FAILED.value or cancelled_by in {
+                "hard_ceiling",
+                "soft_ceiling",
+            }:
+                degraded_reason = self._degraded_reason(command_id, outcome_value)
             if root_final_present:
                 # 交付完整 + 撞上限 -> completed, with a timeout note.
                 status, phase, error = "done", "partial", None

@@ -1097,9 +1097,9 @@ jobs:
 
           $organizationId = "30d23f0d-92e9-4732-b944-3d9e62c8ef45"
           $projectSlug = "openakita"
-          $policySlug = "test-signing"
+          $policySlug = "release-signing"
           $artifactConfigurationSlug = "initial"
-          $certificateSlug = "test_certificate_2026"
+          $certificateSlug = "release_certificate_2026"
           $baseUrl = "https://app.signpath.io/api/v1/$organizationId"
           $headers = @{ Authorization = "Bearer $env:SIGNPATH_API_TOKEN" }
 
@@ -1131,9 +1131,9 @@ jobs:
 
           Write-Host "SignPath configuration is present."
           Write-Host "Project slug: openakita"
-          Write-Host "Signing policy slug: test-signing"
+          Write-Host "Signing policy slug: release-signing"
           Write-Host "Artifact configuration slug: initial"
-          Write-Host "Certificate slug in SignPath: test_certificate_2026"
+          Write-Host "Certificate slug in SignPath: release_certificate_2026"
 
       - name: Sign Windows installer with SignPath
         if: runner.os == 'Windows'
@@ -1143,7 +1143,7 @@ jobs:
           api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
           organization-id: 30d23f0d-92e9-4732-b944-3d9e62c8ef45
           project-slug: openakita
-          signing-policy-slug: test-signing
+          signing-policy-slug: release-signing
           artifact-configuration-slug: initial
           github-artifact-id: ${{ steps.upload_unsigned_windows_installer.outputs.artifact-id }}
           wait-for-completion: true

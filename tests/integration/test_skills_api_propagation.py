@@ -93,7 +93,8 @@ class TestInstallRoute:
         _, agent = app_with_fake_agent
 
         # 桥接到 stub install（不跑真实 git clone）
-        def fake_install(workspace, url, *, category=None):
+        def fake_install(workspace, url, *, category=None, emit_result=True):
+            assert emit_result is False
             skill_dir = tmp_path / "workspaces" / "default" / "skills" / "my-new-skill"
             skill_dir.mkdir(parents=True, exist_ok=True)
             (skill_dir / "SKILL.md").write_text(

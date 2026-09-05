@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { safeFetch } from "../providers";
-import { showInFolder, downloadFile } from "../platform";
+import { showInFolder, downloadFile, openFileDialog } from "../platform";
 import { IconCode, IconPlug, IconFileText2, IconPackage, IconBook, IconGear, IconShield, IconFolderOpen, IconDownload, IconTerminal, IconHeartPulse, IconRefresh } from "../icons";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
@@ -577,6 +577,18 @@ export default function PluginManagerView({ visible, httpApiBase }: Props) {
     setInstallConfirmOpen(true);
   };
 
+  const selectInstallFolder = async () => {
+    try {
+      const selected = await openFileDialog({
+        directory: true,
+        title: t("plugins.selectInstallFolder"),
+      });
+      if (selected) setInstallUrl(selected);
+    } catch (e: any) {
+      showToast(e?.message || t("plugins.selectInstallFolderFail"), "err");
+    }
+  };
+
   const handleInstall = async () => {
     const source = installUrl.trim();
     if (!source) return;
@@ -859,15 +871,29 @@ export default function PluginManagerView({ visible, httpApiBase }: Props) {
         </CardHeader>
         <CardContent className="space-y-4 px-6 py-4">
           <div className="flex flex-col gap-3 lg:flex-row">
-            <Input
-              type="text"
-              placeholder={t("plugins.installPlaceholder")}
-              value={installUrl}
-              onChange={(e) => setInstallUrl(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && !installBtnDisabled && requestInstall()}
-              disabled={notAvailable}
-              className="flex-1"
-            />
+            <div className="relative flex-1">
+              <Input
+                type="text"
+                placeholder={t("plugins.installPlaceholder")}
+                value={installUrl}
+                onChange={(e) => setInstallUrl(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && !installBtnDisabled && requestInstall()}
+                disabled={notAvailable}
+                className="pr-11"
+              />
+              <Button
+                type="button"
+                size="icon-sm"
+                variant="ghost"
+                title={t("plugins.browseInstallFolder")}
+                aria-label={t("plugins.browseInstallFolder")}
+                disabled={notAvailable || installing}
+                className="absolute right-1 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                onClick={selectInstallFolder}
+              >
+                <IconFolderOpen size={16} />
+              </Button>
+            </div>
             <div className="flex flex-wrap gap-2">
               <Button onClick={requestInstall} disabled={installBtnDisabled}>
                 {installing ? t("plugins.installing") : t("plugins.install")}

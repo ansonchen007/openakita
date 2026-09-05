@@ -15,6 +15,7 @@ const IMView = lazy(() => import("./views/IMView").then(m => ({ default: m.IMVie
 const TokenStatsView = lazy(() => import("./views/TokenStatsView").then(m => ({ default: m.TokenStatsView })));
 const SkillUsageView = lazy(() => import("./views/SkillUsageView").then(m => ({ default: m.SkillUsageView })));
 const MCPView = lazy(() => import("./views/MCPView").then(m => ({ default: m.MCPView })));
+const KnowledgeBaseView = lazy(() => import("./views/KnowledgeBaseView").then(m => ({ default: m.KnowledgeBaseView })));
 const PluginManagerView = lazy(() => import("./views/PluginManagerView"));
 const PluginAppHost = lazy(() => import("./views/PluginAppHost"));
 const SchedulerView = lazy(() => import("./views/SchedulerView").then(m => ({ default: m.SchedulerView })));
@@ -162,7 +163,7 @@ interface EnvFieldCtx {
 const EnvFieldContext = createContext<EnvFieldCtx | null>(null);
 
 const _HASH_TO_VIEW: Record<string, ViewId> = {
-  "chat": "chat", "im": "im", "skills": "skills", "mcp": "mcp",
+  "chat": "chat", "im": "im", "skills": "skills", "mcp": "mcp", "knowledge": "knowledge",
   "scheduler": "scheduler", "memory": "memory", "status": "status",
   "token-stats": "token_stats", "skill-usage": "skill_usage", "identity": "identity",
   "dashboard": "dashboard", "org-editor": "org_editor",
@@ -2384,6 +2385,7 @@ function MainApp() {
           "LOG_DIR", "LOG_FILE_PREFIX", "LOG_MAX_SIZE_MB", "LOG_BACKUP_COUNT",
           "LOG_RETENTION_DAYS", "LOG_FORMAT", "LOG_TO_CONSOLE", "LOG_TO_FILE",
           "DESKTOP_NOTIFY_ENABLED", "DESKTOP_NOTIFY_SOUND",
+          "ORGS_SUPERVISOR_BRAIN_MODE", "ORGS_SUPERVISOR_LLM_ENDPOINT",
           "SESSION_STORAGE_PATH",
           "API_HOST", "TRUST_PROXY",
           "BACKUP_ENABLED", "BACKUP_PATH", "BACKUP_CRON",
@@ -3404,6 +3406,7 @@ function MainApp() {
         storeVisible={storeVisible}
         setStoreVisible={setStoreVisible}
         desktopVersion={desktopVersion}
+        endpointSummary={endpointSummary}
         shouldUseHttpApi={shouldUseHttpApi}
         httpApiBase={httpApiBase}
         backendBootPhase={backendBootPhase}
@@ -4750,6 +4753,9 @@ function MainApp() {
     }
     if (view === "plugins") {
       return <PluginManagerView visible={true} httpApiBase={httpApiBase} />;
+    }
+    if (view === "knowledge") {
+      return <KnowledgeBaseView serviceRunning={serviceStatus?.running ?? false} apiBaseUrl={httpApiBase()} />;
     }
     if (view === "scheduler") {
       return <SchedulerView serviceRunning={serviceStatus?.running ?? false} apiBaseUrl={apiBaseUrl} />;

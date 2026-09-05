@@ -124,22 +124,21 @@ def test_guard_evaluation_parity(fixture: dict) -> None:
 
 
 def test_fixtures_include_non_trivial_divergence() -> None:
-    """N9 (G-RC-5 P-RC-5 audit) -- at least five fixtures MUST flip a guard.
+    """The fixture set must exercise every remaining rejecting guard.
 
     The original P-RC-5 fixture set was dominated by happy-path Decision
     routing cases where every guard returned ``passed=True``. That made
     ``test_guard_evaluation_parity`` a structural identity test on the v2
     routing table without ever exercising the actual guard divergence
-    branches. The four guards we expect to flip in practice are
-    ``source_tag``, ``tool_failure_ack``, ``unbacked_action``, and
-    ``waiting_for_user`` -- this test pins that at least five fixtures
-    flip *some* guard, with at least one fixture per guard kind.
+    branches. The remaining guards that can reject a response are
+    ``tool_failure_ack`` and ``waiting_for_user``. Execution state is no
+    longer inferred from source tags or completion wording.
     """
     fixtures = _load_fixtures()
     assert len(fixtures) >= 10, f"only {len(fixtures)} fixtures present"
     flipping = [f for f in fixtures if not all(f["expected_guard_passed"].values())]
-    assert len(flipping) >= 5, (
-        f"only {len(flipping)} non-trivial fixtures; need >= 5 with a "
+    assert len(flipping) >= 3, (
+        f"only {len(flipping)} non-trivial fixtures; need >= 3 with a "
         f"failing guard to make the parity sweep meaningful"
     )
     # Per-guard coverage: every interesting guard must flip in at least one fixture.
@@ -148,7 +147,7 @@ def test_fixtures_include_non_trivial_divergence() -> None:
         for k, v in f["expected_guard_passed"].items():
             if not v:
                 flipping_guards.add(k)
-    for required in ("source_tag", "tool_failure_ack", "unbacked_action", "waiting_for_user"):
+    for required in ("tool_failure_ack", "waiting_for_user"):
         assert required in flipping_guards, (
             f"no fixture exercises guard {required!r}; please add one"
         )

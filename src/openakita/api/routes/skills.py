@@ -28,13 +28,17 @@ from pathlib import Path
 import httpx
 from fastapi import APIRouter, HTTPException, Request
 
+from openakita.skills.marketplace import (
+    MARKETPLACE_SCHEMA_VERSION,
+    SKILLHUB_PROVIDER,
+    SKILLHUB_SKILLS_API,
+    normalize_skillhub_response,
+)
+
 logger = logging.getLogger(__name__)
 
 
 router = APIRouter()
-
-SKILLS_SH_API = "https://skills.sh/api/search"
-
 
 _skills_cache: dict | None = None
 """Module-level cache for GET /api/skills response.
@@ -774,7 +778,10 @@ async def update_skill_config(request: Request):
 async def install_skill(request: Request):
     """安装技能（远程模式替代 Tauri openakita_install_skill 命令）。
 
-    POST body: { "url": "github:user/repo/skill", "category": "Browser" (可选) }
+    POST body supports either a legacy source URL or a normalized marketplace descriptor:
+      { "url": "github:user/repo/skill", "category": "Browser" (optional) }
+      { "install": { "strategy": "registry-zip", "locator": "skillhub:@ns/skill",
+        "version": "1.0.0" }, "category": "Browser" (optional) }
 
     完成后会：
       1. 把新安装 skill_id upsert 到 data/skills.json 的 external_allowlist
@@ -788,9 +795,19 @@ async def install_skill(request: Request):
     from openakita.skills.allowlist_io import upsert_skill_ids
 
     body = await request.json()
-    url = body.get("url", "").strip()
+    install_descriptor = body.get("install")
+    if isinstance(install_descriptor, dict):
+        from openakita.skills.marketplace import resolve_marketplace_install_source
+
+        try:
+            url = resolve_marketplace_install_source(install_descriptor)
+        except ValueError as e:
+            return {"error": str(e), "error_code": "invalid_marketplace_install"}
+    else:
+        url_value = body.get("url", "")
+        url = url_value.strip() if isinstance(url_value, str) else ""
     if not url:
-        return {"error": "url is required"}
+        return {"error": "url or install is required"}
     category_raw = body.get("category")
     category = (
         str(category_raw).strip()
@@ -809,7 +826,13 @@ async def install_skill(request: Request):
     from openakita.setup_center.bridge import install_skill as _install_skill
 
     try:
-        await asyncio.to_thread(_install_skill, workspace_dir, url, category=category)
+        await asyncio.to_thread(
+            _install_skill,
+            workspace_dir,
+            url,
+            category=category,
+            emit_result=False,
+        )
     except SkillInstallError as e:
         logger.error("Skill install failed (%s): %s", e.code, e.message, exc_info=True)
         return {"error": e.message, "error_code": e.code}
@@ -1169,12 +1192,15 @@ async def update_skill_content(skill_name: str, request: Request):
 
 
 @router.get("/api/skills/marketplace")
-async def search_marketplace(q: str = "agent"):
-    """Proxy to skills.sh search API (bypasses CORS for desktop app)."""
+async def search_marketplace(q: str = "agent", page: int = 1, page_size: int = 20):
+    """Search SkillHub and return OpenAkita's provider-neutral model."""
     from openakita.llm.providers.proxy_utils import (
         get_httpx_transport,
         get_proxy_config,
     )
+
+    page = max(1, page)
+    page_size = min(100, max(1, page_size))
 
     try:
         client_kwargs: dict = {
@@ -1192,12 +1218,27 @@ async def search_marketplace(q: str = "agent"):
             client_kwargs["transport"] = transport
 
         async with httpx.AsyncClient(**client_kwargs) as client:
-            resp = await client.get(SKILLS_SH_API, params={"q": q})
+            resp = await client.get(
+                SKILLHUB_SKILLS_API,
+                params={
+                    "keyword": q.strip(),
+                    "page": page,
+                    "pageSize": page_size,
+                    "sortBy": "downloads",
+                    "order": "desc",
+                },
+            )
             resp.raise_for_status()
-            return resp.json()
+            return normalize_skillhub_response(resp.json(), page=page, page_size=page_size)
     except Exception as e:
-        logger.warning("skills.sh API error: %s", e)
-        return {"skills": [], "count": 0, "error": str(e)}
+        logger.warning("SkillHub API error: %s", e)
+        return {
+            "schemaVersion": MARKETPLACE_SCHEMA_VERSION,
+            "provider": SKILLHUB_PROVIDER,
+            "skills": [],
+            "pagination": {"page": page, "pageSize": page_size, "total": 0},
+            "error": str(e),
+        }
 
 
 # ──────────────────────────────────────────────────────────────────────

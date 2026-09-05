@@ -353,3 +353,43 @@ async def test_cancel_all_for_org_cancels_every_supervisor() -> None:
         terminal = await asyncio.wait_for(queues[cid].get(), timeout=0.5)
         assert terminal["type"] == "org_command_done"
         assert terminal["error"] == "组织已停止，当前任务已取消。"
+
+
+@pytest.mark.asyncio
+async def test_failed_supervisor_reason_is_published_to_user() -> None:
+    failure_reason = (
+        "Supervisor 指定的编排端点或模型不可用（HTTP 404）：target model not found"
+    )
+
+    class _ExplicitFailureSupervisor(_FakeSupervisor):
+        async def run(self) -> SupervisorOutcome:
+            return SupervisorOutcome(
+                outcome=FinalOutcome.FAILED,
+                final_message=failure_reason,
+                final_checkpoint_id=self.last_checkpoint_id,
+                n_turns=0,
+                n_replans=0,
+                reason=failure_reason,
+            )
+
+    svc, _used = _make_service(supervisors=[_ExplicitFailureSupervisor()])
+    submitted = await svc.submit(OrgCommandRequest(org_id="o1", content="run"))
+    command_id = submitted["command_id"]
+    summary = svc.subscribe_summary(
+        command_id,
+        surface="desktop_chat",
+        target="chat-endpoint-failure",
+    )
+    task = svc._inflight_tasks.get(command_id)
+    assert task is not None
+
+    await asyncio.wait_for(task, timeout=1.0)
+
+    status = svc.get_status("o1", command_id)
+    assert status is not None
+    assert status["status"] == "error"
+    assert status["error"] == failure_reason
+    assert "degraded_reason" not in status["result"]
+    terminal = await asyncio.wait_for(summary.get(), timeout=0.5)
+    assert terminal["type"] == "org_command_done"
+    assert terminal["error"] == failure_reason

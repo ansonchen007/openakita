@@ -20,13 +20,12 @@ Design notes
 * **No-thinking endpoint lock (cost + JSON stability).** The orchestration
   prompts want pure JSON; thinking-mode chain-of-thought prefixes pollute the
   JSON head and trigger parse retries (see ``_rc5_biz/sprint_s1/s1_report.md``
-  §3). We lock onto the dedicated no-thinking endpoint
-  (``settings.orgs_supervisor_llm_endpoint``) via a **per-conversation**
-  override so the process-wide default model is never clobbered, and pass
-  ``enable_thinking=False`` as defence-in-depth. If the endpoint is absent on
-  this deployment (the endpoint config is git-ignored runtime state), we log
-  once and fall back to default routing with ``enable_thinking=False`` --
-  never crashing the submit path.
+  §3). We resolve ``settings.orgs_supervisor_llm_endpoint`` (``auto`` chooses
+  the current workspace's highest-priority healthy text endpoint) and lock it
+  via a **per-conversation** override so the process-wide default model is
+  never clobbered. Thinking is disabled by request parameter, not by an
+  endpoint naming convention. An explicitly configured endpoint remains
+  strict.
 * **Cancel bridge (RC-4).** ``cancel_event`` is forwarded straight into
   ``LLMClient.chat`` so a user "stop" aborts the in-flight ``httpx`` request
   immediately (validated by the Q2 cancel probe).
@@ -35,11 +34,10 @@ Design notes
 from __future__ import annotations
 
 import asyncio
-import logging
 import uuid
 from typing import TYPE_CHECKING
 
-from openakita.llm.types import Message
+from openakita.llm.types import ConfigurationError, Message
 
 if TYPE_CHECKING:  # pragma: no cover -- import-cycle / type-only
     from openakita.llm.client import LLMClient
@@ -49,12 +47,9 @@ __all__ = [
     "GatewaySupervisorLLMClient",
 ]
 
-logger = logging.getLogger(__name__)
-
-#: The no-thinking endpoint the orchestration brain prefers. Matches the
-#: endpoint provisioned in RC-5 sprint S1 (``_endpoint_config_change.md``).
-#: A deployment without this endpoint falls back to default routing.
-DEFAULT_SUPERVISOR_LLM_ENDPOINT = "dashscope-qwen3.5-plus-nothinking"
+#: Automatic selection avoids coupling organization orchestration to one
+#: provider, model generation, or deployment-specific endpoint name.
+DEFAULT_SUPERVISOR_LLM_ENDPOINT = "auto"
 
 
 class GatewaySupervisorLLMClient:
@@ -64,8 +59,9 @@ class GatewaySupervisorLLMClient:
     Args:
         client: the gateway LLM client (typically
             :func:`openakita.llm.client.get_default_client`).
-        endpoint: preferred no-thinking endpoint name. ``None`` disables the
-            endpoint lock (default routing + ``enable_thinking=False``).
+        endpoint: ``"auto"``/``None`` chooses the current workspace's
+            highest-priority healthy text endpoint. A concrete name is locked
+            strictly and never silently replaced.
         max_tokens: output cap per orchestration call.
         conversation_id: scope for the per-conversation endpoint override so
             the process-wide default model is never mutated. Auto-minted when
@@ -82,43 +78,55 @@ class GatewaySupervisorLLMClient:
     ) -> None:
         self._client = client
         self._endpoint = endpoint or None
+        self._resolved_endpoint: str | None = None
         self._max_tokens = max_tokens
         self._conversation_id = conversation_id or f"orgsup-{uuid.uuid4().hex[:12]}"
         self._endpoint_locked = False
+        self._endpoint_lock_error: str | None = None
 
     def _ensure_endpoint_lock(self) -> None:
-        """Best-effort one-time lock onto the no-thinking endpoint.
+        """Resolve and require a one-time lock onto the Supervisor endpoint.
 
         Uses a per-conversation override (``conversation_id``) so flipping the
         orchestration model never affects the global default client used by
-        chat / agents. Failures (endpoint missing, switch refused) are logged
-        once and swallowed -- the call then proceeds on default routing.
+        chat / agents. Automatic selection happens once per command; explicit
+        endpoint lock failures are cached and raised so the supervisor
+        terminates with a precise configuration error.
         """
-        if self._endpoint_locked or not self._endpoint:
+        if self._endpoint_lock_error is not None:
+            raise ConfigurationError(self._endpoint_lock_error)
+        if self._endpoint_locked:
             return
-        self._endpoint_locked = True  # mark first so we only try once
+        requested_endpoint = (self._endpoint or DEFAULT_SUPERVISOR_LLM_ENDPOINT).strip()
+        if requested_endpoint.lower() == DEFAULT_SUPERVISOR_LLM_ENDPOINT:
+            requested_endpoint = self._client.get_default_endpoint_name() or ""
+            if not requested_endpoint:
+                self._endpoint_lock_error = (
+                    "Supervisor 自动选择失败：当前工作区没有可用的健康文本端点，"
+                    "请先配置并启用一个 LLM 端点，或在高级设置中关闭 LLM Supervisor"
+                )
+                raise ConfigurationError(self._endpoint_lock_error)
+        self._resolved_endpoint = requested_endpoint
         try:
             ok, msg = self._client.switch_model(
-                self._endpoint,
+                requested_endpoint,
                 conversation_id=self._conversation_id,
                 policy="require",
-                reason="rc5 org orchestration brain (no-thinking)",
+                reason="organization supervisor (thinking disabled)",
             )
             if not ok:
-                logger.warning(
-                    "GatewaySupervisorLLMClient: could not lock endpoint %r "
-                    "(%s); falling back to default routing with "
-                    "enable_thinking=False",
-                    self._endpoint,
-                    msg,
+                self._endpoint_lock_error = (
+                    f"指定的 Supervisor 端点 {requested_endpoint!r} 不可用：{msg}"
                 )
-        except Exception:  # noqa: BLE001 -- endpoint lock must never crash submit
-            logger.warning(
-                "GatewaySupervisorLLMClient: switch_model(%r) raised; "
-                "falling back to default routing",
-                self._endpoint,
-                exc_info=True,
+                raise ConfigurationError(self._endpoint_lock_error)
+        except ConfigurationError:
+            raise
+        except Exception as exc:  # noqa: BLE001 -- convert to a structural failure
+            self._endpoint_lock_error = (
+                f"指定的 Supervisor 端点 {requested_endpoint!r} 无法锁定：{exc}"
             )
+            raise ConfigurationError(self._endpoint_lock_error) from exc
+        self._endpoint_locked = True
 
     async def complete(
         self,
@@ -132,7 +140,7 @@ class GatewaySupervisorLLMClient:
 
         ``role`` (``facts`` / ``plan`` / ``progress_ledger``) is accepted for
         the cheap-model-tiering seam but currently routed uniformly to the
-        no-thinking endpoint; per-role tiering is the deferred cost follow-up.
+        locked endpoint; per-role tiering is the deferred cost follow-up.
         """
         self._ensure_endpoint_lock()
         resp = await self._client.chat(

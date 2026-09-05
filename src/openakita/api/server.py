@@ -54,6 +54,7 @@ from .routes import (
     identity,
     im,
     inbox,
+    knowledge,
     logs,
     mcp,
     memory,
@@ -1136,6 +1137,7 @@ def create_app(
     app.include_router(health.router, tags=["健康检查"])
     app.include_router(im.router, tags=["即时通讯"])
     app.include_router(inbox.router, tags=["站内信"])
+    app.include_router(knowledge.router, tags=["知识库"])
     app.include_router(logs.router, tags=["日志"])
     app.include_router(mcp.router, tags=["MCP"])
     app.include_router(memory.router, tags=["记忆"])

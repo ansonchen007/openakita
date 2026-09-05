@@ -660,6 +660,7 @@ OpenAkita 对国内用户做了全面优化：
 - [ChineseBQB](https://github.com/zhaoolee/ChineseBQB) — 5700+ 中文表情包
 - [browser-use](https://github.com/browser-use/browser-use) — AI 浏览器自动化
 - [AGENTS.md](https://agentsmd.io/) / [Agent Skills](https://agentskills.io/) — 开放标准
+- Windows 免费代码签名由 [SignPath.io](https://signpath.io/) 提供，证书由 [SignPath Foundation](https://signpath.org/) 提供
 
 ### 社区贡献者
 
@@ -672,16 +673,6 @@ OpenAkita 源代码采用 GNU Affero General Public License v3.0 only（AGPL-3.0
 `OpenAkita` 名称、Logo、图标、截图和其他品牌资产不在 AGPL-3.0-only 授权范围内。品牌使用规则详见 [TRADEMARK.md](TRADEMARK.md)。
 
 第三方许可证详见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)
-
-## Star History
-
-<a href="https://star-history.com/#openakita/openakita&Date">
- <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=openakita/openakita&type=Date&theme=dark" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=openakita/openakita&type=Date" />
-   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=openakita/openakita&type=Date" />
- </picture>
-</a>
 
 ---
 

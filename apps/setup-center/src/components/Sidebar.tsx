@@ -59,7 +59,7 @@ const stepIcons: Partial<Record<StepId, React.ReactNode>> = {
 
 type NavGroupId = "capabilities" | "apps" | "monitor" | "multiAgent" | "store";
 const GROUP_ICON_SIZE = 16;
-const CAPABILITY_VIEWS: ViewId[] = ["skills", "mcp", "plugins", "memory", "scheduler"];
+const CAPABILITY_VIEWS: ViewId[] = ["skills", "mcp", "plugins", "knowledge", "memory", "scheduler"];
 const MONITOR_VIEWS: ViewId[] = ["token_stats", "skill_usage", "security", "pending_approvals"];
 const MULTI_AGENT_VIEWS: ViewId[] = ["dashboard", "org_editor", "pixel_office", "agent_manager"];
 const STORE_VIEWS: ViewId[] = ["agent_store", "skill_store"];
@@ -469,6 +469,9 @@ export function Sidebar({
             )}
             <div className={`navItem ${view === "plugins" ? "navItemActive" : ""}`} onClick={() => onViewChange("plugins")} role="button" tabIndex={0} title={t("sidebar.plugins")}>
               <IconPuzzle size={16} /> {!collapsed && <span>{t("sidebar.plugins")} {BETA_SUP}</span>}
+            </div>
+            <div className={`navItem ${view === "knowledge" ? "navItemActive" : ""}`} onClick={() => onViewChange("knowledge")} role="button" tabIndex={0} title={t("sidebar.knowledge")}>
+              <IconBook size={16} /> {!collapsed && <span>{t("sidebar.knowledge")} {BETA_SUP}</span>}
             </div>
             <div className={`navItem ${view === "memory" ? "navItemActive" : ""}`} onClick={() => onViewChange("memory")} role="button" tabIndex={0} title={t("sidebar.memory")}>
               <IconBrain size={16} /> {!collapsed && <span>{t("sidebar.memory")}</span>}

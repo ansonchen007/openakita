@@ -1,6 +1,6 @@
 [project]
 name = "openakita"
-version = "1.27.37"
+version = "1.27.40"
 description = "全能自进化AI Agent - 基于Ralph Wiggum模式，永不放弃"
 readme = "README.md"
 license = { text = "AGPL-3.0-only" }
@@ -72,6 +72,9 @@ dependencies = [
 
     # Image processing
     "Pillow>=10.0.0",
+
+    # Read-only extraction for cloud knowledge-base PDF content
+    "pypdf>=5.0,<7.0",
 
     # HTML parsing for media-strategy plugin sources
     "beautifulsoup4>=4.12.0",
@@ -320,6 +323,20 @@ path = "hatch_build.py"
 "identity/personas/tech_expert.md" = "openakita/identity/personas/tech_expert.md"
 "identity/personas/user_custom.md.example" = "openakita/identity/personas/user_custom.md.example"
 "identity/prompts/policies.md" = "openakita/identity/prompts/policies.md"
+
+[tool.uv]
+# The bundled runtime and finance automation plugin intentionally require
+# incompatible cryptography lines and cannot be installed together.
+conflicts = [
+    [
+        { extra = "all" },
+        { extra = "finance-auto" },
+    ],
+    [
+        { extra = "wework-ws" },
+        { extra = "finance-auto" },
+    ],
+]
 
 [tool.ruff]
 line-length = 100
