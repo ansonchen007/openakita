@@ -4,7 +4,13 @@
 import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import { invoke, IS_TAURI } from "../platform";
 import { useTranslation } from "react-i18next";
-import type { SkillInfo, SkillConfigField, MarketplaceSkill, EnvMap } from "../types";
+import type {
+  SkillInfo,
+  SkillConfigField,
+  MarketplaceResponse,
+  MarketplaceSkillView,
+  EnvMap,
+} from "../types";
 import { envGet, envSet } from "../utils";
 import { consumeSseStream } from "../utils/sseStateMachine";
 import { IconGear, IconZap, IconPackage, IconStar, IconCheck, IconX, IconDownload, IconSearch, IconFolderOpen, IconEdit, IconTrash, IconEye } from "../icons";
@@ -932,7 +938,11 @@ function SkillCard({
                 )}
                 {!skill.system && skill.sourceUrl && (() => {
                   const src = skill.sourceUrl!;
-                  const ownerRepo = src.includes("@") ? src.split("@")[0] : src.replace(/^https?:\/\/github\.com\//, "").replace(/\.git$/, "");
+                  const ownerRepo = src.startsWith("skillhub:")
+                    ? src.slice("skillhub:".length)
+                    : src.includes("@")
+                      ? src.split("@")[0]
+                      : src.replace(/^https?:\/\/github\.com\//, "").replace(/\.git$/, "");
                   return ownerRepo ? (
                     <span className="text-[11px] text-muted-foreground font-mono">{ownerRepo}</span>
                   ) : null;
@@ -1229,7 +1239,7 @@ function MarketplaceSkillCard({
   installing,
   installStatus,
 }: {
-  skill: MarketplaceSkill;
+  skill: MarketplaceSkillView;
   onInstall: () => void;
   installing: boolean;
   installStatus?: string;
@@ -1245,28 +1255,28 @@ function MarketplaceSkillCard({
             </div>
             <div className="flex flex-col min-w-0 flex-1">
               <div className="flex items-center gap-2 flex-wrap mb-1">
-                <span className="font-bold text-[15px] text-foreground">{skill.name}</span>
-                {skill.installed && <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-5 font-medium bg-emerald-500/10 text-emerald-600 border-emerald-500/30 dark:text-emerald-400">{t("skills.installed")}</Badge>}
-                {skill.installs != null && skill.installs > 0 && (
+                <span className="font-bold text-[15px] text-foreground">{skill.display.name}</span>
+                {skill.state.installed && <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-5 font-medium bg-emerald-500/10 text-emerald-600 border-emerald-500/30 dark:text-emerald-400">{t("skills.installed")}</Badge>}
+                {(skill.metrics?.downloads ?? skill.metrics?.installs ?? 0) > 0 && (
                   <span className="text-[11px] text-muted-foreground flex items-center gap-1">
-                    <IconDownload size={10} />{skill.installs.toLocaleString()}
+                    <IconDownload size={10} />{(skill.metrics?.downloads ?? skill.metrics?.installs ?? 0).toLocaleString()}
                   </span>
                 )}
-                {skill.stars != null && skill.stars > 0 && (
+                {(skill.metrics?.stars ?? 0) > 0 && (
                   <span className="text-[11px] text-muted-foreground flex items-center gap-1">
-                    <IconStar size={11} />{skill.stars}
+                    <IconStar size={11} />{skill.metrics?.stars}
                   </span>
                 )}
               </div>
               <div className="text-xs text-muted-foreground truncate">
-                {skill.description || t("skills.marketplaceNoDesc", "暂无描述，安装后可在技能详情中查看")}
+                {skill.display.description || t("skills.marketplaceNoDesc", "暂无描述，安装后可在技能详情中查看")}
               </div>
               <div className="text-[11px] text-muted-foreground/60 font-mono mt-1 truncate">
-                {skill.url}
+                {skill.canonicalId}{skill.version ? ` @ ${skill.version}` : ""}
               </div>
-              {skill.tags && skill.tags.length > 0 && (
+              {skill.classification?.tags && skill.classification.tags.length > 0 && (
                 <div className="flex flex-wrap gap-1.5 mt-2">
-                  {skill.tags.map((tag) => (
+                  {skill.classification.tags.map((tag) => (
                     <Badge key={tag} variant="secondary" className="text-[10px] px-1.5 py-0 bg-blue-500/10 text-blue-600 hover:bg-blue-500/20 dark:text-blue-400">
                       {tag}
                     </Badge>
@@ -1278,14 +1288,14 @@ function MarketplaceSkillCard({
           
           <div className="shrink-0 ml-12 sm:ml-0">
             <Button
-              variant={skill.installed ? "outline" : "default"}
+              variant={skill.state.installed ? "outline" : "default"}
               size="sm"
               onClick={onInstall}
-              disabled={skill.installed || installing}
-              className={!skill.installed && !installing ? "bg-gradient-to-br from-indigo-500 to-purple-500 hover:from-indigo-600 hover:to-purple-600 text-white border-0 shadow-md shadow-indigo-500/20" : ""}
+              disabled={skill.state.installed || installing}
+              className={!skill.state.installed && !installing ? "bg-gradient-to-br from-indigo-500 to-purple-500 hover:from-indigo-600 hover:to-purple-600 text-white border-0 shadow-md shadow-indigo-500/20" : ""}
             >
               {installing && <Loader2 className="animate-spin mr-1.5" size={14} />}
-              {skill.installed ? t("skills.installed") : installing && installStatus ? installStatus : t("skills.install")}
+              {skill.state.installed ? t("skills.installed") : installing && installStatus ? installStatus : t("skills.install")}
             </Button>
           </div>
         </div>
@@ -1321,7 +1331,7 @@ export function SkillManager({
   const [error, setError] = useState<string | null>(null);
   const [expandedSkill, setExpandedSkill] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-  const [marketplace, setMarketplace] = useState<MarketplaceSkill[]>([]);
+  const [marketplace, setMarketplace] = useState<MarketplaceSkillView[]>([]);
   const [marketLoading, setMarketLoading] = useState(false);
   const [marketSearch, setMarketSearch] = useState("");
   const [installingSet, setInstallingSet] = useState<Set<string>>(new Set());
@@ -2157,8 +2167,10 @@ export function SkillManager({
 
       if (detailSkill?.skillId === key) setDetailSkill(null);
       setMarketplace(prev => prev.map(s => {
-        const sid = s.skillId || s.name;
-        if (sid === key || s.url === skill.sourceUrl) return { ...s, installed: false };
+        const sid = s.coordinate.slug;
+        if (sid === key || s.install.locator === skill.sourceUrl) {
+          return { ...s, state: { ...s.state, installed: false } };
+        }
         return s;
       }));
       toast.success(t("skills.uninstallSuccess", { name: displayName }));
@@ -2172,33 +2184,23 @@ export function SkillManager({
     }
   }, [serviceRunning, apiBaseUrl, venvDir, currentWorkspaceId, detailSkill, loadSkills, t]);
 
-  // ── 搜索 skills.sh 市场技能 ──
-  const parseMarketplaceResponse = useCallback((data: Record<string, unknown>) => {
-    const items: MarketplaceSkill[] = ((data.skills || []) as Record<string, unknown>[]).map((s) => {
-      const source = String(s.source || "");
-      const skillId = String(s.skillId || s.name || "");
-      const installUrl = source ? `${source}@${skillId}` : skillId;
-      return {
-        id: String(s.id || ""),
-        skillId,
-        name: String(s.name || ""),
-        description: "",  // skills.sh API doesn't return description
-        author: source.split("/")[0] || "unknown",
-        url: installUrl,
-        installs: typeof s.installs === "number" ? s.installs : undefined,
-        tags: [],
+  // ── 搜索统一市场模型（提供方适配只发生在 Python 边界） ──
+  const parseMarketplaceResponse = useCallback((data: MarketplaceResponse) => {
+    if (data.schemaVersion !== 1 || !Array.isArray(data.skills)) {
+      throw new Error("Unsupported marketplace response schema");
+    }
+    return data.skills.map((marketSkill): MarketplaceSkillView => ({
+      ...marketSkill,
+      state: {
         installed: skills.some((local) => {
-          // 有来源追踪的技能，要求来源精确匹配（避免同名不同仓库误判）
-          if (local.sourceUrl) return local.sourceUrl === installUrl;
-          // 无来源信息的旧技能，回退到名称/目录匹配
-          if (local.name === skillId) return true;
+          if (local.sourceUrl) return local.sourceUrl === marketSkill.install.locator;
+          if (local.name === marketSkill.coordinate.slug) return true;
           const pathParts = local.path ? local.path.replace(/\\/g, "/").split("/") : [];
           const dirName = pathParts.length >= 2 ? pathParts[pathParts.length - 2] : "";
-          return dirName === skillId;
+          return dirName === marketSkill.coordinate.slug;
         }),
-      };
-    });
-    return items;
+      },
+    }));
   }, [skills]);
 
   const searchMarketplace = useCallback(async (query: string) => {
@@ -2207,54 +2209,39 @@ export function SkillManager({
     setError(null);
     try {
       const q = query.trim() || "agent";  // 默认搜索 "agent" 展示热门技能
-      const url = `https://skills.sh/api/search?q=${encodeURIComponent(q)}`;
-      let data: Record<string, unknown> | null = null;
+      let data: MarketplaceResponse | null = null;
 
       if (dataMode === "remote") {
-        // 远程模式：只走后端 API 代理（Tauri 不可用）
+        // 远程模式只消费 OpenAkita 后端的统一市场契约。
         if (serviceRunning && apiBaseUrl != null) {
-          try {
-            const res = await safeFetch(`${apiBaseUrl}/api/skills/marketplace?q=${encodeURIComponent(q)}`, {
-              signal: AbortSignal.timeout(10000),
-            });
-            data = await res.json();
-          } catch { /* fallback to direct */ }
-        }
-        // 备选：直接请求（可能被 CORS 阻止）
-        if (!data) {
-          const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
-          if (!res.ok) throw new Error(`skills.sh returned ${res.status}`);
+          const res = await safeFetch(`${apiBaseUrl}/api/skills/marketplace?q=${encodeURIComponent(q)}`, {
+            signal: AbortSignal.timeout(10000),
+          });
           data = await res.json();
         }
       } else {
-        if (IS_TAURI) {
+        if (IS_TAURI && venvDir) {
           try {
-            const raw = await invoke<string>("http_get_json", { url });
+            const raw = await invoke<string>("openakita_list_marketplace", { venvDir, query: q });
             data = JSON.parse(raw);
-          } catch { /* Tauri invoke 失败，继续 fallback */ }
+          } catch { /* Python bridge 失败，继续尝试运行中的后端 */ }
         }
 
-        // 方式2: 通过后端 API 代理
+        // 本地服务运行时通过同一个后端适配器获取统一模型。
         if (!data && serviceRunning && apiBaseUrl != null) {
-          try {
-            const res = await safeFetch(`${apiBaseUrl}/api/skills/marketplace?q=${encodeURIComponent(q)}`, {
-              signal: AbortSignal.timeout(10000),
-            });
-            data = await res.json();
-          } catch { /* fallback */ }
-        }
-
-        // 方式3: 直接请求
-        if (!data) {
-          const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
-          if (!res.ok) throw new Error(`skills.sh returned ${res.status}`);
+          const res = await safeFetch(`${apiBaseUrl}/api/skills/marketplace?q=${encodeURIComponent(q)}`, {
+            signal: AbortSignal.timeout(10000),
+          });
           data = await res.json();
         }
       }
 
+      if (!data) throw new Error("OpenAkita marketplace service is unavailable");
+      if (data.error) throw new Error(data.error);
+
       // 如果已有更新的请求在飞行中，丢弃此次结果
       if (reqId !== marketRequestId.current) return;
-      setMarketplace(parseMarketplaceResponse(data!));
+      setMarketplace(parseMarketplaceResponse(data));
     } catch (e) {
       if (reqId !== marketRequestId.current) return;
       // 失败时不清空已有数据，只在没有任何数据时显示错误
@@ -2264,7 +2251,7 @@ export function SkillManager({
         setMarketLoading(false);
       }
     }
-  }, [skills, t, serviceRunning, apiBaseUrl, dataMode, parseMarketplaceResponse]);  // eslint-disable-line react-hooks/exhaustive-deps
+  }, [skills, t, serviceRunning, apiBaseUrl, dataMode, venvDir, parseMarketplaceResponse]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   // 统一的市场搜索 effect：切换 tab 或搜索词变化时触发
   useEffect(() => {
@@ -2278,12 +2265,12 @@ export function SkillManager({
   }, [marketSearch, tab]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── 安装技能 ──
-  const handleInstall = useCallback(async (skill: MarketplaceSkill) => {
+  const handleInstall = useCallback(async (skill: MarketplaceSkillView) => {
     if (dataMode !== "remote" && !serviceRunning && (!venvDir || !currentWorkspaceId)) {
       setError(t("skills.envNotReady"));
       return;
     }
-    const uniqueKey = skill.url || skill.id || skill.name;
+    const uniqueKey = skill.canonicalId;
     setInstallingSet(prev => new Set(prev).add(uniqueKey));
     setInstallStatus(t("skills.installDownloading", "正在下载技能..."));
     setError(null);
@@ -2299,7 +2286,7 @@ export function SkillManager({
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            url: skill.url,
+            install: skill.install,
             ...(installCategory ? { category: installCategory } : {}),
           }),
           signal: AbortSignal.timeout(180_000),
@@ -2312,21 +2299,26 @@ export function SkillManager({
 
       // 方式2：服务未运行 → Tauri invoke（本地模式）
       if (!installed && IS_TAURI && dataMode !== "remote" && currentWorkspaceId) {
+        const versionQuery = skill.install.version
+          ? `?version=${encodeURIComponent(skill.install.version)}`
+          : "";
         await invoke<string>("openakita_install_skill", {
           venvDir,
           workspaceId: currentWorkspaceId,
-          url: skill.url,
+          url: `${skill.install.locator}${versionQuery}`,
         });
         await reloadRuntimeAfterLocalInstall();
       }
 
       setInstallStatus(t("skills.installDone", "安装完成"));
       setMarketplace((prev) => prev.map((s) =>
-        s.url === skill.url ? { ...s, installed: true } : s
+        s.canonicalId === skill.canonicalId
+          ? { ...s, state: { ...s.state, installed: true, installedVersion: skill.version } }
+          : s
       ));
       await loadSkills();
       setTab("installed");
-      setExpandedSkill(skill.skillId || skill.name);
+      setExpandedSkill(skill.coordinate.slug);
     } catch (e) {
       const raw = String(e);
       if (raw.includes("该技能已安装") || raw.toLowerCase().includes("already installed")) {
@@ -2334,7 +2326,9 @@ export function SkillManager({
         const refreshed = await loadSkills();
         if (refreshed) {
           setMarketplace((prev) => prev.map((s) =>
-            s.url === skill.url ? { ...s, installed: true } : s
+            s.canonicalId === skill.canonicalId
+              ? { ...s, state: { ...s.state, installed: true, installedVersion: skill.version } }
+              : s
           ));
           toast.success(t("skills.alreadyInstalled"));
           setTab("installed");
@@ -2930,7 +2924,7 @@ export function SkillManager({
             )}
             
             {!marketLoading && marketplace.map((skill) => {
-              const uk = skill.url || skill.id || skill.name;
+              const uk = skill.canonicalId;
               return (
                 <MarketplaceSkillCard
                   key={uk}
@@ -2956,8 +2950,8 @@ export function SkillManager({
           
           <div className="text-center text-[11px] text-muted-foreground/60 mt-4">
             {t("skills.poweredBy")} &middot;{" "}
-            <a href="https://skills.sh" target="_blank" rel="noreferrer" className="text-primary hover:underline">
-              skills.sh
+            <a href="https://skillhub.cn" target="_blank" rel="noreferrer" className="text-primary hover:underline">
+              SkillHub
             </a>
           </div>
         </div>

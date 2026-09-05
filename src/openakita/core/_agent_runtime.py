@@ -91,6 +91,7 @@ from ..tools.handlers.config import create_handler as create_config_handler
 from ..tools.handlers.desktop import create_handler as create_desktop_handler
 from ..tools.handlers.filesystem import create_handler as create_filesystem_handler
 from ..tools.handlers.im_channel import create_handler as create_im_channel_handler
+from ..tools.handlers.knowledge import create_handler as create_knowledge_handler
 from ..tools.handlers.lsp import create_handler as create_lsp_handler
 from ..tools.handlers.mcp import create_handler as create_mcp_handler
 from ..tools.handlers.memory import create_handler as create_memory_handler
@@ -754,6 +755,22 @@ class Agent:
         )
         self._memory_backends: dict[str, dict] = {}
         self.memory_manager.set_plugin_backends(self._memory_backends)
+        try:
+            from ..integrations.knowledge import (
+                BailianKnowledgeProvider,
+                IMAKnowledgeProvider,
+                knowledge_config_path,
+            )
+
+            connector_path = knowledge_config_path(settings.project_root)
+            self.memory_manager.retrieval_engine._external_sources.extend(
+                [
+                    IMAKnowledgeProvider(connector_path),
+                    BailianKnowledgeProvider(connector_path),
+                ]
+            )
+        except Exception as e:
+            logger.debug("[Knowledge] cloud retrieval providers unavailable: %s", e)
         self._active_agent_lifecycle_runs: dict[str, dict[str, Any]] = {}
 
         # 用户档案管理器
@@ -862,6 +879,8 @@ class Agent:
         # Request-scoped promotions derived from structured IntentAnalyzer
         # output. Unlike discovered tools, these are cleared after every turn.
         self._intent_promoted_tools: set[str] = set()
+        self._knowledge_priority_active = False
+        self._knowledge_priority_status = "inactive"
 
         # Per-session system prompt cache (hermes-style).
         # Key includes the prompt inputs that can vary across turns.
@@ -1117,6 +1136,17 @@ class Agent:
             tools = [dict(tool, _promoted=True) for tool in tools]
         else:
             tools = self._stable_main_chat_tool_set(tools)
+
+        if getattr(self, "_knowledge_priority_active", False):
+            for tool in tools:
+                name = str(tool.get("name") or "")
+                category = str(tool.get("category") or "")
+                if name in {"web_search", "news_search", "web_fetch"} or category in {
+                    "Web Search",
+                    "Browser",
+                }:
+                    tool.pop("_promoted", None)
+                    tool["_deferred"] = True
         self._last_minimal_toolset = False
 
         if hasattr(self, "tool_catalog"):
@@ -1780,6 +1810,9 @@ class Agent:
 
         # Semantic Search
         self.handler_registry.register("search", create_search_handler(self))
+
+        # Cloud Knowledge (read-only browse and search)
+        self.handler_registry.register("knowledge", create_knowledge_handler(self))
 
         # Mode Switch
         self.handler_registry.register("mode", create_mode_handler(self))
@@ -3256,6 +3289,10 @@ class Agent:
             prompt += self._build_runtime_env_prompt_section()
         if getattr(_strategy, "include_multi_agent", True):
             prompt += self._build_multi_agent_prompt_section()
+        if getattr(self, "_knowledge_priority_active", False):
+            from ..integrations.knowledge import knowledge_priority_prompt_section
+
+            prompt += knowledge_priority_prompt_section()
         return prompt
 
     def _invalidate_system_prompt_cache(self, reason: str = "") -> None:
@@ -4498,6 +4535,49 @@ class Agent:
             "duration_ms": round(duration_ms, 1),
         }
 
+    def _configure_knowledge_priority_turn(self, message: str, intent: Any) -> bool:
+        """Apply the user's knowledge-source preference to one analyzed turn."""
+        self._knowledge_priority_active = False
+        self._knowledge_priority_status = "inactive"
+        try:
+            from ..integrations.knowledge import (
+                knowledge_config_path,
+                load_bailian_config,
+                load_ima_config,
+                should_prefer_knowledge,
+            )
+
+            connector_path = knowledge_config_path(settings.project_root)
+            config = {
+                "connectors": [
+                    load_ima_config(connector_path),
+                    load_bailian_config(connector_path),
+                ]
+            }
+            active = should_prefer_knowledge(config=config, intent=intent)
+        except Exception as exc:
+            logger.debug("[KnowledgePriority] routing check skipped: %s", exc)
+            return False
+
+        if not active:
+            return False
+
+        self._knowledge_priority_active = True
+        self._knowledge_priority_status = "pending"
+        intent.requires_tools = True
+        intent.force_tool = True
+        intent.evidence_recommended = True
+        hints = [
+            str(hint)
+            for hint in (getattr(intent, "tool_hints", None) or [])
+            if str(hint).strip().lower() not in {"web search", "browser"}
+        ]
+        if "knowledge_search" not in hints:
+            hints.insert(0, "knowledge_search")
+        intent.tool_hints = hints
+        logger.info("[KnowledgePriority] enabled for current turn")
+        return True
+
     async def _prepare_session_context(
         self,
         message: str,
@@ -4676,6 +4756,7 @@ class Agent:
         )
         self._last_intent_analysis_duration_ms = (time.perf_counter() - _intent_started_at) * 1000
 
+        self._configure_knowledge_priority_turn(message, intent_result)
         self._current_intent = intent_result
         self._intent_promoted_tools = self._resolve_intent_schema_promotions(
             intent_result,
@@ -5721,6 +5802,8 @@ class Agent:
         self._current_task_query = ""
         self._current_user_message = ""
         self._intent_promoted_tools = set()
+        self._knowledge_priority_active = False
+        self._knowledge_priority_status = "inactive"
         self._current_turn_has_media_attachments = False
         self._current_session_type = "cli"
         if im_tokens is not None:

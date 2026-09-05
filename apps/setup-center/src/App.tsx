@@ -15,6 +15,7 @@ const IMView = lazy(() => import("./views/IMView").then(m => ({ default: m.IMVie
 const TokenStatsView = lazy(() => import("./views/TokenStatsView").then(m => ({ default: m.TokenStatsView })));
 const SkillUsageView = lazy(() => import("./views/SkillUsageView").then(m => ({ default: m.SkillUsageView })));
 const MCPView = lazy(() => import("./views/MCPView").then(m => ({ default: m.MCPView })));
+const KnowledgeBaseView = lazy(() => import("./views/KnowledgeBaseView").then(m => ({ default: m.KnowledgeBaseView })));
 const PluginManagerView = lazy(() => import("./views/PluginManagerView"));
 const PluginAppHost = lazy(() => import("./views/PluginAppHost"));
 const SchedulerView = lazy(() => import("./views/SchedulerView").then(m => ({ default: m.SchedulerView })));
@@ -163,7 +164,7 @@ interface EnvFieldCtx {
 const EnvFieldContext = createContext<EnvFieldCtx | null>(null);
 
 const _HASH_TO_VIEW: Record<string, ViewId> = {
-  "chat": "chat", "im": "im", "skills": "skills", "mcp": "mcp",
+  "chat": "chat", "im": "im", "skills": "skills", "mcp": "mcp", "knowledge": "knowledge",
   "scheduler": "scheduler", "memory": "memory", "status": "status",
   "token-stats": "token_stats", "skill-usage": "skill_usage", "identity": "identity",
   "dashboard": "dashboard", "org-editor": "org_editor",
@@ -506,7 +507,8 @@ function MainApp() {
     return (IS_WEB || IS_CAPACITOR) ? "chat" : "wizard";
   });
   const [appInitializing, setAppInitializing] = useState(!(IS_WEB || IS_CAPACITOR));
-  const [configExpanded, setConfigExpanded] = useState(false);
+  const [configMode, setConfigMode] = useState(() => view === "wizard" || view === "identity");
+  const lastAppViewRef = useRef<ViewId>(view === "wizard" || view === "identity" ? "chat" : view);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const sidebarAutoCollapsed = useRef(false);
   const [isMobile, setIsMobile] = useState(() => typeof window !== "undefined" && window.innerWidth <= 768);
@@ -596,6 +598,15 @@ function MainApp() {
       history.replaceState(null, "", window.location.pathname + window.location.search);
     }
   }, [isMobile]);
+
+  useEffect(() => {
+    if (view === "wizard" || view === "identity") {
+      setConfigMode(true);
+      return;
+    }
+    lastAppViewRef.current = view;
+    setConfigMode(false);
+  }, [view]);
 
   useEffect(() => {
     if (stepId === "workspace") {
@@ -4744,6 +4755,9 @@ function MainApp() {
     if (view === "plugins") {
       return <PluginManagerView visible={true} httpApiBase={httpApiBase} />;
     }
+    if (view === "knowledge") {
+      return <KnowledgeBaseView serviceRunning={serviceStatus?.running ?? false} apiBaseUrl={httpApiBase()} />;
+    }
     if (view === "scheduler") {
       return <SchedulerView serviceRunning={serviceStatus?.running ?? false} apiBaseUrl={apiBaseUrl} />;
     }
@@ -5026,24 +5040,27 @@ function MainApp() {
         view={view}
         onViewChange={(v) => navigateToView(v)}
         mobileOpen={mobileSidebarOpen}
-        configExpanded={configExpanded}
-        onToggleConfig={() => {
-          if (sidebarCollapsed) { setSidebarCollapsed(false); setConfigExpanded(true); }
-          else { setConfigExpanded((v) => !v); }
+        configMode={configMode}
+        onEnterConfig={() => {
+          if (view !== "wizard" && view !== "identity") lastAppViewRef.current = view;
+          setSidebarCollapsed(false);
+          setConfigMode(true);
+          navigateToView("wizard", stepId);
+        }}
+        onExitConfig={() => {
+          setConfigMode(false);
+          navigateToView(lastAppViewRef.current);
         }}
         steps={steps}
         stepId={stepId}
         onStepChange={(s: StepId) => {
           setStepId(s);
-          if (view === "wizard") navigateToView("wizard", s);
+          navigateToView("wizard", s);
         }}
         disabledViews={disabledViews}
         storeVisible={storeVisible}
-        desktopVersion={desktopVersion}
-        backendVersion={backendVersion}
         serviceRunning={serviceStatus?.running ?? false}
         onRefreshStatus={async () => { await refreshStatus(undefined, undefined, true); }}
-        isWeb={IS_WEB}
         httpApiBase={httpApiBase()}
         unreadFeedbackCount={unreadFeedbackCount}
         pendingApprovalsCount={pendingApprovalsCount}
