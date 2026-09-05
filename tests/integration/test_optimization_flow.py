@@ -256,19 +256,13 @@ class TestIntentAnalyzerLLMCall:
 
     async def test_chat_intent_via_llm(self, mock_brain):
         mock_brain.compiler_think.return_value = FakeResponse(
-            content="""```yaml
-intent: chat
+            content="""intent: chat
 task_type: other
 goal: 用户问好
-inputs:
-  given: [问候]
-  missing: []
-constraints: []
-output_requirements: [友好回应]
-risks_or_ambiguities: []
 tool_hints: []
 memory_keywords: []
-```"""
+capability_scope: [none]
+knowledge_lookup: false"""
         )
         analyzer = IntentAnalyzer(mock_brain)
         result = await analyzer.analyze("你好呀")
@@ -281,14 +275,10 @@ memory_keywords: []
             content="""intent: task
 task_type: creation
 goal: 创建文件
-inputs:
-  given: [文件名]
-  missing: []
-constraints: []
-output_requirements: [创建成功]
-risks_or_ambiguities: []
-tool_hints: [File System, Shell]
-memory_keywords: [文件创建]"""
+tool_hints: [File System]
+memory_keywords: [文件创建]
+capability_scope: [files]
+knowledge_lookup: false"""
         )
         analyzer = IntentAnalyzer(mock_brain)
         result = await analyzer.analyze("帮我创建一个文件")

@@ -54,6 +54,7 @@ from .code_quality import CODE_QUALITY_TOOLS
 from .config import CONFIG_TOOLS
 from .filesystem import FILESYSTEM_TOOLS
 from .im_channel import IM_CHANNEL_TOOLS
+from .knowledge import KNOWLEDGE_TOOLS
 from .lsp import LSP_TOOLS
 from .mcp import MCP_TOOLS
 from .memory import MEMORY_TOOLS
@@ -108,6 +109,7 @@ BASE_TOOLS = (
     + SLEEP_TOOLS
     + STRUCTURED_OUTPUT_TOOLS
     + WORKTREE_TOOLS
+    + KNOWLEDGE_TOOLS
 )
 
 # 平台连接工具（Agent Hub + Skill Store），仅在 hub_enabled=True 时注册
@@ -177,6 +179,7 @@ __all__ = [
     "POWERSHELL_TOOLS",
     "TOOL_SEARCH_TOOLS",
     "LSP_TOOLS",
+    "KNOWLEDGE_TOOLS",
     "SLEEP_TOOLS",
     "STRUCTURED_OUTPUT_TOOLS",
     "WORKTREE_TOOLS",
