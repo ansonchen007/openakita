@@ -57,6 +57,8 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "tenacity>=8.2.3",
     "simplejson>=3.19.2",
+    "packaging>=24.0",
+    "cryptography>=42.0,<47.0",
     # C17: cross-process audit / scheduler / event_store locking.
     "filelock>=3.13.0",
 

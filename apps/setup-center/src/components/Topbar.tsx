@@ -16,9 +16,10 @@ import {
   DropdownMenuSeparator, DropdownMenuItem,
 } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { LogOut, Square, ClipboardCopy, Compass } from "lucide-react";
+import { LogOut, Square, ClipboardCopy, Compass, Store } from "lucide-react";
 import { toast } from "sonner";
 import { openExternalUrl } from "../platform";
+import { buildMarketplaceContextUrl } from "../marketplace/navigation";
 import { copyToClipboard } from "../utils/clipboard";
 import { RemoteAccessDialog } from "./RemoteAccessDialog";
 import { InboxBadge } from "./InboxBadge";
@@ -44,6 +45,7 @@ export type TopbarProps = {
   onRefreshAll: () => Promise<void>;
   onSetTheme: (theme: Theme) => void;
   themePrefState: Theme;
+  desktopVersion: string;
   isWeb?: boolean;
   onLogout?: () => void;
   webAccessUrl?: string;
@@ -70,7 +72,7 @@ export function Topbar({
   onCreateWorkspace,
   serviceRunning, endpointCount, dataMode, busy,
   onDisconnect, onConnect, onStart, onRefreshAll,
-  onSetTheme, themePrefState, isWeb, onLogout, webAccessUrl, apiBaseUrl,
+  onSetTheme, themePrefState, desktopVersion, isWeb, onLogout, webAccessUrl, apiBaseUrl,
   onToggleMobileSidebar, serverName, onServerManager,
   envDraft, setEnvDraft, restartService, askConfirm,
   inboxUnreadCount, onOpenInbox,
@@ -80,6 +82,14 @@ export function Topbar({
   const [remoteDialogOpen, setRemoteDialogOpen] = useState(false);
 
   const hasRemoteAccessProps = !!(envDraft && setEnvDraft && restartService && askConfirm);
+
+  const openMarketplace = async () => {
+    try {
+      await openExternalUrl(buildMarketplaceContextUrl(desktopVersion));
+    } catch {
+      toast.error(t("topbar.openMarketplaceFailed"));
+    }
+  };
 
   const copyRemoteUrl = async () => {
     const base = apiBaseUrl || "http://127.0.0.1:18900";
@@ -390,6 +400,22 @@ export function Topbar({
               </Button>
             </TooltipTrigger>
             <TooltipContent side="bottom">{t("topbar.refresh")}</TooltipContent>
+          </Tooltip>
+
+          <div className="topbarActionDivider h-4 w-px bg-border" />
+
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                onClick={() => { void openMarketplace(); }}
+                aria-label={t("topbar.openMarketplace")}
+              >
+                <Store size={16} />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">{t("topbar.openMarketplace")}</TooltipContent>
           </Tooltip>
 
           <div className="topbarActionDivider h-4 w-px bg-border" />
