@@ -48,7 +48,7 @@
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDQ1RTQ1NjM2RkMxQ0Y4MDMKUldRRCtCejhObGJrUmR2VWdtbDMwSmhqdlE2RURSYTJKUTIxV25wRE1mcFA0Sy82Vi9zbUo3YWQK",
       "endpoints": [
-        "https://openakita-admin-api.fzstack.com/updater/release.json?version={{current_version}}&platform={{target}}",
+        "https://admin.openakita.cn/updater/release.json?version={{current_version}}&platform={{target}}",
         "https://dl-openakita.fzstack.com/api/release.json"
       ],
       "windows": {

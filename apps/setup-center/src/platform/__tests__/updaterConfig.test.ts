@@ -5,7 +5,7 @@ import tauriConfig from "../../../src-tauri/tauri.conf.json";
 describe("desktop updater configuration", () => {
   it("uses the platform API with the Tauri-compatible OSS manifest as fallback", () => {
     expect(tauriConfig.plugins.updater.endpoints).toEqual([
-      "https://openakita-admin-api.fzstack.com/updater/release.json?version={{current_version}}&platform={{target}}",
+      "https://admin.openakita.cn/updater/release.json?version={{current_version}}&platform={{target}}",
       "https://dl-openakita.fzstack.com/api/release.json",
     ]);
     expect(tauriConfig.plugins.updater.pubkey).toBe(
