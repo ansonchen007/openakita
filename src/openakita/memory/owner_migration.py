@@ -45,6 +45,16 @@ def align_desktop_owner(storage: MemoryStorage) -> dict[str, Any]:
             if "mdrm_nodes" in tables:
                 targets.append(("mdrm_nodes", "id", "1=1", "'graph'"))
 
+            # A default identity can also be explicitly supplied by an IM
+            # adapter. A known non-desktop session namespace makes that bucket
+            # ambiguous even when no named IM user has written memories yet.
+            default_sessions = conn.execute(
+                "SELECT session_id FROM session_tenants WHERE user_id='default'"
+            ).fetchall()
+            if any("__" in sid and not sid.startswith("desktop__") for (sid,) in default_sessions):
+                conn.rollback()
+                return {"status": "skipped", "reason": "non_desktop_default_sessions"}
+
             # Inspect all workspaces, not just the one being renamed. Another
             # real/unknown user anywhere in this DB makes automatic attribution
             # unsafe, including users with sessions but no semantic memories.

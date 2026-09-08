@@ -175,10 +175,15 @@ def test_desktop_only_main_manager_and_future_background_sessions(manager, monke
     manager._align_desktop_owner()
     assert manager.store.get_semantic(memory.id).user_id == "default"
     manager._desktop_owner_alignment_requested = True
-    manager._align_desktop_owner()
+    manager = MemoryManager(
+        manager.data_dir,
+        manager.memory_md_path,
+        search_backend="fts5",
+        desktop_owner_alignment=True,
+    )
 
     async def background_session():
-        manager.start_session("desktop:new", user_id="default")
+        manager.start_session("desktop:new")
         fresh = SemanticMemory(type=MemoryType.FACT, content="New background memory")
         manager.save_user_memory(fresh)
         assert fresh.user_id == "desktop_user"
