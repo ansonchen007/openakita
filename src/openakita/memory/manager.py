@@ -110,7 +110,14 @@ class MemoryManager:
     @property
     def _current_user_id(self) -> str:
         self._ensure_context_vars()
-        return self._current_user_id_var.get()
+        user_id = self._current_user_id_var.get()
+        if (
+            user_id == "default"
+            and getattr(self, "_desktop_owner_aligned", False)
+            and self._current_workspace_id == "default"
+        ):
+            return "desktop_user"
+        return user_id
 
     @_current_user_id.setter
     def _current_user_id(self, value: str) -> None:
@@ -184,10 +191,12 @@ class MemoryManager:
         embedding_api_model: str = "",
         agent_id: str = "",
         identity_dir: Path | None = None,
+        desktop_owner_alignment: bool = False,
     ):
         self.data_dir = Path(data_dir)
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.agent_id = agent_id
+        self._desktop_owner_alignment_requested = desktop_owner_alignment
 
         self.memory_md_path = Path(memory_md_path)
         self.identity_dir = Path(identity_dir) if identity_dir else self.memory_md_path.parent
@@ -293,6 +302,7 @@ class MemoryManager:
                 self.store.register_observer(self._on_store_event)
             # Load existing memories
             self._load_memories()
+            self._align_desktop_owner()
             self._maybe_schedule_snapshot()
         except MemoryStorageUnavailable as e:
             from .noop_store import NoopRetrievalEngine, NoopUnifiedStore
@@ -337,6 +347,35 @@ class MemoryManager:
                     repair="memory_repair_flow" if key == "memory" else "manual_quarantine",
                     details=e.details or None,
                 )
+
+    def _align_desktop_owner(self) -> None:
+        """Repair only a local desktop main store, before background work starts."""
+        self._desktop_owner_aligned = False
+        if not self._desktop_owner_alignment_requested or not os.environ.get(
+            "OPENAKITA_DESKTOP_SESSION_TOKEN"
+        ):
+            return
+        from .owner_migration import align_desktop_owner
+
+        try:
+            # Agent construction may create several managers over this shared
+            # DB. Only the first one may migrate; later constructors can run
+            # while the original manager is already serving requests.
+            storage = self.store.db
+            with storage._lock:
+                report = storage._desktop_owner_alignment_report
+                if report is None:
+                    report = align_desktop_owner(storage)
+                    storage._desktop_owner_alignment_report = report
+            self._desktop_owner_aligned = report["status"] in {"clean", "migrated"}
+            if report["status"] == "migrated":
+                self._reload_from_sqlite()
+            logger.info("[Memory] Desktop owner alignment: %s", report)
+        except Exception:
+            # A failed backup/migration must leave the original data usable.
+            # Retry on next startup; do not enable the new fallback on failure.
+            self.store.db._desktop_owner_alignment_report = {"status": "failed"}
+            logger.exception("[Memory] Desktop owner alignment failed; keeping original owners")
 
     def _on_store_event(self, kind: str, payload: Any) -> None:
         """Observer mirror for ``UnifiedStore`` semantic writes.

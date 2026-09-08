@@ -752,6 +752,7 @@ class Agent:
             embedding_api_key=settings.embedding_api_key,
             embedding_api_model=settings.embedding_api_model,
             agent_id=self.name,
+            desktop_owner_alignment=True,
         )
         self._memory_backends: dict[str, dict] = {}
         self.memory_manager.set_plugin_backends(self._memory_backends)
