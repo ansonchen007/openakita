@@ -183,6 +183,7 @@ export function MarketplaceInstallDialog({
     const eventName = {
       skill: "openakita:skills-changed",
       plugin: "openakita:plugin-apps-changed",
+      mcp: "openakita:mcp-changed",
     }[job.resource_type];
     if (!eventName) return;
     const key = `${apiBaseUrl}/${job.id}`;

@@ -4,6 +4,7 @@ import "../../i18n";
 import i18n from "../../i18n";
 import { safeFetch, safeFetchResponse } from "../../providers";
 import { SkillManager } from "../../views/SkillManager";
+import { MCPView } from "../../views/MCPView";
 import { MarketplaceInstallDialog } from "../MarketplaceInstallDialog";
 
 vi.mock("../../platform", () => ({
@@ -85,6 +86,36 @@ it("notifies only once for an already completed skill job", async () => {
   }
 });
 
+it("refreshes an already mounted MCP page immediately after marketplace installation", async () => {
+  let installed = false;
+  vi.mocked(safeFetch).mockImplementation(async () => new Response(JSON.stringify({
+    servers: installed ? [{
+      name: "railway-12306-mcp", description: "火车出行查询", transport: "stdio",
+      command: "npx", url: "", connected: true, tools: [], tool_count: 8,
+      catalog_tool_count: 8, source: "workspace", enabled: true, auto_connect: false,
+      removable: true, has_instructions: false, config_schema: [], config_status: {}, config_complete: true,
+    }] : [],
+  })));
+  vi.mocked(safeFetchResponse).mockImplementation(async url => {
+    const status = String(url).endsWith("/prepare") ? "ready" : "installed";
+    installed = status === "installed";
+    return new Response(JSON.stringify({ data: { ...job, resource_type: "mcp", status } }));
+  });
+  const listener = vi.fn();
+  window.addEventListener("openakita:mcp-changed", listener);
+  try {
+    render(<>
+      <MCPView serviceRunning envDraft={{}} onEnvChange={vi.fn()} onSaveEnvKeys={vi.fn()} />
+      <MarketplaceInstallDialog apiBaseUrl="http://localhost:18900" desktopVersion="1.27.40" />
+    </>);
+    fireEvent.click(await screen.findByRole("button", { name: "确认安装" }));
+    expect(await screen.findByText("火车出行查询")).toBeInTheDocument();
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(safeFetch).toHaveBeenCalledTimes(2);
+  } finally {
+    window.removeEventListener("openakita:mcp-changed", listener);
+  }
+});
 
 it.each([
   ["ready", "skill"], ["failed", "skill"], ["cancelled", "skill"],
