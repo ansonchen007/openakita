@@ -13,6 +13,7 @@ import {
   IconAlertCircle,
 } from "../icons";
 import logoUrl from "../assets/logo.png";
+import { safeFetch } from "../providers";
 import {
   ACCOUNT_STATUS_CHANGED_EVENT,
   type AccountStatusSummary,
@@ -20,6 +21,7 @@ import {
 import {
   connectOpenAkitaAccount,
   disconnectOpenAkitaAccount,
+  getAccountGeneration,
   loadAccountCapability,
   refreshOpenAkitaAccountEntitlements,
   type AccountCapability,
@@ -148,6 +150,7 @@ export function Sidebar({
   const [accountActionPending, setAccountActionPending] = useState<"refresh" | "logout" | null>(null);
   const [accountLoginError, setAccountLoginError] = useState<string | null>(null);
   const accountAreaRef = useRef<HTMLDivElement>(null);
+  const accountSnapshotRequest = useRef(0);
 
   const refreshAccountCapability = useCallback(async () => {
     if (!httpApiBase || !serviceRunning) {
@@ -173,25 +176,43 @@ export function Sidebar({
   }, [refreshAccountCapability]);
 
   const refreshAccountSnapshot = useCallback(async () => {
+    const request = ++accountSnapshotRequest.current;
+    const generation = getAccountGeneration();
     if (!httpApiBase || !serviceRunning || !accountCapability?.enabled) {
       setAccountSnapshot(null);
       return;
     }
     try {
-      const response = await fetch(`${httpApiBase}/api/account/status`);
-      if (response.ok) setAccountSnapshot(await response.json() as AccountStatusSummary);
+      const response = await safeFetch(`${httpApiBase}/api/account/status`);
+      if (response.ok) {
+        const snapshot = await response.json() as AccountStatusSummary;
+        if (request === accountSnapshotRequest.current && generation === getAccountGeneration()) {
+          setAccountSnapshot(snapshot);
+        }
+      }
     } catch {
-      setAccountSnapshot(null);
+      if (request === accountSnapshotRequest.current && generation === getAccountGeneration()) {
+        setAccountSnapshot(null);
+      }
     }
   }, [accountCapability?.enabled, httpApiBase, serviceRunning]);
 
   useEffect(() => {
     void refreshAccountSnapshot();
+    const refresh = () => { if (document.visibilityState !== "hidden") void refreshAccountSnapshot(); };
+    window.addEventListener("focus", refresh);
+    const timer = window.setInterval(refresh, 30_000);
+    return () => {
+      accountSnapshotRequest.current += 1;
+      window.removeEventListener("focus", refresh);
+      window.clearInterval(timer);
+    };
   }, [refreshAccountSnapshot]);
 
   useEffect(() => {
     const onAccountStatusChanged = (event: Event) => {
       if (!accountCapability?.enabled) return;
+      accountSnapshotRequest.current += 1;
       const snapshot = (event as CustomEvent<AccountStatusSummary>).detail;
       if (snapshot?.status) setAccountSnapshot(snapshot);
       else void refreshAccountSnapshot();
@@ -301,7 +322,9 @@ export function Sidebar({
     accountEnabled && accountSnapshot?.status && accountSnapshot.status !== "signed_out",
   );
   const accountNeedsSync = accountSignedIn && accountSnapshot?.status !== "active";
-  const accountName = accountSignedIn
+  const accountName = accountSnapshot?.status === "unavailable"
+    ? t("account.identityUnavailable")
+    : accountSignedIn
     ? accountSnapshot?.profile?.name
       || accountSnapshot?.profile?.preferred_username
       || accountEmail?.split("@")[0]
@@ -638,7 +661,8 @@ export function Sidebar({
             {accountEnabled && accountNeedsSync && accountSnapshot?.status_reason && (
               <div className="sidebarAccountMenuNotice" role="status">
                 <IconAlertCircle size={15} aria-hidden="true" />
-                <span>{accountSnapshot.status_reason}</span>
+                <span>{accountSnapshot.status_reason === "account_identity_unavailable"
+                  ? t("account.identityUnavailableHint") : accountSnapshot.status_reason}</span>
               </div>
             )}
             {accountEnabled && <div className="sidebarAccountMenuDivider" />}

@@ -44,6 +44,8 @@
     "pendingApprovals": "Approvals"
   },
   "account": {
+    "identityUnavailable": "Sign-in status unconfirmed",
+    "identityUnavailableHint": "The saved account could not be verified. Retry syncing or sign in again.",
     "serviceRequired": "Start the OpenAkita service first.",
     "retrySignIn": "Try again",
     "waitingForAuthorization": "Waiting for browser authorization…",
@@ -63,6 +65,7 @@
   "topbar": {
     "openMarketplace": "Open Marketplace",
     "openMarketplaceFailed": "Marketplace could not be opened. Try again later.",
+    "marketplaceDesktopConnectionFailed": "The account connection between the desktop and local service is not ready. Restart both and try again.",
     "workspace": "Workspace",
     "running": "Running",
     "stopped": "Stopped",

@@ -44,6 +44,8 @@
     "pendingApprovals": "待审批"
   },
   "account": {
+    "identityUnavailable": "登录状态待确认",
+    "identityUnavailableHint": "暂时无法确认已保存的账号，请重试同步或重新登录。",
     "serviceRequired": "请先启动 OpenAkita 服务。",
     "retrySignIn": "重新连接",
     "waitingForAuthorization": "等待浏览器授权…",
@@ -63,6 +65,7 @@
   "topbar": {
     "openMarketplace": "打开市场",
     "openMarketplaceFailed": "无法打开市场，请稍后重试。",
+    "marketplaceDesktopConnectionFailed": "桌面端与本地服务的账号连接未就绪，请重启桌面端和本地服务后再试。",
     "workspace": "工作区",
     "running": "运行中",
     "stopped": "已停止",

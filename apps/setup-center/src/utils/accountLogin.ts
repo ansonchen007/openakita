@@ -28,6 +28,15 @@ export type AccountCapability = {
 };
 
 let activeLogin: Promise<AccountStatusSummary> | null = null;
+let accountGeneration = 0;
+
+export function getAccountGeneration(): number {
+  return accountGeneration;
+}
+
+function requireCurrentGeneration(generation: number): void {
+  if (generation !== accountGeneration) throw new Error("account_operation_superseded");
+}
 
 export async function loadAccountCapability(apiBaseUrl: string): Promise<AccountCapability> {
   const response = await safeFetch(`${apiBaseUrl}/api/account/capability`);
@@ -41,9 +50,11 @@ function delay(milliseconds: number): Promise<void> {
 async function runAccountLogin(
   apiBaseUrl: string,
   pollIntervalMs: number,
+  generation: number,
 ): Promise<AccountStatusSummary> {
   const response = await safeFetch(`${apiBaseUrl}/api/account/login/start`, { method: "POST" });
   const attempt = await response.json() as LoginStart;
+  requireCurrentGeneration(generation);
   if (!attempt.attempt_id || !attempt.authorization_url) {
     throw new Error("The account service returned an invalid login attempt.");
   }
@@ -52,15 +63,14 @@ async function runAccountLogin(
 
   while (true) {
     await delay(pollIntervalMs);
+    requireCurrentGeneration(generation);
     const poll = await safeFetch(
       `${apiBaseUrl}/api/account/login/status/${encodeURIComponent(attempt.attempt_id)}`,
     );
     const result = await poll.json() as LoginProgress;
+    requireCurrentGeneration(generation);
     if (result.status === "complete") {
-      const statusResponse = await safeFetch(`${apiBaseUrl}/api/account/status`);
-      const snapshot = await statusResponse.json() as AccountStatusSummary;
-      dispatchAccountStatusChanged(snapshot);
-      return snapshot;
+      return loadAndPublishAccountStatus(apiBaseUrl, generation);
     }
     if (result.status === "failed" || result.status === "expired") {
       throw new Error(result.error || "account_login_expired");
@@ -68,9 +78,14 @@ async function runAccountLogin(
   }
 }
 
-async function loadAndPublishAccountStatus(apiBaseUrl: string): Promise<AccountStatusSummary> {
+async function loadAndPublishAccountStatus(
+  apiBaseUrl: string,
+  generation: number,
+): Promise<AccountStatusSummary> {
+  requireCurrentGeneration(generation);
   const statusResponse = await safeFetch(`${apiBaseUrl}/api/account/status`);
   const snapshot = await statusResponse.json() as AccountStatusSummary;
+  requireCurrentGeneration(generation);
   dispatchAccountStatusChanged(snapshot);
   return snapshot;
 }
@@ -81,7 +96,7 @@ export function connectOpenAkitaAccount(
 ): Promise<AccountStatusSummary> {
   if (activeLogin) return activeLogin;
 
-  const operation = runAccountLogin(apiBaseUrl, options.pollIntervalMs ?? 1_000);
+  const operation = runAccountLogin(apiBaseUrl, options.pollIntervalMs ?? 1_000, ++accountGeneration);
   activeLogin = operation;
   const clearOperation = () => {
     if (activeLogin === operation) activeLogin = null;
@@ -93,13 +108,16 @@ export function connectOpenAkitaAccount(
 export async function refreshOpenAkitaAccountEntitlements(
   apiBaseUrl: string,
 ): Promise<AccountStatusSummary> {
+  const generation = accountGeneration;
   await safeFetch(`${apiBaseUrl}/api/account/entitlements/refresh`, { method: "POST" });
-  return loadAndPublishAccountStatus(apiBaseUrl);
+  return loadAndPublishAccountStatus(apiBaseUrl, generation);
 }
 
 export async function disconnectOpenAkitaAccount(
   apiBaseUrl: string,
 ): Promise<AccountStatusSummary> {
+  const generation = ++accountGeneration;
+  activeLogin = null;
   await safeFetch(`${apiBaseUrl}/api/account/logout`, { method: "POST" });
-  return loadAndPublishAccountStatus(apiBaseUrl);
+  return loadAndPublishAccountStatus(apiBaseUrl, generation);
 }
