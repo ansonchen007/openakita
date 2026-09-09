@@ -5066,6 +5066,7 @@ function MainApp() {
         pendingApprovalsCount={pendingApprovalsCount}
         onCheckForUpdate={IS_TAURI ? handleManualUpdateCheck : undefined}
         updateCheckPending={manualUpdateChecking}
+        desktopVersion={desktopVersion}
       />
 
       <main className="main">

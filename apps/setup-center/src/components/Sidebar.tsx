@@ -48,6 +48,7 @@ export type SidebarProps = {
   pendingApprovalsCount?: number;
   onCheckForUpdate?: () => Promise<void>;
   updateCheckPending?: boolean;
+  desktopVersion?: string;
 };
 
 const stepIcons: Partial<Record<StepId, React.ReactNode>> = {
@@ -110,7 +111,7 @@ export function Sidebar({
   serviceRunning,
   onRefreshStatus, mobileOpen, httpApiBase,
   unreadFeedbackCount, pendingApprovalsCount,
-  onCheckForUpdate, updateCheckPending = false,
+  onCheckForUpdate, updateCheckPending = false, desktopVersion,
 }: SidebarProps) {
   const { t, i18n } = useTranslation();
   const lang = i18n.language;
@@ -705,12 +706,14 @@ export function Sidebar({
               <button
                 type="button"
                 className="sidebarAccountMenuItem"
-                onClick={() => selectAccountMenuItem(() => { void onCheckForUpdate(); })}
+                onClick={() => { void onCheckForUpdate(); }}
                 disabled={updateCheckPending}
+                aria-busy={updateCheckPending}
                 role="menuitem"
               >
                 <IconRefresh size={17} className={updateCheckPending ? "spinIcon" : undefined} />
                 <span>{updateCheckPending ? t("version.checking") : t("version.checkNow")}</span>
+                {desktopVersion && <span className="sidebarAccountMenuVersion">{desktopVersion}</span>}
               </button>
             )}
             {accountSignedIn && (
